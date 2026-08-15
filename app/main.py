@@ -85,6 +85,18 @@ def user_count():
     return n
 
 
+def get_setting(key, default=None):
+    """Liest einen Wert aus der Settings-Tabelle (key/value)."""
+    conn = get_db()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+
+def user_has_2fa(user: dict) -> bool:
+    return bool(user.get("otp_secret") and user.get("otp_confirmed"))
+
+
 def create_user(username, password, is_admin, hermes_url=None, hermes_user=None, hermes_pass=None, allow_registration=None):
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     hermes_auth = f"{hermes_user}:{hermes_pass}" if hermes_user else None
@@ -455,6 +467,8 @@ async def api_session(request: Request):
         return JSONResponse({"logged_in": False})
     db_user = get_user_by_id(user["user_id"]) or {}
     info = user_hermes_info(db_user)
+    has_2fa = user_has_2fa(db_user)
+    require_2fa = get_setting("require_2fa", "0") == "1"
     return JSONResponse({
         "logged_in": True,
         "username": user.get("username"),
@@ -462,6 +476,8 @@ async def api_session(request: Request):
         "hermes_url": info["hermes_url"],
         "hermes_profile": info.get("hermes_profile"),
         "hermes_configured": info["hermes_configured"],
+        "otp_enabled": has_2fa,
+        "otp_required": bool(require_2fa and not has_2fa),
     })
 
 
@@ -589,19 +605,20 @@ def is_admin_request(request: Request) -> bool:
 async def admin_settings(request: Request):
     if not is_admin_request(request):
         return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
-    conn = get_db()
-    reg_row = conn.execute("SELECT value FROM settings WHERE key = 'allow_registration'").fetchone()
-    allow_reg = reg_row["value"] == "1" if reg_row else True  # Default: offen
-    conn.close()
-    return JSONResponse({"status": "ok", "allow_registration": allow_reg})
+    allow_reg = get_setting("allow_registration", "1") == "1"
+    require_2fa = get_setting("require_2fa", "0") == "1"
+    return JSONResponse({"status": "ok", "allow_registration": allow_reg, "require_2fa": require_2fa})
 
 
 @app.post("/api/admin/settings")
-async def admin_settings_save(request: Request, allow_registration: str = Form("0")):
+async def admin_settings_save(request: Request,
+                              allow_registration: str = Form("0"),
+                              require_2fa: str = Form("0")):
     if not is_admin_request(request):
         return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
     conn = get_db()
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('allow_registration', ?)", (allow_registration,))
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_2fa', ?)", (require_2fa,))
     conn.commit()
     conn.close()
     return JSONResponse({"status": "ok"})

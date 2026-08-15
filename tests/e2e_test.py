@@ -259,84 +259,84 @@ def main():
         failures.append("admin_users")
 
     # 11b) Admin: Neuen Benutzer manuell anlegen
-        print("11b) Admin: POST /api/admin/users (neuer Benutzer)")
-        create_data = urllib.parse.urlencode({"username": "adminuser1", "password": "adminpass123"}).encode()
-        create_req = urllib.request.Request(f"{BASE}/api/admin/users", data=create_data, method="POST")
-        create_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-        try:
-            with create_opener.open(create_req, timeout=20) as cr:
-                cj = json.loads(cr.read() or b"{}")
-            print("11b) Admin create user:", cr.status, cj)
-            if cr.status != 200:
-                failures.append("admin_create_user")
-            else:
-                # Nachlegen: User sollte jetzt in der Liste sein (3 User)
-                st2, j2 = get_json("/api/admin/users", jar)
-                print("11b) User nach Anlegen:", st2, len(j2.get("users", [])) if st2 == 200 else j2)
-        except urllib.error.HTTPError as e:
-            print("11b) Admin create user FEHLER:", e.code, json.loads(e.read()))
+    print("11b) Admin: POST /api/admin/users (neuer Benutzer)")
+    create_data = urllib.parse.urlencode({"username": "adminuser1", "password": "adminpass123"}).encode()
+    create_req = urllib.request.Request(f"{BASE}/api/admin/users", data=create_data, method="POST")
+    create_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        with create_opener.open(create_req, timeout=20) as cr:
+            cj = json.loads(cr.read() or b"{}")
+        print("11b) Admin create user:", cr.status, cj)
+        if cr.status != 200:
             failures.append("admin_create_user")
+        else:
+            # Nachlegen: User sollte jetzt in der Liste sein (3 User)
+            st2, j2 = get_json("/api/admin/users", jar)
+            print("11b) User nach Anlegen:", st2, len(j2.get("users", [])) if st2 == 200 else j2)
+    except urllib.error.HTTPError as e:
+        print("11b) Admin create user FEHLER:", e.code, json.loads(e.read()))
+        failures.append("admin_create_user")
 
-        # 12) Admin: neuer User deaktivieren
-        if reg_status == 200:
-            print("12) Admin: PUT /api/admin/users/<id>/toggle (deaktivieren)")
-            st, j = get_json("/api/admin/users", jar)
-            testuser_id = None
-            for u in (j or {}).get("users", []):
-                if u["username"] == "testuser1":
-                    testuser_id = u["id"]
-                    break
-            if testuser_id:
-                d = urllib.parse.urlencode({"is_active": "0"}).encode()
-                t_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}/toggle", data=d, method="PUT")
-                t_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    # 12) Admin: neuer User deaktivieren
+    if reg_status == 200:
+        print("12) Admin: PUT /api/admin/users/<id>/toggle (deaktivieren)")
+        st, j = get_json("/api/admin/users", jar)
+        testuser_id = None
+        for u in (j or {}).get("users", []):
+            if u["username"] == "testuser1":
+                testuser_id = u["id"]
+                break
+        if testuser_id:
+            d = urllib.parse.urlencode({"is_active": "0"}).encode()
+            t_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}/toggle", data=d, method="PUT")
+            t_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            try:
+                with t_opener.open(t_req, timeout=20) as r:
+                    tj = json.loads(r.read() or b"{}")
+                print("12) Deaktivieren OK:", tj)
+                # Login sollte jetzt fehlschlagen (403)
+                f_req = urllib.request.Request(f"{BASE}/api/login", data=urllib.parse.urlencode({"username": "testuser1", "password": "test123"}).encode(), method="POST")
+                f_jar = http.cookiejar.CookieJar()
+                f_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(f_jar))
                 try:
-                    with t_opener.open(t_req, timeout=20) as r:
-                        tj = json.loads(r.read() or b"{}")
-                    print("12) Deaktivieren OK:", tj)
-                    # Login sollte jetzt fehlschlagen (403)
-                    f_req = urllib.request.Request(f"{BASE}/api/login", data=urllib.parse.urlencode({"username": "testuser1", "password": "test123"}).encode(), method="POST")
-                    f_jar = http.cookiejar.CookieJar()
-                    f_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(f_jar))
-                    try:
-                        with f_opener.open(f_req, timeout=20) as r2:
-                            rj2 = json.loads(r2.read() or b"{}")
-                            print("12) Login als deaktivierter User:", r2.status, rj2)
-                            failures.append("deactivated_login")
-                    except urllib.error.HTTPError as e:
-                        if e.code == 403:
-                            print("12) Login als deaktivierter User: 403 ✓")
-                        else:
-                            print("12) Login als deaktivierter User: unerwarteter Status", e.code)
-                            failures.append("deactivated_login")
-                except Exception as e:
-                    print("12) Toggle FEHLER:", e)
-                    failures.append("admin_toggle")
-            else:
-                print("12) testuser1 nicht in DB gefunden, skip")
+                    with f_opener.open(f_req, timeout=20) as r2:
+                        rj2 = json.loads(r2.read() or b"{}")
+                        print("12) Login als deaktivierter User:", r2.status, rj2)
+                        failures.append("deactivated_login")
+                except urllib.error.HTTPError as e:
+                    if e.code == 403:
+                        print("12) Login als deaktivierter User: 403 ✓")
+                    else:
+                        print("12) Login als deaktivierter User: unerwarteter Status", e.code)
+                        failures.append("deactivated_login")
+            except Exception as e:
+                print("12) Toggle FEHLER:", e)
+                failures.append("admin_toggle")
+        else:
+            print("12) testuser1 nicht in DB gefunden, skip")
 
-        # 13) Admin: neuer User löschen
-        if reg_status == 200:
-            print("13) Admin: DELETE /api/admin/users/<id>")
-            if testuser_id:
-                d_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}", method="DELETE")
-                d_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-                try:
-                    with d_opener.open(d_req, timeout=20) as r:
-                        dj = json.loads(r.read() or b"{}")
-                    print("13) Löschen OK:", dj)
-                    # Users Liste checken
-                    st, j = get_json("/api/admin/users", jar)
-                    users = j.get("users", []) if st == 200 else []
-                    has_test = any(u["username"] == "testuser1" for u in users)
-                    print("13) testuser1 noch in DB?", has_test)
-                    if has_test:
-                        failures.append("delete_user")
-                except Exception as e:
-                    print("13) DELETE FEHLER:", e)
+    # 13) Admin: neuer User löschen
+    if reg_status == 200:
+        print("13) Admin: DELETE /api/admin/users/<id>")
+        if testuser_id:
+            d_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}", method="DELETE")
+            d_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            try:
+                with d_opener.open(d_req, timeout=20) as r:
+                    dj = json.loads(r.read() or b"{}")
+                print("13) Löschen OK:", dj)
+                # Users Liste checken
+                st, j = get_json("/api/admin/users", jar)
+                users = j.get("users", []) if st == 200 else []
+                has_test = any(u["username"] == "testuser1" for u in users)
+                print("13) testuser1 noch in DB?", has_test)
+                if has_test:
                     failures.append("delete_user")
-            else:
-                print("13) testuser1 nicht gefunden, skip")
+            except Exception as e:
+                print("13) DELETE FEHLER:", e)
+                failures.append("delete_user")
+        else:
+            print("13) testuser1 nicht gefunden, skip")
 
     # ---------------------------------------------------------------- 2FA (TOTP)
     print("14) 2FA: TOTP-Setup + Login-Flow")
@@ -447,6 +447,77 @@ def main():
 
     # Wichtig: 2FA wieder deaktiviert lassen, damit Folgetests/Updates des Nutzers nicht hängen
     print("14–16) 2FA-Tests abgeschlossen (Admin wieder ohne 2FA) ✓")
+
+    # ---------------------------------------------------------------- 2FA-Pflicht (require_2fa)
+    print("17) Admin: require_2fa (2FA verpflichtend) + Nutzer-Flow")
+    # Admin aktiviert 2FA-Pflicht
+    st, j = post_form("/api/admin/settings", {"allow_registration": "1", "require_2fa": "1"}, jar)
+    ok = st == 200
+    print("17) Admin setzt require_2fa=1:", st, j)
+    if not ok:
+        failures.append("otp_require_set")
+    st, j = get_json("/api/admin/settings", jar)
+    ok = st == 200 and j.get("require_2fa") is True
+    print("17) require_2fa gelesen:", j)
+    if not ok:
+        failures.append("otp_require_read")
+
+    # adminuser1 (aus 11b, ohne 2FA) einloggen -> Session meldet otp_required
+    u_jar = http.cookiejar.CookieJar()
+    u_login = urllib.parse.urlencode({"username": "adminuser1", "password": "adminpass123"}).encode()
+    u_req = urllib.request.Request(f"{BASE}/api/login", data=u_login, method="POST")
+    u_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(u_jar))
+    try:
+        with u_opener.open(u_req, timeout=20) as ur_:
+            uj = json.loads(ur_.read() or b"{}")
+        print("17) Login adminuser1 (kein 2FA):", ur_.status, uj.get("status"))
+        if ur_.status != 200:
+            failures.append("otp_require_login")
+    except urllib.error.HTTPError as e:
+        print("17) Login adminuser1 FEHLER:", e.code, e.read())
+        failures.append("otp_require_login")
+    st, sess = get_json("/api/session", u_jar)
+    ok = sess.get("logged_in") and sess.get("otp_required") is True
+    print("17) Session otp_required (ohne 2FA):", sess.get("otp_required"))
+    if not ok:
+        failures.append("otp_required_flag")
+
+    # Nutzer richtet 2FA ein -> otp_required muss verschwinden
+    u_setup = urllib.request.Request(f"{BASE}/api/2fa/setup", data=b"", method="POST")
+    u_setup_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(u_jar))
+    with u_setup_opener.open(u_setup, timeout=20) as usr:
+        usj = json.loads(usr.read() or b"{}")
+    u_secret = usj.get("secret", "")
+    u_code = pyotp.TOTP(u_secret).now()
+    st, j = post_form("/api/2fa/confirm", {"code": u_code}, u_jar)
+    ok = st == 200
+    print("17) adminuser1 2FA aktiviert:", st, j.get("message"))
+    if not ok:
+        failures.append("otp_require_confirm")
+    st, sess = get_json("/api/session", u_jar)
+    ok = sess.get("logged_in") and sess.get("otp_required") is False and sess.get("otp_enabled") is True
+    print("17) Session otp_required (mit 2FA):", sess.get("otp_required"), "| otp_enabled:", sess.get("otp_enabled"))
+    if not ok:
+        failures.append("otp_required_cleared")
+
+    # Aufräumen: adminuser1 2FA deaktivieren + Admin stellt require_2fa=0 zurück
+    st, j = post_form("/api/2fa/disable", {"password": "adminpass123"}, u_jar)
+    ok = st == 200
+    print("17) adminuser1 2FA deaktiviert (Aufräumen):", st, j.get("message"))
+    if not ok:
+        failures.append("otp_require_cleanup_user")
+    st, j = post_form("/api/admin/settings", {"allow_registration": "1", "require_2fa": "0"}, jar)
+    ok = st == 200
+    print("17) require_2fa zurück auf 0 (Aufräumen):", st, j)
+    if not ok:
+        failures.append("otp_require_cleanup_admin")
+    st, j = get_json("/api/2fa/status", jar)
+    ok = st == 200 and j.get("enabled") is False
+    print("17) Admin 2FA-Status (unverändert aus):", j)
+    if not ok:
+        failures.append("otp_require_admin_status")
+
+    print("17) 2FA-Pflicht-Tests abgeschlossen ✓")
 
     print("-" * 50)
     if failures:

@@ -78,6 +78,14 @@
         #composer input:focus { border-color: var(--accent); }
         #composer button { width: 42px; height: 42px; border: none; border-radius: 50%; background: var(--accent); color: #fff; font-size: 17px; cursor: pointer; flex-shrink: 0; }
 
+        /* 2FA-Pflicht-Overlay (nicht schließbar, nur per 2FA-Einrichtung) */
+        .otp-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 25; align-items: center; justify-content: center; padding: 20px; }
+        .otp-overlay.active { display: flex; }
+        .otp-overlay .modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 28px; width: 100%; max-width: 380px; text-align: center; }
+        .otp-overlay .modal-card h2 { margin: 0 0 10px; font-size: 17px; }
+        .otp-overlay .modal-card p { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0 0 18px; }
+        .otp-overlay .modal-card button { padding: 12px; width: 100%; background: var(--accent); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+
         /* Einstellungen-Modal */
         .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 30; align-items: center; justify-content: center; padding: 20px; }
         .modal.active { display: flex; }
@@ -206,6 +214,10 @@
                     <input type="checkbox" id="allowRegToggle" style="width:18px;height:18px;accent-color:var(--accent);">
                     <label for="allowRegToggle" style="margin:0;font-size:14px;color:var(--text);cursor:pointer;">Neuanmeldungen erlauben</label>
                 </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                    <input type="checkbox" id="require2faToggle" style="width:18px;height:18px;accent-color:var(--accent);">
+                    <label for="require2faToggle" style="margin:0;font-size:14px;color:var(--text);cursor:pointer;">2FA für alle Benutzer verpflichtend</label>
+                </div>
                 <button id="saveAdminSettings" style="width:auto;padding:8px 16px;font-size:13px;margin:0 8px 8px 0;">Speichern</button>
                 <button id="showAdminUsers" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted);cursor:pointer;">Benutzerverwaltung</button>
             </div>
@@ -240,6 +252,16 @@
     </div>
 
     <div id="toast" class="hidden"></div>
+
+    <!-- 2FA-Pflicht-Overlay -->
+    <div id="otpRequiredOverlay" class="otp-overlay">
+        <div class="modal-card">
+            <div style="font-size:40px;margin-bottom:8px;">🔐</div>
+            <h2>2FA ist verpflichtend</h2>
+            <p>Dein Administrator hat Zwei-Faktor-Authentifizierung für alle Benutzer zur Pflicht gemacht.<br>Bitte richte 2FA jetzt ein, um Atlas weiter nutzen zu können.</p>
+            <button id="otpRequiredGo">Jetzt einrichten</button>
+        </div>
+    </div>
     <div id="buildInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-top:12px;">
         Build {{ BUILD_VERSION }} · {{ BUILD_DATE }}
     </div>
@@ -300,6 +322,8 @@
             } else {
                 banner.classList.add('hidden');
             }
+            // 2FA-Pflicht-Overlay (Admin hat 2FA zur Pflicht gemacht)
+            $('otpRequiredOverlay').classList.toggle('active', !!(user && user.otp_required));
             connectWS();
         }
 
@@ -426,7 +450,12 @@
                 // Admin-Einstellungen laden
                 fetch('/api/admin/settings')
                     .then(r => r.json())
-                    .then(d => { if (d.status === 'ok') $('allowRegToggle').checked = d.allow_registration; })
+                    .then(d => {
+                        if (d.status === 'ok') {
+                            $('allowRegToggle').checked = d.allow_registration;
+                            $('require2faToggle').checked = !!d.require_2fa;
+                        }
+                    })
                     .catch(() => {});
             } else {
                 adminPanel.classList.add('hidden');
@@ -493,7 +522,7 @@
                 })
                 .catch(() => {});
         }
-        $('setupOtpBtn').addEventListener('click', async () => {
+        async function startOtpSetup() {
             $('otpError').textContent = '';
             try {
                 const r = await fetch('/api/2fa/setup', { method: 'POST' });
@@ -509,7 +538,8 @@
             } catch (err) {
                 $('otpError').textContent = 'Verbindungsfehler';
             }
-        });
+        }
+        $('setupOtpBtn').addEventListener('click', startOtpSetup);
         $('confirmOtpBtn').addEventListener('click', async () => {
             const d = new URLSearchParams();
             d.set('code', $('otpSetupCode').value.trim());
@@ -520,6 +550,12 @@
                     $('otpSetupPanel').classList.add('hidden');
                     loadOtpStatus();
                     showToast('2FA aktiviert ✓');
+                    // War das Pflicht-Overlay aktiv? -> Session neu laden (Overlay verschwindet)
+                    if ($('otpRequiredOverlay').classList.contains('active')) {
+                        fetch('/api/session').then(r2 => r2.json()).then(s => {
+                            $('otpRequiredOverlay').classList.toggle('active', !!(s && s.otp_required));
+                        }).catch(() => {});
+                    }
                 } else {
                     $('otpError').textContent = j.message || 'Code ungültig';
                 }
@@ -549,12 +585,24 @@
                 showToast('Verbindungsfehler');
             }
         });
+        // 2FA-Pflicht-Overlay: Button öffnet die Einstellungen und startet direkt das Setup
+        $('otpRequiredGo').addEventListener('click', () => {
+            openSettings();
+            // Kurz warten, bis openSettings das Modal geöffnet hat, dann Setup starten
+            setTimeout(() => {
+                if (!$('otpSetupPanel').classList.contains('hidden')) return;  // läuft schon
+                fetch('/api/2fa/status').then(r => r.json()).then(d => {
+                    if (d.status === 'ok' && !d.enabled && !d.pending) startOtpSetup();
+                }).catch(() => {});
+            }, 400);
+        });
         // Beim Öffnen der Einstellungen wird loadOtpStatus() direkt in openSettings() aufgerufen
 
-        // Admin: Neuanmeldungen erlauben -> speichern
+        // Admin: Neuanmeldungen erlauben / 2FA-Pflicht -> speichern
         $('saveAdminSettings').addEventListener('click', async () => {
             const d = new URLSearchParams();
             d.set('allow_registration', $('allowRegToggle').checked ? '1' : '0');
+            d.set('require_2fa', $('require2faToggle').checked ? '1' : '0');
             const r = await fetch('/api/admin/settings', { method: 'POST', body: d });
             const j = await r.json().catch(() => ({}));
             showToast(r.ok ? 'Einstellung gespeichert ✓' : (j.message || 'Speichern fehlgeschlagen'));
