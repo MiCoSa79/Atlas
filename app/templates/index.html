@@ -152,6 +152,10 @@
             <input type="text" id="p_user" autocomplete="username">
             <label>Hermes-Passwort <span style="color:var(--muted);font-size:11px;">(nur bei Änderung)</span></label>
             <input type="password" id="p_pass" autocomplete="new-password">
+            <label>Hermes-Profil</label>
+            <select id="p_profile" style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;outline:none;appearance:none;">
+                <option value="">Standard (default)</option>
+            </select>
             <button id="saveProfile">Speichern</button>
             <button id="closeSettings" class="ghost">Schließen</button>
             <p class="status-ok" id="profileStatus"></p>
@@ -190,6 +194,8 @@
             authPage.style.display = 'none';
             app.classList.add('active');
             if (user && user.username) $('userTag').textContent = user.username;
+            // Profil merken (für session.create und Modal)
+            selectedProfile = user.hermes_profile || '';
             // Banner: unterscheiden, was genau fehlt
             const banner = $('setupBanner');
             if (user && !user.hermes_configured) {
@@ -244,10 +250,12 @@
         };
         {% endif %}
 
-        // Einstellungen (Profil)
+        // Einstellungen (Profil + Hermes-Anbindung)
+        let selectedProfile = '';
         function openSettings() {
             $('profileStatus').textContent = '';
             $('profileError').textContent = '';
+            // Profil-Daten laden
             fetch('/api/profile')
                 .then(r => r.json())
                 .then(d => {
@@ -255,6 +263,25 @@
                         $('p_url').value = d.hermes_url || '';
                         $('p_user').value = d.hermes_user || '';
                         $('p_pass').value = '';
+                        selectedProfile = d.hermes_profile || '';
+                    }
+                })
+                .catch(() => {});
+            // Profil-Liste von Hermes laden
+            fetch('/api/profiles')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.status === 'ok' && d.profiles) {
+                        const sel = $('p_profile');
+                        // Bestehende Optionen außer Standard löschen
+                        for (let i = sel.options.length - 1; i > 0; i--) sel.remove(i);
+                        d.profiles.forEach(p => {
+                            const opt = document.createElement('option');
+                            opt.value = p.name;
+                            opt.textContent = p.name + (p.is_default ? ' (Standard)' : '');
+                            if (p.name === selectedProfile) opt.selected = true;
+                            sel.add(opt);
+                        });
                     }
                 })
                 .catch(() => {});
@@ -280,6 +307,7 @@
             d.set('hermes_url', $('p_url').value.trim());
             d.set('hermes_user', $('p_user').value.trim());
             d.set('hermes_pass', $('p_pass').value);
+            d.set('hermes_profile', $('p_profile').value);
             try {
                 const r = await fetch('/api/profile', { method: 'POST', body: d });
                 const j = await r.json().catch(() => ({}));
@@ -331,7 +359,9 @@
                 statusDot.classList.add('online');
                 statusDot.classList.remove('offline');
                 if (!hermesSessionId) {
-                    sendRpc('session.create', { close_on_disconnect: true, source: 'atlas-app' });
+                    const p = { close_on_disconnect: true, source: 'atlas-app' };
+                    if (selectedProfile) p.profile = selectedProfile;
+                    sendRpc('session.create', p);
                 }
             };
             ws.onclose = ev => {

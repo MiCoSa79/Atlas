@@ -24,6 +24,7 @@ PROMPT = os.environ.get("ATLAS_TEST_PROMPT", "Hallo Atlas! Bist du da? Antworte 
 HERMES_URL = os.environ.get("ATLAS_TEST_HERMES_URL", "http://127.0.0.1:9119")
 HERMES_USER = os.environ["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"]
 HERMES_PASS = os.environ["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"]
+HERMES_PROFILE = os.environ.get("ATLAS_TEST_HERMES_PROFILE", "")
 
 ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
@@ -90,15 +91,28 @@ def main():
     if not ok:
         failures.append("profile")
 
-    # 4) /api/session -> eingeloggt + Hermes konfiguriert
+    # 4) Profil als ausgewählt speichern
+    if HERMES_PROFILE:
+        st, j = post_form("/api/profile", {
+            "hermes_url": HERMES_URL, "hermes_user": HERMES_USER, "hermes_pass": HERMES_PASS,
+            "hermes_profile": HERMES_PROFILE,
+        }, jar)
+        ok = st == 200 and j.get("test") == "connected"
+        print("4) POST /api/profile mit Profil:", st, j.get("status"), "| Test:", j.get("test"), j.get("test_error") or "")
+        if not ok:
+            failures.append("profile")
+    else:
+        print("4) Kein Profil-Test (ATLAS_TEST_HERMES_PROFILE leer)")
+
+    # 5) /api/session -> eingeloggt + Hermes konfiguriert
     try:
         st, j = get_json("/api/session", jar)
         ok = j.get("logged_in") is True and j.get("hermes_configured") is True
-        print("4) GET /api/session:", "OK" if ok else f"FEHLER -> {j}")
+        print("5) GET /api/session:", "OK" if ok else f"FEHLER -> {j}")
         if not ok:
             failures.append("session")
     except Exception as e:
-        print("4) GET /api/session FEHLER:", e)
+        print("5) GET /api/session FEHLER:", e)
         failures.append("session")
 
     # 4) Websocket-Chat (der eigentliche Kern)
@@ -113,7 +127,8 @@ def main():
                 rid += 1
                 await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
                 return rid
-            await rpc("session.create", {"close_on_disconnect": True, "source": "e2e-test"})
+            await rpc("session.create", {"close_on_disconnect": True, "source": "e2e-test", "profile": "default"})
+            print("5) session.create mit profile=default ok")
             bubble, session_id, done = "", None, False
             events = []
             deadline = asyncio.get_event_loop().time() + 120

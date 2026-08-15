@@ -8,6 +8,7 @@ Eigenständiger FastAPI-Container:
 Läuft im Container unter /app, Datenbank in /data/atlas.db (Volume).
 """
 import asyncio
+import json
 import os
 import secrets
 import sqlite3
@@ -106,7 +107,81 @@ def user_hermes_info(user: dict) -> dict:
         "hermes_url_set": bool(user.get("hermes_url")),
         "hermes_auth_set": bool(auth),
         "hermes_configured": bool(user.get("hermes_url") and auth),
+        "hermes_profile": user.get("hermes_profile") or "",
     }
+
+
+# ---------------------------------------------------------------- Profile-Endpoint
+
+async def list_hermes_profiles(hermes_url: str, auth_str: str) -> list:
+    """Listet alle Hermes-Profile über die WS-Methode profiles.list.
+    Gibt Liste [{name, is_default, model, provider, ...}] zurück."""
+    if not hermes_url or not auth_str:
+        return []
+    auth_user, _, auth_pass = auth_str.partition(":")
+    if not auth_user:
+        return []
+
+    try:
+        async with ClientSession() as http:
+            # 1) Login (Cookie holen)
+            async with http.post(
+                f"{hermes_url}/auth/password-login",
+                json={"provider": "basic", "username": auth_user, "password": auth_pass, "next": ""},
+                timeout=ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    return []
+                parts = []
+                for header in resp.headers.getall("Set-Cookie", []):
+                    sc = SimpleCookie()
+                    sc.load(header)
+                    for m in sc.values():
+                        parts.append(f"{m.key}={m.value}")
+            cookie_header = "; ".join(parts)
+
+            # 2) WS-Ticket holen
+            async with http.post(
+                f"{hermes_url}/api/auth/ws-ticket",
+                headers={"Cookie": cookie_header} if cookie_header else {},
+                timeout=ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+                ticket = (data or {}).get("ticket")
+            if not ticket:
+                return []
+
+            # 3) profiles.list per WS senden
+            uri = f"{hermes_url}/api/ws?ticket={ticket}"
+            async with http.ws_connect(uri, max_msg_size=0) as hws:
+                # session.create (wird vom Gateway sofort mit gateway.ready beantwortet)
+                await hws.send_str(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {"close_on_disconnect": True, "source": "atlas-app"}}))
+                # profiles.list — wir brauchen keine session_id
+                await hws.send_str(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "profiles.list", "params": {"include_sessions": False}}))
+
+                # Antworten sammeln
+                results = {}
+                deadline = asyncio.get_event_loop().time() + 10
+                while asyncio.get_event_loop().time() < deadline:
+                    try:
+                        raw = await asyncio.wait_for(hws.recv_str(), timeout=2)
+                        frame = json.loads(raw)
+                        rid = frame.get("id")
+                        if rid and frame.get("result"):
+                            results[rid] = frame["result"]
+                        if 2 in results:
+                            break  # profiles.list kam
+                    except asyncio.TimeoutError:
+                        continue
+
+            profile_list = (results.get(2) or {}).get("profiles", [])
+            return [{"name": p.get("name", ""), "is_default": p.get("is_default", False),
+                     "model": p.get("model"), "provider": p.get("provider"),
+                     "description": p.get("description", "")} for p in profile_list]
+    except Exception:
+        return []
 
 
 async def test_hermes_connection(hermes_url: str, auth: str) -> tuple:
@@ -225,9 +300,24 @@ async def api_session(request: Request):
         "logged_in": True,
         "username": user.get("username"),
         "hermes_url": info["hermes_url"],
-        "hermes_profile": db_user.get("hermes_profile"),
+        "hermes_profile": info.get("hermes_profile"),
         "hermes_configured": info["hermes_configured"],
     })
+
+
+@app.get("/api/profiles")
+async def api_profiles(request: Request):
+    """Listet Profile der hinterlegten Hermes-Instanz."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    hermes_auth = db_user.get("hermes_auth")
+    hermes_url = db_user.get("hermes_url") or ""
+    if not hermes_url or not hermes_auth:
+        return JSONResponse({"status": "ok", "profiles": []})
+    profiles = await list_hermes_profiles(hermes_url, hermes_auth)
+    return JSONResponse({"status": "ok", "profiles": profiles})
 
 
 @app.get("/api/profile")
@@ -244,7 +334,8 @@ async def api_profile(request: Request):
 async def api_profile_save(request: Request,
                            hermes_url: str = Form(""),
                            hermes_user: str = Form(""),
-                           hermes_pass: str = Form("")):
+                           hermes_pass: str = Form(""),
+                           hermes_profile: str = Form("")):
     user = session_from_request(request)
     if not user:
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
@@ -272,8 +363,8 @@ async def api_profile_save(request: Request,
     if not hermes_url:
         new_auth = None
 
-    conn.execute("UPDATE users SET hermes_url = ?, hermes_auth = ? WHERE id = ?",
-                 (hermes_url or None, new_auth, user["user_id"]))
+    conn.execute("UPDATE users SET hermes_url = ?, hermes_auth = ?, hermes_profile = ? WHERE id = ?",
+                 (hermes_url or None, new_auth, hermes_profile.strip() if hermes_profile else None, user["user_id"]))
     conn.commit()
     conn.close()
 
