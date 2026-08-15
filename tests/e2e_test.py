@@ -32,9 +32,9 @@ ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
 
 
-def post_form(path, fields, jar):
+def post_form(path, fields, jar, method="POST"):
     data = urllib.parse.urlencode(fields).encode()
-    req = urllib.request.Request(f"{BASE}{path}", data=data, method="POST",
+    req = urllib.request.Request(f"{BASE}{path}", data=data, method=method,
                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     try:
@@ -518,6 +518,70 @@ def main():
         failures.append("otp_require_admin_status")
 
     print("17) 2FA-Pflicht-Tests abgeschlossen ✓")
+
+    # ---------------------------------------------------------------- Admin-Rechte (role)
+    print("18) Admin-Verwaltung: Rechte vergeben/entziehen + letzter-Admin-Schutz")
+    st, j = get_json("/api/admin/users", jar)
+    uid_admin = next((u["id"] for u in j.get("users", []) if u["username"] == "admin"), None)
+    uid_u1 = next((u["id"] for u in j.get("users", []) if u["username"] == "adminuser1"), None)
+    print("18) IDs: admin =", uid_admin, "| adminuser1 =", uid_u1)
+
+    # a) adminuser1 zum Admin machen
+    st, j = post_form(f"/api/admin/users/{uid_u1}/role", {"is_admin": "1"}, jar, method="PUT")
+    ok = st == 200 and j.get("changed") is True
+    print("18a) adminuser1 -> Admin:", st, j)
+    if not ok:
+        failures.append("role_grant")
+
+    # b) adminuser1 sieht in seiner Session is_admin=True (frischer Login)
+    au_jar = http.cookiejar.CookieJar()
+    au_login = urllib.parse.urlencode({"username": "adminuser1", "password": "adminpass123"}).encode()
+    au_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(au_jar))
+    with au_opener.open(urllib.request.Request(f"{BASE}/api/login", data=au_login, method="POST"), timeout=20) as aur:
+        print("18b) Login adminuser1 (jetzt Admin):", aur.status)
+    st, sess = get_json("/api/session", au_jar)
+    ok = sess.get("logged_in") and sess.get("is_admin") is True
+    print("18b) adminuser1 Session is_admin:", sess.get("is_admin"))
+    if not ok:
+        failures.append("role_session")
+
+    # c) Selbst-Demote erlaubt, solange noch ein anderer Admin existiert (2 Admins da)
+    st, j = post_form(f"/api/admin/users/{uid_admin}/role", {"is_admin": "0"}, jar, method="PUT")
+    ok = st == 200 and j.get("changed") is True
+    print("18c) Admin entzieht sich selbst das Recht (2 Admins da):", st, j)
+    if not ok:
+        failures.append("role_self_demote")
+
+    # d) Jetzt ist adminuser1 der EINZIGE Admin -> Selbst-Demote muss scheitern (400)
+    st, j = post_form(f"/api/admin/users/{uid_u1}/role", {"is_admin": "0"}, au_jar, method="PUT")
+    ok = st == 400
+    print("18d) Letzter Admin versucht Selbst-Demote:", st, j.get("message"))
+    if not ok:
+        failures.append("role_last_admin")
+
+    # e) adminuser1 (einziger Admin) macht den Haupt-Admin wieder zum Admin
+    st, j = post_form(f"/api/admin/users/{uid_admin}/role", {"is_admin": "1"}, au_jar, method="PUT")
+    ok = st == 200 and j.get("changed") is True
+    print("18e) adminuser1 stellt Haupt-Admin wieder her:", st, j)
+    if not ok:
+        failures.append("role_recover")
+
+    # f) Aufräumen: adminuser1 entzieht sich selbst das Recht (Haupt-Admin ist wieder da)
+    st, j = post_form(f"/api/admin/users/{uid_u1}/role", {"is_admin": "0"}, au_jar, method="PUT")
+    ok = st == 200 and j.get("changed") is True
+    print("18f) adminuser1 demotet sich selbst (Cleanup):", st, j)
+    if not ok:
+        failures.append("role_cleanup")
+
+    # g) Admin-Reihenfolge prüfen: genau 1 Admin (Haupt-Admin) übrig
+    st, j = get_json("/api/admin/users", jar)
+    admins = [u["username"] for u in j.get("users", []) if u["is_admin"]]
+    ok = admins == ["admin"]
+    print("18g) Admins nach Cleanup:", admins)
+    if not ok:
+        failures.append("role_final")
+
+    print("18) Admin-Rechte-Tests abgeschlossen ✓")
 
     print("-" * 50)
     if failures:

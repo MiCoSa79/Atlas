@@ -653,11 +653,53 @@ async def admin_create_user(request: Request,
 async def admin_toggle_user(user_id: int, request: Request, is_active: str = Form("0")):
     if not is_admin_request(request):
         return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    want_active = 1 if is_active == "1" else 0
     conn = get_db()
-    conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (int(is_active), user_id))
+    row = conn.execute("SELECT id, is_admin, is_active FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden"}, status_code=404)
+    if want_active == 0 and row["is_admin"]:
+        # Schutz: Es muss immer mindestens ein AKTIVER Admin geben
+        active_admins = conn.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_active = 1").fetchone()[0]
+        if active_admins <= 1:
+            conn.close()
+            return JSONResponse({"status": "error",
+                                 "message": "Es muss immer mindestens ein aktiver Admin geben — letzten aktiven Admin kann man nicht deaktivieren."},
+                                status_code=400)
+    conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (want_active, user_id))
     conn.commit()
     conn.close()
     return JSONResponse({"status": "ok"})
+
+
+@app.put("/api/admin/users/{user_id}/role")
+async def admin_set_role(user_id: int, request: Request, is_admin: str = Form("0")):
+    """Adminrechte vergeben/entziehen. Der letzte verbleibende Admin kann nie entlassen werden."""
+    if not is_admin_request(request):
+        return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    want_admin = 1 if is_admin == "1" else 0
+    conn = get_db()
+    row = conn.execute("SELECT id, username, is_admin FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden"}, status_code=404)
+    current = row["is_admin"]
+    if want_admin == current:
+        conn.close()
+        return JSONResponse({"status": "ok", "changed": False})
+    if want_admin == 0:
+        # Schutz: mindestens 1 Admin muss übrig bleiben
+        admin_count = conn.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1").fetchone()[0]
+        if admin_count <= 1:
+            conn.close()
+            return JSONResponse({"status": "error",
+                                 "message": "Es muss immer mindestens ein Admin geben — letzten Admin kann man nicht entlassen."},
+                                status_code=400)
+    conn.execute("UPDATE users SET is_admin = ? WHERE id = ?", (want_admin, user_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok", "changed": True})
 
 
 @app.delete("/api/admin/users/{user_id}")
@@ -668,6 +710,17 @@ async def admin_delete_user(user_id: int, request: Request):
     if user_id == user.get("user_id"):
         return JSONResponse({"status": "error", "message": "Du kannst dein eigenes Konto nicht löschen"}, status_code=400)
     conn = get_db()
+    row = conn.execute("SELECT id, is_admin FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden"}, status_code=404)
+    if row["is_admin"]:
+        admin_count = conn.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1").fetchone()[0]
+        if admin_count <= 1:
+            conn.close()
+            return JSONResponse({"status": "error",
+                                 "message": "Es muss immer mindestens ein Admin geben — letzten Admin kann man nicht löschen."},
+                                status_code=400)
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
