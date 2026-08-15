@@ -233,7 +233,9 @@
         let rpcId = 0;
         let hermesSessionId = null;
         let activeSessionId = null;      // gewählte alte Session (null = neue Unterhaltung)
-        let historyRpcId = null;         // RPC-ID der session.history-Abfrage
+        let createRpcId = null;          // ID der letzten session.create-Anfrage
+        let resumeRpcId = null;          // ID der letzten session.resume-Anfrage
+        let historyRpcId = null;         // ID der letzten session.history-Anfrage
         let pendingMessages = [];        // Warteschlange: Nachrichten die auf session.create warten
         let connectAttempts = 0;         // Reconnect-Versuche (max 5)
 
@@ -573,7 +575,8 @@
                     console.log('[Atlas] session.create');
                 }
                 if (selectedProfile) p.profile = selectedProfile;
-                sendRpc(activeSessionId ? 'session.resume' : 'session.create', p);
+                const reqId = sendRpc(activeSessionId ? 'session.resume' : 'session.create', p);
+                if (activeSessionId) resumeRpcId = reqId; else createRpcId = reqId;
             };
             ws.onclose = ev => {
                 statusDot.classList.add('offline');
@@ -595,7 +598,7 @@
                 console.log('[Atlas] ← WS msg:', logData);
                 console.log('[Atlas] ← WS message:', JSON.stringify(frame).substring(0, 200));
 
-                if (frame.id === 1 && frame.result && frame.result.session_id) {
+                if (createRpcId !== null && frame.id === createRpcId && frame.result && frame.result.session_id) {
                     // session.create (Neue Unterhaltung)
                     hermesSessionId = frame.result.session_id;
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
@@ -605,14 +608,14 @@
                     addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
                     return;
                 }
-                if (frame.id === 2 && frame.result && frame.result.stored_session_id) {
-                    // session.resume (alte Session fortsetzen)
-                    hermesSessionId = frame.result.stored_session_id;
+                if (resumeRpcId !== null && frame.id === resumeRpcId && frame.result) {
+                    // session.resume (alte Session fortsetzen) — die ID kennen wir bereits selbst
+                    console.log('[Atlas] resume antwortet, setze hermesSessionId = ' + activeSessionId);
+                    hermesSessionId = activeSessionId;  // aus unserer Warteschlange, nicht aus der Antwort
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
-                    // Verlauf laden (history antwortet auf id=3)
-                    historyRpcId = 3;
-                    sendRpc('session.history', { session_id: hermesSessionId });
-                    $('currentSessionLabel').textContent = frame.result.title || activeSessionId;
+                    // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
+                    historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
+                    $('currentSessionLabel').textContent = activeSessionId;
                     $('currentSessionLabel').classList.remove('hidden');
                     addMsg('system', 'Session geladen ✓');
                     return;
