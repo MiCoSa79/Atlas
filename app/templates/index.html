@@ -21,6 +21,9 @@
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; }
 
+        /* Generische Sichtbarkeits-Klasse (Banner, Modal-Inhalte usw.) */
+        .hidden { display: none !important; }
+
         /* Scrollbalken ausblenden (überall) */
         html, body { scrollbar-width: none; }
         body::-webkit-scrollbar, html::-webkit-scrollbar { display: none; }
@@ -347,7 +350,7 @@
 
                 if (frame.id === 1 && frame.result && frame.result.session_id) {
                     hermesSessionId = frame.result.session_id;
-                    addMsg('system', 'Verbunden mit Atlas ✓');
+                    addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
                     return;
                 }
                 if (frame.error) {
