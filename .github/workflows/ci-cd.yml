@@ -19,17 +19,23 @@ jobs:
     - name: Determine next version (v0.0.1, v0.0.2, ...)
       id: version
       run: |
+        # Nur den Semver-Kern betrachten (v0.0.1), etwaige -Suffixe ignorieren
         LAST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)
         if [ -z "$LAST" ]; then
           NEXT="v0.0.1"
         else
-          BASE="${LAST#v}"
+          BASE="${LAST%%-*}"
+          BASE="${BASE#v}"
           IFS='.' read -r MAJ MIN PAT <<< "$BASE"
           PAT=$((PAT + 1))
           NEXT="v$MAJ.$MIN.$PAT"
         fi
         echo "next=$NEXT" >> "$GITHUB_OUTPUT"
         echo "Neue Version: $NEXT"
+
+    - name: Build date
+      id: date
+      run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
     - name: Create and push Git tag
       run: |
@@ -51,9 +57,11 @@ jobs:
         push: true
         build-args: |
           APP_VERSION=${{ steps.version.outputs.next }}
+          BUILD_DATE=${{ steps.date.outputs.date }}
         tags: |
           micosa79/atlas:latest
           micosa79/atlas:${{ steps.version.outputs.next }}
+          micosa79/atlas:${{ steps.date.outputs.date }}
 
     - name: Image digest
       run: echo ${{ steps.docker_build.outputs.digest }}
