@@ -462,6 +462,7 @@
                 })
                 .catch(() => {});
             $('settingsModal').classList.add('active');
+            loadOtpStatus();  // 2FA-Status immer beim Öffnen laden
         }
 
         $('settingsBtn').addEventListener('click', openSettings);
@@ -548,12 +549,7 @@
                 showToast('Verbindungsfehler');
             }
         });
-        // Beim Öffnen der Einstellungen den 2FA-Status mitladen
-        const _origOpenSettings = openSettings;
-        openSettings = function () {
-            _origOpenSettings();
-            loadOtpStatus();
-        };
+        // Beim Öffnen der Einstellungen wird loadOtpStatus() direkt in openSettings() aufgerufen
 
         // Admin: Neuanmeldungen erlauben -> speichern
         $('saveAdminSettings').addEventListener('click', async () => {
