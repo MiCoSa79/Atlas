@@ -1,119 +1,201 @@
-import httpx
-import websockets
-import asyncio
 import os
-import json
-from fastapi import FastAPI, WebSocket, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+import sqlite3
+import secrets
+import bcrypt
+import asyncio
+import aiohttp
+from fastapi import FastAPI, Request, WebSocket, Form, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional
-from fastapi.responses import FileResponse
+from fastapi.templating import Jinja2Templates
+from contextlib import asynccontextmanager
+from starlette.middleware.sessions import SessionMiddleware
+import secrets
+from aiohttp import ClientTimeout
 
-app = FastAPI()
+DB_PATH = "/data/atlas.db"
 
-# CORS for PWA access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER DEFAULT 0,
+            hermes_url TEXT,
+            hermes_auth TEXT,
+            hermes_profile TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-# Configuration
-HERMES_URL = os.environ.get("HERMES_URL", "http://host.docker.internal:9119")
-HERMES_USER = os.environ.get("HERMES_USER", "")
-HERMES_PASS = os.environ.get("HERMES_PASS", "")
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
+async def check_user_exists():
+    try:
+        conn = get_db()
+        user = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        conn.close()
+        return user is not None
+    except:
+        return False
+
+def create_user(username, password, is_admin=0, hermes_url=None, hermes_auth=None, hermes_profile=None):
+    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin, hermes_url, hermes_auth, hermes_profile) VALUES (?, ?, ?, ?, ?, ?)",
+            (username, hashed, is_admin, hermes_url, hermes_auth, hermes_profile)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+    return True
+
+def verify_user(username, password):
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    if not user:
+        return None
+    if bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+        return dict(user)
+    return None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+app = FastAPI(title="Atlas", lifespan=lifespan)
+app.add_middleware(SessionMiddleware, secret_key=secrets.token_hex(32))
+templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-@app.get("/setup")
-def setup_page():
-    return HTMLResponse("""
-    <html><body>
-        <h1>Atlas Initial Setup</h1>
-        <p>Bitte gib die Daten deines Hermes-Containers ein.</p>
-        <form method="post" action="/api/setup">
-            <label>Dashboard URL</label><br>
-            <input type="text" name="hermes_url" required value="http://10.0.25.60:9119"><br><br>
-            
-            <label>Username (Basic Auth)</label><br>
-            <input type="text" name="username" required><br><br>
-            
-            <label>Password (Basic Auth)</label><br>
-            <input type="password" name="password" required><br><br>
-            
-            <label>Setup-Token (für die Erstkonfiguration)</label><br>
-            <input type="password" name="token" required><br><br>
-            
-            <button type="submit">Speichern & Starten</button>
-        </form>
-    </body></html>
-    """)
+# In-Memory Session Store (für mehrere Instanzen Redis nutzen)
+app.state.user_sessions = {}
 
-class SetupData(BaseModel):
-    hermes_url: str
-    username: str
-    password: str
-    token: str
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    exists = await check_user_exists()
+    return templates.TemplateResponse("index.html", {"request": request, "setup_mode": not exists})
 
 @app.post("/api/setup")
-async def save_config(data: SetupData):
-    # Check if config exists to prevent overwriting without token
-    if os.path.exists("config.json"):
-        raise HTTPException(status_code=403, detail="Atlas ist bereits konfiguriert.")
-    
-    config = {
-        "hermes_url": data.hermes_url,
-        "username": data.username,
-        "password": data.password
-    }
-    with open("config.json", "w") as f:
-        json.dump(config, f)
-    
-    return {"message": "Konfiguration gespeichert! Bitte lade die Seite neu."}
+async def setup_admin(request: Request, username: str = Form(...), password: str = Form(...)):
+    if await check_user_exists():
+        return JSONResponse({"status": "error", "message": "Setup schon abgeschlossen"}, status_code=400)
+    if create_user(username, password, is_admin=1):
+        request.session["user_id"] = 1  # Einfach: nur ein Admin pro Installation
+        return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "error", "message": "Fehler beim Erstellen"}, status_code=500)
 
-# Proxy Route
+@app.post("/api/login")
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    user = verify_user(username, password)
+    if user:
+        request.session["user_id"] = user["id"]
+        request.session["hermes_url"] = user["hermes_url"]
+        request.session["hermes_auth"] = user["hermes_auth"]
+        request.session["hermes_profile"] = user["hermes_profile"]
+        return RedirectResponse(url="/chat")
+    return JSONResponse({"status": "error", "message": "Falsche Zugangsdaten"}, status_code=401)
+
+@app.get("/chat")
+async def chat_page(request: Request):
+    if "user_id" not in request.session:
+        return RedirectResponse(url="/")
+    return templates.TemplateResponse("index.html", {"request": request, "setup_mode": False})
+
+@app.get("/api/session")
+async def get_session(request: Request):
+    if "user_id" in request.session:
+        return JSONResponse({"logged_in": True, "hermes_url": request.session.get("hermes_url")})
+    return JSONResponse({"logged_in": False})
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return JSONResponse({"status": "ok"})
+
 @app.websocket("/ws")
 async def websocket_proxy(websocket: WebSocket):
     await websocket.accept()
     
-    try:
-        with open("config.json") as f:
-            config = json.load(f)
-    except:
-        await websocket.close(code=4000, reason="No config found")
+    session = request.app.state.sessions
+    # Für einzelne Instanz: Session direkt aus dem Session-Cookie lesen
+    user_id = None
+    for k, v in session.items():
+        if v.get("ws") is websocket:
+            user_id = v.get("user_id")
+            break
+    
+    if not user_id:
+        await websocket.close(code=4001)
         return
 
-    hermes_url = config["hermes_url"]
-    auth = httpx.BasicAuth(config["username"], config["password"])
+    hermes_url = session.get(user_id, {}).get("hermes_url")
+    hermes_auth = session.get(user_id, {}).get("hermes_auth")
+    hermes_profile = session.get(user_id, {}).get("hermes_profile")
 
-    try:
-        # 1. Fetch WS Ticket from Dashboard
-        async with httpx.AsyncClient() as client:
-            res = await client.post(f"{hermes_url}/api/auth/ws-ticket", auth=auth, timeout=10)
-            if res.status_code != 200:
-                await websocket.close(code=4001, reason="Failed to get WS ticket")
-                return
+    if not hermes_url or not hermes_auth:
+        await websocket.close(code=4001)
+        return
+
+    auth_parts = hermes_auth.split(":")
+    if len(auth_parts) != 2:
+        await websocket.close(code=4001)
+        return
+
+    async with aiohttp.ClientSession() as session_http:
+        auth = aiohttp.BasicAuth(auth_parts[0], auth_parts[1])
+        try:
+            timeout = ClientTimeout(total=15)
+            async with session_http.post(f"{hermes_url}/api/auth/ws-ticket", auth=auth, timeout=timeout) as resp:
+                if resp.status != 200:
+                    await websocket.close(code=4001, reason="Ticket fehlgeschlagen")
+                    return
+                ticket_data = await resp.json()
+                ticket = ticket_data.get("ticket")
+                if not ticket:
+                    await websocket.close(code=4002, reason="Kein Ticket")
+                    return
+        except Exception as e:
+            await websocket.close(code=4001, reason=str(e))
+            return
+
+        url = f"{hermes_url}/api/ws?ticket={ticket}"
+        if hermes_profile:
+            url += f"&profile={hermes_profile}"
             
-            ticket = res.json().get("ticket")
+        try:
+            async with aiohttp.ClientSession() as client_ws:
+                async with client_ws.ws_connect(url) as hermes_ws:
+                    async def forward(src, dst):
+                        try:
+                            async for msg in src:
+                                await dst.send_str(msg.data)
+                        except Exception:
+                            pass
 
-        # 2. Connect to Hermes WebSocket
-        ws_url = f"wss://{hermes_url.replace('http', 'ws')}/api/ws?ticket={ticket}"
-        async with websockets.connect(ws_url) as ws:
-            # Relay Hermes -> Browser
-            while True:
-                try:
-                    data = await ws.recv()
-                    await websocket.send_text(data)
-                except websockets.exceptions.ConnectionClosed:
-                    break
-            
-    except Exception as e:
-        await websocket.close(code=4002, reason=str(e))
+                    t1 = asyncio.create_task(forward(hermes_ws, websocket))
+                    t2 = asyncio.create_task(forward(websocket, hermes_ws))
+                    
+                    done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+                    for task in pending:
+                        task.cancel()
+        except Exception as e:
+            await websocket.close(code=4002, reason=str(e))
 
-@app.get("/")
-def root():
-    return FileResponse("app/static/index.html")
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

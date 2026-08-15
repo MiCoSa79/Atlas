@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Atlas</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <style>
+        :root {
+            --bg: #0e1116;
+            --panel: #171c24;
+            --border: #242b37;
+            --text: #e6e9ef;
+            --muted: #8b93a3;
+            --accent: #4f8cff;
+            --radius: 14px;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; }
+        
+        /* Setup & Login */
+        .auth-page { display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+        .auth-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px; width: 100%; max-width: 380px; }
+        .auth-card h1 { text-align: center; margin: 0 0 24px; }
+        .auth-card label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+        .auth-card input { width: 100%; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 15px; outline: none; }
+        .auth-card input:focus { border-color: var(--accent); }
+        .auth-card button { width: 100%; margin-top: 20px; padding: 12px; background: var(--accent); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .auth-card button:hover { background: #3a70d1; }
+        .error-msg { color: #e5534b; font-size: 13px; text-align: center; min-height: 16px; margin-top: 10px; }
+        
+        /* Chat */
+        #app { display: none; flex-direction: column; height: 100dvh; }
+        #app.active { display: flex; }
+        header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--panel); border-bottom: 1px solid var(--border); }
+        header .logo { width: 30px; height: 30px; }
+        header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+        header .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-left: auto; }
+        header .status-dot.online { background: #3fb950; }
+        header .status-dot.offline { background: #e5534b; }
+        
+        nav.tabs { display: flex; background: var(--panel); border-bottom: 1px solid var(--border); }
+        nav.tabs button { flex: 1; background: none; border: none; color: var(--muted); font-size: 14px; font-weight: 600; padding: 10px 0; border-bottom: 2px solid transparent; cursor: pointer; }
+        nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+        
+        .panel { display: none; flex: 1; min-height: 0; }
+        .panel.active { display: flex; flex-direction: column; }
+        
+        #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { max-width: 84%; padding: 9px 13px; border-radius: var(--radius); font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
+        .msg.user { align-self: flex-end; background: #20437f; border-bottom-right-radius: 4px; }
+        .msg.assistant { align-self: flex-start; background: #1d232e; border-bottom-left-radius: 4px; }
+        .msg.system { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; padding: 4px 10px; }
+        
+        #composer { display: flex; gap: 8px; padding: 10px; background: var(--panel); border-top: 1px solid var(--border); }
+        #composer input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 20px; color: var(--text); font-size: 15px; padding: 10px 14px; outline: none; }
+        #composer input:focus { border-color: var(--accent); }
+        #composer button { width: 42px; height: 42px; border: none; border-radius: 50%; background: var(--accent); color: #fff; font-size: 17px; cursor: pointer; flex-shrink: 0; }
+        
+        #thinking { padding: 4px 14px 0; color: var(--muted); font-size: 12.5px; font-style: italic; min-height: 18px; }
+        
+        #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: #2b3340; color: var(--text); padding: 9px 16px; border-radius: 20px; font-size: 13.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 20; transition: opacity .25s; }
+        #toast.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <!-- Auth Page -->
+    <div class="auth-page" id="authPage">
+        <div class="auth-card">
+            <h1>🏛️ Atlas</h1>
+            {% if setup_mode %}
+            <p style="text-align:center; color: var(--muted); font-size: 13px; margin-bottom: 16px;">Willkommen! Erstelle deinen Admin-Benutzer.</p>
+            <form id="setupForm">
+                <label>Benutzername</label>
+                <input type="text" id="username" required autocomplete="username">
+                <label>Passwort</label>
+                <input type="password" id="password" required autocomplete="new-password">
+                <button type="submit">Installation starten</button>
+            </form>
+            {% else %}
+            <p style="text-align:center; color: var(--muted); font-size: 13px; margin-bottom: 16px;">Melde dich an, um fortzufahren.</p>
+            <form id="loginForm">
+                <label>Benutzername</label>
+                <input type="text" id="username" required autocomplete="username">
+                <label>Passwort</label>
+                <input type="password" id="password" required autocomplete="current-password">
+                <button type="submit">Anmelden</button>
+            </form>
+            {% endif %}
+            <p class="error-msg" id="authError"></p>
+        </div>
+    </div>
+
+    <!-- App -->
+    <div id="app">
+        <header>
+            <img class="logo" src="/static/icon.svg" alt="Atlas">
+            <h1>Atlas</h1>
+            <span id="statusDot" class="status-dot"></span>
+        </header>
+        <nav class="tabs">
+            <button data-tab="chat" class="active">💬 Chat</button>
+        </nav>
+        <section id="chat" class="panel active">
+            <div id="messages"></div>
+            <div id="thinking"></div>
+            <div id="composer">
+                <input id="input" type="text" placeholder="Nachricht an Atlas..." autocomplete="off" enterkeyhint="send">
+                <button data-action="send">➤</button>
+            </div>
+        </section>
+    </div>
+
+    <div id="toast" class="hidden"></div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+        const authPage = $('authPage');
+        const app = $('app');
+        const statusDot = $('statusDot');
+        const messagesDiv = $('messages');
+        const thinkingDiv = $('thinking');
+        let ws = null;
+        let bubble = null;
+        let userToken = null;
+
+        function showToast(msg) {
+            const t = $('toast');
+            t.textContent = msg;
+            t.classList.remove('hidden');
+            setTimeout(() => t.classList.add('hidden'), 3500);
+        }
+
+        // Check session
+        fetch('/api/session')
+            .then(r => r.json())
+            .then(data => {
+                if (data.logged_in) {
+                    showChat();
+                } else {
+                    showAuth();
+                }
+            })
+            .catch(() => showAuth());
+
+        function showAuth() {
+            authPage.style.display = 'flex';
+            app.classList.remove('active');
+        }
+
+        function showChat() {
+            authPage.style.display = 'none';
+            app.classList.add('active');
+            connectWS();
+        }
+
+        // Auth forms
+        {% if setup_mode %}
+        $('setupForm').onsubmit = async e => {
+            e.preventDefault();
+            const d = new FormData(e.target);
+            const r = await fetch('/api/setup', { method: 'POST', body: d });
+            if (r.ok) { location.reload(); }
+            else { const j = await r.json(); $('authError').textContent = j.message; }
+        };
+        {% else %}
+        $('loginForm').onsubmit = async e => {
+            e.preventDefault();
+            const d = new FormData(e.target);
+            const r = await fetch('/api/login', { method: 'POST', body: d });
+            if (r.ok) { showChat(); }
+            else { const j = await r.json(); $('authError').textContent = j.message; }
+        };
+        {% endif %}
+
+        function addMsg(role, text) {
+            const m = document.createElement('div');
+            m.className = 'msg ' + role;
+            m.textContent = text;
+            messagesDiv.appendChild(m);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            return m;
+        }
+
+        function connectWS() {
+            if (ws) return;
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${location.host}/ws`);
+            
+            ws.onopen = () => {
+                statusDot.classList.add('online');
+                statusDot.classList.remove('offline');
+                addMsg('system', 'Verbunden mit Atlas ✓');
+            };
+            ws.onclose = () => {
+                statusDot.classList.add('offline');
+                statusDot.classList.remove('online');
+                ws = null;
+                setTimeout(connectWS, 3000);
+            };
+            ws.onerror = () => {};
+            ws.onmessage = ev => {
+                let frame;
+                try { frame = JSON.parse(ev.data); } catch(_) { return; }
+                if (frame.method === 'event') {
+                    const p = frame.params || {};
+                    if (p.type === 'message.delta' && p.payload?.text) {
+                        if (!bubble) bubble = addMsg('assistant', '');
+                        bubble.firstChild.textContent += p.payload.text;
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    }
+                    if (p.type === 'message.complete') {
+                        if (bubble) {
+                            const meta = document.createElement('span');
+                            meta.style.cssText = 'font-size:11px;color:#8b93a3;margin-top:4px;display:block';
+                            meta.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit'});
+                            bubble.appendChild(meta);
+                            bubble = null;
+                        }
+                    }
+                    if (p.type === 'status.update') {
+                        if (!bubble && p.payload?.text) showToast(p.payload.text);
+                    }
+                }
+            };
+        }
+
+        function sendMessage(text) {
+            if (!text.trim()) return;
+            addMsg('user', text);
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMsg('system', 'Fehler: Nicht verbunden');
+                return;
+            }
+            // JSON-RPC an Hermes via Atlas-Proxy
+            const payload = { jsonrpc: "2.0", id: 1, method: "prompt.submit", params: { text: text } };
+            ws.send(JSON.stringify(payload));
+        }
+
+        $('input').addEventListener('keydown', e => {
+            if (e.key === 'Enter') { sendMessage($('input').value); $('input').value = ''; }
+        });
+        document.querySelector('[data-action="send"]').addEventListener('click', () => {
+            sendMessage($('input').value);
+            $('input').value = '';
+        });
+    </script>
+</body>
+</html>
