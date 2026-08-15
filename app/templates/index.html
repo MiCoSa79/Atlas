@@ -42,6 +42,8 @@
         .auth-card input:focus { border-color: var(--accent); }
         .auth-card button { width: 100%; margin-top: 20px; padding: 12px; background: var(--accent); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
         .auth-card button:hover { background: #3a70d1; }
+        .auth-card button.ghost { background: none; border: 1px solid var(--border); color: var(--muted); margin-top: 8px; font-size: 14px; }
+        .auth-card button.ghost:hover { background: var(--bg); color: var(--text); }
         .error-msg { color: #e5534b; font-size: 13px; text-align: center; min-height: 16px; margin-top: 10px; }
 
         /* Chat */
@@ -117,6 +119,14 @@
                 <input type="password" id="password" required autocomplete="current-password">
                 <button type="submit">Anmelden</button>
             </form>
+            <button id="toggleRegister" class="ghost" style="width:100%;margin-top:12px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;">Noch kein Konto? Registrieren</button>
+            <form id="registerForm" class="hidden">
+                <label>Benutzername</label>
+                <input type="text" id="r_username" required autocomplete="username" minlength="3">
+                <label>Passwort (min. 6 Zeichen)</label>
+                <input type="password" id="r_password" required autocomplete="new-password" minlength="6">
+                <button type="submit">Registrieren</button>
+            </form>
             {% endif %}
             <p class="error-msg" id="authError"></p>
         </div>
@@ -161,6 +171,26 @@
             <p class="status-ok" id="profileStatus"></p>
             <p class="error-msg" id="profileError"></p>
             <p class="hint" style="margin-top:10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Hinweis: <b>Benutzer und Passwort</b> sind deine Hermes-Dashboard-Zugangsdaten (Basic Auth). Nach dem Speichern wird die Verbindung sofort getestet.</p>
+            <!-- Admin-Einstellungen (nur Admin) -->
+            <div id="adminSettingsPanel" class="hidden" style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
+                <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">⚡ Admin-Bereich</h3>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                    <input type="checkbox" id="allowRegToggle" style="width:18px;height:18px;accent-color:var(--accent);">
+                    <label for="allowRegToggle" style="margin:0;font-size:14px;color:var(--text);cursor:pointer;">Neuanmeldungen erlauben</label>
+                </div>
+                <button id="saveAdminSettings" style="width:auto;padding:8px 16px;font-size:13px;margin:0 8px 8px 0;">Speichern</button>
+                <button id="showAdminUsers" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted);cursor:pointer;">Benutzerverwaltung</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin-Benutzerverwaltung -->
+    <div id="adminUsersModal" class="modal">
+        <div class="modal-card" style="max-width:600px;">
+            <h2>👥 Benutzerverwaltung</h2>
+            <div id="usersTable" style="max-height:400px;overflow-y:auto;margin:16px 0;"></div>
+            <button id="closeAdminUsers" class="ghost">Schließen</button>
+            <p class="error-msg" id="adminUsersError"></p>
         </div>
     </div>
 
@@ -196,6 +226,7 @@
             if (user && user.username) $('userTag').textContent = user.username;
             // Profil merken (für session.create und Modal)
             selectedProfile = user.hermes_profile || '';
+            isAdminUser = !!user.is_admin;
             // Banner: unterscheiden, was genau fehlt
             const banner = $('setupBanner');
             if (user && !user.hermes_configured) {
@@ -248,13 +279,53 @@
                 $('authError').textContent = j.message || 'Anmeldung fehlgeschlagen';
             }
         };
+        // Registrierung (nur sichtbar, wenn der Admin sie erlaubt)
+        $('toggleRegister').addEventListener('click', () => {
+            $('loginForm').classList.add('hidden');
+            $('toggleRegister').classList.add('hidden');
+            $('registerForm').classList.remove('hidden');
+            $('authError').textContent = '';
+        });
+        $('registerForm').onsubmit = async e => {
+            e.preventDefault();
+            const d = new URLSearchParams();
+            d.set('username', $('r_username').value.trim());
+            d.set('password', $('r_password').value);
+            const r = await fetch('/api/register', { method: 'POST', body: d });
+            const j = await r.json().catch(() => ({}));
+            if (r.ok) {
+                $('authError').textContent = '';
+                fetch('/api/session').then(r => r.json()).then(s => showChat(s)).catch(() => showChat({}));
+            } else {
+                $('authError').textContent = j.message || 'Registrierung fehlgeschlagen';
+            }
+        };
+        // Registrierungs-Button nur zeigen, wenn erlaubt (Admin-Einstellung)
+        fetch('/api/config')
+            .then(r => r.json())
+            .then(cfg => {
+                if (!cfg.allow_registration) $('toggleRegister').classList.add('hidden');
+            })
+            .catch(() => {});
         {% endif %}
 
         // Einstellungen (Profil + Hermes-Anbindung)
         let selectedProfile = '';
+        let isAdminUser = false;
         function openSettings() {
             $('profileStatus').textContent = '';
             $('profileError').textContent = '';
+            const adminPanel = $('adminSettingsPanel');
+            if (isAdminUser) {
+                adminPanel.classList.remove('hidden');
+                // Admin-Einstellungen laden
+                fetch('/api/admin/settings')
+                    .then(r => r.json())
+                    .then(d => { if (d.status === 'ok') $('allowRegToggle').checked = d.allow_registration; })
+                    .catch(() => {});
+            } else {
+                adminPanel.classList.add('hidden');
+            }
             // Profil-Daten laden
             fetch('/api/profile')
                 .then(r => r.json())
@@ -297,6 +368,60 @@
         $('settingsModal').addEventListener('click', e => {
             if (e.target === $('settingsModal')) $('settingsModal').classList.remove('active');
         });
+
+        // Admin: Neuanmeldungen erlauben -> speichern
+        $('saveAdminSettings').addEventListener('click', async () => {
+            const d = new URLSearchParams();
+            d.set('allow_registration', $('allowRegToggle').checked ? '1' : '0');
+            const r = await fetch('/api/admin/settings', { method: 'POST', body: d });
+            const j = await r.json().catch(() => ({}));
+            showToast(r.ok ? 'Einstellung gespeichert ✓' : (j.message || 'Speichern fehlgeschlagen'));
+        });
+
+        // Admin: Benutzerverwaltung
+        $('showAdminUsers').addEventListener('click', () => {
+            $('adminUsersError').textContent = '';
+            $('adminUsersModal').classList.add('active');
+            loadUsersTable();
+        });
+        $('closeAdminUsers').addEventListener('click', () => $('adminUsersModal').classList.remove('active'));
+        $('adminUsersModal').addEventListener('click', e => {
+            if (e.target === $('adminUsersModal')) $('adminUsersModal').classList.remove('active');
+        });
+
+        async function loadUsersTable() {
+            const box = $('usersTable');
+            box.innerHTML = '<p style="color:var(--muted);text-align:center;">Lädt…</p>';
+            try {
+                const r = await fetch('/api/admin/users');
+                const j = await r.json();
+                if (j.status !== 'ok') { box.innerHTML = '<p style="color:#e5534b;text-align:center;">' + (j.message || 'Fehler') + '</p>'; return; }
+                if (!j.users.length) { box.innerHTML = '<p style="color:var(--muted);text-align:center;">Noch keine Benutzer.</p>'; return; }
+                const rows = j.users.map(u => {
+                    const badge = u.is_admin ? '<span style="background:#3a70d1;color:#fff;border-radius:8px;padding:2px 8px;font-size:11px;">Admin</span>' : '';
+                    const state = u.is_active ? '<span style="color:#3fb950;font-size:12px;">aktiv</span>' : '<span style="color:#e5534b;font-size:12px;">deaktiviert</span>';
+                    const toggleBtn = u.is_admin ? '' : `<button data-id="${u.id}" data-act="${u.is_active ? 0 : 1}" class="user-toggle" style="padding:4px 10px;font-size:12px;background:none;border:1px solid var(--border);border-radius:8px;color:var(--muted);cursor:pointer;">${u.is_active ? 'Deaktivieren' : 'Aktivieren'}</button>`;
+                    const delBtn = u.is_admin ? '' : `<button data-id="${u.id}" class="user-del" style="padding:4px 10px;font-size:12px;background:none;border:1px solid #e5534b;border-radius:8px;color:#e5534b;cursor:pointer;margin-left:6px;">Löschen</button>`;
+                    return `<div style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--border);">
+                        <span style="flex:1;">${u.username} ${badge}</span> ${state} ${toggleBtn}${delBtn}</div>`;
+                }).join('');
+                box.innerHTML = rows;
+                // Event-Listener für Toggle/Löschen
+                box.querySelectorAll('.user-toggle').forEach(b => b.addEventListener('click', async () => {
+                    const d = new URLSearchParams();
+                    d.set('is_active', b.dataset.act);
+                    await fetch(`/api/admin/users/${b.dataset.id}/toggle`, { method: 'PUT', body: d });
+                    loadUsersTable();
+                }));
+                box.querySelectorAll('.user-del').forEach(b => b.addEventListener('click', async () => {
+                    if (!confirm('Benutzer wirklich löschen?')) return;
+                    await fetch(`/api/admin/users/${b.dataset.id}`, { method: 'DELETE' });
+                    loadUsersTable();
+                }));
+            } catch (e) {
+                box.innerHTML = '<p style="color:#e5534b;text-align:center;">Fehler beim Laden</p>';
+            }
+        }
 
         $('saveProfile').addEventListener('click', async () => {
             $('profileError').textContent = '';

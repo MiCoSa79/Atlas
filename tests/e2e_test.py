@@ -177,6 +177,128 @@ def main():
     if not ok:
         failures.append("logout")
 
+    # 7b) Admin wieder einloggen (für Admin-Tests)
+    login_d = urllib.parse.urlencode({"username": "admin", "password": "admin123"}).encode()
+    login_req = urllib.request.Request(f"{BASE}/api/login", data=login_d, method="POST")
+    login_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    with login_opener.open(login_req, timeout=20) as lr:
+        lj = json.loads(lr.read() or b"{}")
+    print("7b) Admin wieder eingeloggt:", lj)
+
+    # 8) Neuer User registrieren (falls erlaubt)
+    reg_cfg = json.loads(urllib.request.urlopen(f"{BASE}/api/config").read())
+    print("8) GET /api/config:", reg_cfg)
+    if reg_cfg.get("allow_registration"):
+        try:
+            reg_jar = http.cookiejar.CookieJar()
+            reg_data = urllib.parse.urlencode({"username": "testuser1", "password": "test123"}).encode()
+            reg_req = urllib.request.Request(f"{BASE}/api/register", data=reg_data, method="POST")
+            reg_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(reg_jar))
+            with reg_opener.open(reg_req, timeout=20) as r:
+                reg_status, reg_j = r.status, json.loads(r.read() or b"{}")
+            print("8a) POST /api/register:", reg_status, reg_j)
+            if reg_status == 200:
+                print("8a) Registration OK")
+                # Session-Check: sollte is_admin=False haben
+                s_req = urllib.request.Request(f"{BASE}/api/session")
+                s_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(reg_jar))
+                with s_opener.open(s_req, timeout=10) as r2:
+                    s_j2 = json.loads(r2.read() or b"{}")
+                ok = s_j2.get("logged_in") and s_j2.get("is_admin") is False
+                print("8b) Session als neu User (is_admin=False):", "OK" if ok else f"FEHLER -> {s_j2}")
+                if not ok:
+                    failures.append("reg_session")
+            else:
+                print("8a) Registration fehlgeschlagen:", reg_j)
+                failures.append("register")
+        except Exception as e:
+            print("8) Registrierung FEHLER:", e)
+            failures.append("register")
+    else:
+        print("8) Registrierung übersprungen (nicht erlaubt)")
+
+    # 9) Admin: settings speichern und lesen
+    print("9) Admin: POST /api/admin/settings (allow_registration=true)")
+    st, j = post_form("/api/admin/settings", {"allow_registration": "1"}, jar)
+    print("9) Admin settings speichern:", st, j)
+    if st == 200:
+        st2, j2 = get_json("/api/admin/settings", jar)
+        print("9) Admin settings lesen:", j2)
+        if j2.get("allow_registration") is not True:
+            failures.append("admin_settings")
+    else:
+        failures.append("admin_settings")
+
+    # 10) Admin: Benutzer-Liste (sollte 2 User enthalten)
+    print("10) Admin: GET /api/admin/users")
+    st, j = get_json("/api/admin/users", jar)
+    print("10) Admin users:", st, len(j.get("users", [])) if st == 200 else j)
+    if st == 200 and len(j.get("users", [])) >= 2:
+        print("10) 2+ User in DB ✓")
+    else:
+        failures.append("admin_users")
+
+    # 11) Admin: neuer User deaktivieren
+    if reg_status == 200:
+        print("11) Admin: PUT /api/admin/users/<id>/toggle (deaktivieren)")
+        st, j = get_json("/api/admin/users", jar)
+        testuser_id = None
+        for u in (j or {}).get("users", []):
+            if u["username"] == "testuser1":
+                testuser_id = u["id"]
+                break
+        if testuser_id:
+            d = urllib.parse.urlencode({"is_active": "0"}).encode()
+            t_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}/toggle", data=d, method="PUT")
+            t_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            try:
+                with t_opener.open(t_req, timeout=20) as r:
+                    tj = json.loads(r.read() or b"{}")
+                print("11) Deaktivieren OK:", tj)
+                # Login sollte jetzt fehlschlagen (403)
+                f_req = urllib.request.Request(f"{BASE}/api/login", data=urllib.parse.urlencode({"username": "testuser1", "password": "test123"}).encode(), method="POST")
+                f_jar = http.cookiejar.CookieJar()
+                f_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(f_jar))
+                try:
+                    with f_opener.open(f_req, timeout=20) as r2:
+                        rj2 = json.loads(r2.read() or b"{}")
+                        print("11) Login als deaktivierter User:", r2.status, rj2)
+                        failures.append("deactivated_login")
+                except urllib.error.HTTPError as e:
+                    if e.code == 403:
+                        print("11) Login als deaktivierter User: 403 ✓")
+                    else:
+                        print("11) Login als deaktivierter User: unerwarteter Status", e.code)
+                        failures.append("deactivated_login")
+            except Exception as e:
+                print("11) Toggle FEHLER:", e)
+                failures.append("admin_toggle")
+        else:
+            print("11) testuser1 nicht in DB gefunden, skip")
+
+    # 12) Admin: neuer User löschen
+    if reg_status == 200:
+        print("12) Admin: DELETE /api/admin/users/<id>")
+        if testuser_id:
+            d_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}", method="DELETE")
+            d_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            try:
+                with d_opener.open(d_req, timeout=20) as r:
+                    dj = json.loads(r.read() or b"{}")
+                print("12) Löschen OK:", dj)
+                # Users Liste checken
+                st, j = get_json("/api/admin/users", jar)
+                users = j.get("users", []) if st == 200 else []
+                has_test = any(u["username"] == "testuser1" for u in users)
+                print("12) testuser1 noch in DB?", has_test)
+                if has_test:
+                    failures.append("delete_user")
+            except Exception as e:
+                print("12) DELETE FEHLER:", e)
+                failures.append("delete_user")
+        else:
+            print("12) testuser1 nicht gefunden, skip")
+
     print("-" * 50)
     if failures:
         print("ERGEBNIS: FEHLGESCHLAGEN ->", ", ".join(failures))

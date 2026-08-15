@@ -38,11 +38,23 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             is_admin INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
             hermes_url TEXT,
             hermes_auth TEXT,
-            hermes_profile TEXT
+            hermes_profile TEXT,
+            allow_registration INTEGER
         )
     """)
+    conn.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
+    # Alte DBs: fehlende Spalten nachträglich hinzufügen (ignoriert Fehler, wenn schon da)
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN allow_registration INTEGER")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -60,15 +72,15 @@ def user_count():
     return n
 
 
-def create_user(username, password, is_admin, hermes_url=None, hermes_user=None, hermes_pass=None):
+def create_user(username, password, is_admin, hermes_url=None, hermes_user=None, hermes_pass=None, allow_registration=None):
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     hermes_auth = f"{hermes_user}:{hermes_pass}" if hermes_user else None
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO users (username, password_hash, is_admin, hermes_url, hermes_auth, hermes_profile)"
-            " VALUES (?, ?, ?, ?, ?, NULL)",
-            (username, hashed, is_admin, hermes_url, hermes_auth),
+            "INSERT INTO users (username, password_hash, is_admin, hermes_url, hermes_auth, hermes_profile, allow_registration)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (username, hashed, is_admin, hermes_url, hermes_auth, None, allow_registration),
         )
         conn.commit()
         return True
@@ -274,7 +286,9 @@ async def login(username: str = Form(...), password: str = Form(...)):
     user = verify_user(username, password)
     if not user:
         return JSONResponse({"status": "error", "message": "Falsche Zugangsdaten"}, status_code=401)
-    resp = JSONResponse({"status": "ok"})
+    if not user.get("is_active"):
+        return JSONResponse({"status": "error", "message": "Dein Konto ist deaktiviert"}, status_code=403)
+    resp = JSONResponse({"status": "ok", "is_admin": bool(user.get("is_admin"))})
     resp.set_cookie(SESSION_COOKIE, start_session(user), httponly=True, samesite="lax")
     return resp
 
@@ -299,9 +313,23 @@ async def api_session(request: Request):
     return JSONResponse({
         "logged_in": True,
         "username": user.get("username"),
+        "is_admin": bool(db_user.get("is_admin")),
         "hermes_url": info["hermes_url"],
         "hermes_profile": info.get("hermes_profile"),
         "hermes_configured": info["hermes_configured"],
+    })
+
+
+@app.get("/api/config")
+async def api_config():
+    """Öffentliche Konfiguration für die Login-Seite (kein Login nötig)."""
+    conn = get_db()
+    reg_row = conn.execute("SELECT value FROM settings WHERE key = 'allow_registration'").fetchone()
+    conn.close()
+    allow_reg = reg_row["value"] == "1" if reg_row else True  # Default: offen
+    return JSONResponse({
+        "setup": user_count() == 0,
+        "allow_registration": allow_reg,
     })
 
 
@@ -374,6 +402,97 @@ async def api_profile_save(request: Request,
     else:
         test, detail = ("missing", "Benutzer und Passwort fehlen")
     return JSONResponse({"status": "ok", "test": test, "test_error": detail})
+
+
+# ---------------------------------------------------------------- Registrierung
+
+@app.post("/api/register")
+async def register(username: str = Form(...), password: str = Form(...)):
+    conn = get_db()
+    reg_allowed = conn.execute("SELECT value FROM settings WHERE key = 'allow_registration'").fetchone()
+    conn.close()
+    allow_reg = reg_allowed["value"] == "1" if reg_allowed else True  # Default: offen
+    if not allow_reg:
+        return JSONResponse({"status": "error", "message": "Registrierung ist aktuell nicht möglich"}, status_code=403)
+    if len(username) < 3 or len(password) < 6:
+        return JSONResponse({"status": "error", "message": "Benutzername (min. 3) und Passwort (min. 6 Zeichen) prüfen"}, status_code=400)
+    if not create_user(username, password, is_admin=0, allow_registration=0):
+        return JSONResponse({"status": "error", "message": "Benutzername bereits vergeben"}, status_code=500)
+    user = verify_user(username, password)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Interner Fehler beim Anlegen"}, status_code=500)
+    resp = JSONResponse({"status": "ok"})
+    resp.set_cookie(SESSION_COOKIE, start_session(user), httponly=True, samesite="lax")
+    return resp
+
+
+# ---------------------------------------------------------------- Admin
+
+def is_admin_request(request: Request) -> bool:
+    """Admin-Check immer gegen die FRISCHE DB (Session speichert bewusst nur
+    user_id/username, damit Profiländerungen sofort wirken)."""
+    user = session_from_request(request)
+    if not user:
+        return False
+    db_user = get_user_by_id(user["user_id"]) or {}
+    return bool(db_user.get("is_admin"))
+
+
+@app.get("/api/admin/settings")
+async def admin_settings(request: Request):
+    if not is_admin_request(request):
+        return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    conn = get_db()
+    reg_row = conn.execute("SELECT value FROM settings WHERE key = 'allow_registration'").fetchone()
+    allow_reg = reg_row["value"] == "1" if reg_row else True  # Default: offen
+    conn.close()
+    return JSONResponse({"status": "ok", "allow_registration": allow_reg})
+
+
+@app.post("/api/admin/settings")
+async def admin_settings_save(request: Request, allow_registration: str = Form("0")):
+    if not is_admin_request(request):
+        return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('allow_registration', ?)", (allow_registration,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request):
+    if not is_admin_request(request):
+        return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    conn = get_db()
+    rows = conn.execute("SELECT id, username, is_admin, is_active FROM users ORDER BY id").fetchall()
+    conn.close()
+    return JSONResponse({"status": "ok", "users": [dict(r) for r in rows]})
+
+
+@app.put("/api/admin/users/{user_id}/toggle")
+async def admin_toggle_user(user_id: int, request: Request, is_active: str = Form("0")):
+    if not is_admin_request(request):
+        return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    conn = get_db()
+    conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (int(is_active), user_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok"})
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: int, request: Request):
+    if not is_admin_request(request):
+        return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    user = session_from_request(request) or {}
+    if user_id == user.get("user_id"):
+        return JSONResponse({"status": "error", "message": "Du kannst dein eigenes Konto nicht löschen"}, status_code=400)
+    conn = get_db()
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok"})
 
 
 # ---------------------------------------------------------------- Chat-Proxy
