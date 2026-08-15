@@ -1,4 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Hintergrundkreis -->
   <circle cx="50" cy="50" r="46" fill="#4f8cff"/>
-  <text x="50" y="68" font-family="Arial, sans-serif" font-size="52" font-weight="700" fill="#fff" text-anchor="middle">A</text>
+  <!-- Tempel in Weiß: Giebel, Gebälk, 4 Säulen, Stufenbasis -->
+  <g fill="#ffffff">
+    <!-- Stufenbasis -->
+    <rect x="20" y="72" width="60" height="6" rx="1"/>
+    <rect x="25" y="66" width="50" height="6" rx="1"/>
+    <!-- 4 Säulen -->
+    <rect x="25" y="42" width="6" height="24"/>
+    <rect x="38" y="42" width="6" height="24"/>
+    <rect x="51" y="42" width="6" height="24"/>
+    <rect x="64" y="42" width="6" height="24"/>
+    <!-- Gebälk (Architrav) -->
+    <rect x="21" y="36" width="58" height="6" rx="1"/>
+    <!-- Dreiecksgiebel -->
+    <polygon points="50,14 21,36 79,36"/>
+  </g>
 </svg>
