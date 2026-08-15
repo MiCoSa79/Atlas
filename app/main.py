@@ -470,6 +470,21 @@ async def admin_list_users(request: Request):
     return JSONResponse({"status": "ok", "users": [dict(r) for r in rows]})
 
 
+@app.post("/api/admin/users")
+async def admin_create_user(request: Request,
+                            username: str = Form(...),
+                            password: str = Form(...)):
+    """Admin legt manuell einen neuen Benutzer an (ohne Adminrechte)."""
+    if not is_admin_request(request):
+        return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
+    username = username.strip()
+    if len(username) < 3 or len(password) < 6:
+        return JSONResponse({"status": "error", "message": "Benutzername (min. 3) und Passwort (min. 6 Zeichen) prüfen"}, status_code=400)
+    if not create_user(username, password, is_admin=0):
+        return JSONResponse({"status": "error", "message": "Benutzername bereits vergeben"}, status_code=500)
+    return JSONResponse({"status": "ok"})
+
+
 @app.put("/api/admin/users/{user_id}/toggle")
 async def admin_toggle_user(user_id: int, request: Request, is_active: str = Form("0")):
     if not is_admin_request(request):

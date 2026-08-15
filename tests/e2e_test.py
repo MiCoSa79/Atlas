@@ -238,6 +238,25 @@ def main():
     else:
         failures.append("admin_users")
 
+    # 10b) Admin: Neuen Benutzer manuell anlegen
+    print("10b) Admin: POST /api/admin/users (neuer Benutzer)")
+    create_data = urllib.parse.urlencode({"username": "adminuser1", "password": "adminpass123"}).encode()
+    create_req = urllib.request.Request(f"{BASE}/api/admin/users", data=create_data, method="POST")
+    create_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        with create_opener.open(create_req, timeout=20) as cr:
+            cj = json.loads(cr.read() or b"{}")
+        print("10b) Admin create user:", cr.status, cj)
+        if cr.status != 200:
+            failures.append("admin_create_user")
+        else:
+            # Nachlegen: User sollte jetzt in der Liste sein (3 User)
+            st2, j2 = get_json("/api/admin/users", jar)
+            print("10b) User nach Anlegen:", st2, len(j2.get("users", [])) if st2 == 200 else j2)
+    except urllib.error.HTTPError as e:
+        print("10b) Admin create user FEHLER:", e.code, json.loads(e.read()))
+        failures.append("admin_create_user")
+
     # 11) Admin: neuer User deaktivieren
     if reg_status == 200:
         print("11) Admin: PUT /api/admin/users/<id>/toggle (deaktivieren)")

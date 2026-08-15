@@ -111,7 +111,8 @@
                 <button type="submit">Installation starten</button>
             </form>
             {% else %}
-            <p class="hint">Melde dich an, um fortzufahren.</p>
+            <p class="hint" id="hintLogin">Melde dich an, um fortzufahren.</p>
+            <p class="hint hidden" id="hintRegister">Lege dein Konto an, um mit Atlas zu chatten.</p>
             <form id="loginForm">
                 <label>Benutzername</label>
                 <input type="text" id="username" required autocomplete="username">
@@ -188,9 +189,15 @@
     <div id="adminUsersModal" class="modal">
         <div class="modal-card" style="max-width:600px;">
             <h2>👥 Benutzerverwaltung</h2>
+            <!-- Neuer Benutzer -->
+            <form id="createUserForm" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+                <input id="newUsername" type="text" placeholder="Benutzername" required style="flex:1;min-width:120px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;" minlength="3">
+                <input id="newPassword" type="password" placeholder="Passwort (min. 6)" required style="flex:1;min-width:120px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;" minlength="6">
+                <button type="submit" style="padding:10px 16px;background:var(--accent);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:14px;">+ Anlegen</button>
+            </form>
+            <p class="error-msg" id="createUserError"></p>
             <div id="usersTable" style="max-height:400px;overflow-y:auto;margin:16px 0;"></div>
             <button id="closeAdminUsers" class="ghost">Schließen</button>
-            <p class="error-msg" id="adminUsersError"></p>
         </div>
     </div>
 
@@ -284,6 +291,19 @@
             $('loginForm').classList.add('hidden');
             $('toggleRegister').classList.add('hidden');
             $('registerForm').classList.remove('hidden');
+            $('hintLogin').classList.add('hidden');
+            $('hintRegister').classList.remove('hidden');
+            $('authError').textContent = '';
+        });
+        // Zurück zum Login (optional - "Zurück"-Link)
+        $('registerForm').insertAdjacentHTML('afterend',
+            '<button id="backToLogin" class="ghost" style="width:100%;margin-top:8px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;display:none;">← Zurück zum Login</button>');
+        $('backToLogin').addEventListener('click', () => {
+            $('registerForm').classList.add('hidden');
+            $('toggleRegister').classList.remove('hidden');
+            $('loginForm').classList.remove('hidden');
+            $('hintRegister').classList.add('hidden');
+            $('hintLogin').classList.remove('hidden');
             $('authError').textContent = '';
         });
         $('registerForm').onsubmit = async e => {
@@ -380,13 +400,35 @@
 
         // Admin: Benutzerverwaltung
         $('showAdminUsers').addEventListener('click', () => {
-            $('adminUsersError').textContent = '';
+            $('createUserError').textContent = '';
             $('adminUsersModal').classList.add('active');
             loadUsersTable();
         });
         $('closeAdminUsers').addEventListener('click', () => $('adminUsersModal').classList.remove('active'));
         $('adminUsersModal').addEventListener('click', e => {
             if (e.target === $('adminUsersModal')) $('adminUsersModal').classList.remove('active');
+        });
+
+        // Admin: Neuen Benutzer anlegen
+        $('createUserForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            $('createUserError').textContent = '';
+            const d = new URLSearchParams();
+            d.set('username', $('newUsername').value.trim());
+            d.set('password', $('newPassword').value);
+            try {
+                const r = await fetch('/api/admin/users', { method: 'POST', body: d });
+                const j = await r.json().catch(() => ({}));
+                if (r.ok) {
+                    $('newUsername').value = '';
+                    $('newPassword').value = '';
+                    loadUsersTable();
+                } else {
+                    $('createUserError').textContent = j.message || 'Anlegen fehlgeschlagen';
+                }
+            } catch (err) {
+                $('createUserError').textContent = 'Verbindungsfehler';
+            }
         });
 
         async function loadUsersTable() {
