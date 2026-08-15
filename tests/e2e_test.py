@@ -13,8 +13,10 @@ import http.cookiejar
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
+import pyotp
 import websockets
 
 BASE = "http://127.0.0.1:8899"
@@ -335,6 +337,116 @@ def main():
                     failures.append("delete_user")
             else:
                 print("13) testuser1 nicht gefunden, skip")
+
+    # ---------------------------------------------------------------- 2FA (TOTP)
+    print("14) 2FA: TOTP-Setup + Login-Flow")
+    # Status-Abfrage (Admin ist eingeloggt)
+    st, j = get_json("/api/2fa/status", jar)
+    ok = st == 200 and j.get("enabled") is False
+    print("14) GET /api/2fa/status (anfangs):", st, j)
+    if not ok:
+        failures.append("otp_status_initial")
+
+    # Setup
+    secret = ""
+    setup_req = urllib.request.Request(f"{BASE}/api/2fa/setup", data=b"", method="POST")
+    setup_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        with setup_opener.open(setup_req, timeout=20) as sr:
+            sj = json.loads(sr.read() or b"{}")
+        print("14) POST /api/2fa/setup:", sj.get("status"), "| Secret:", (sj.get("secret") or "")[:8] + "…", "| QR:", "ja" if sj.get("qr_data_url") else "NEIN")
+        secret = sj.get("secret", "")
+        if sj.get("status") != "ok" or not secret or not sj.get("qr_data_url"):
+            failures.append("otp_setup")
+    except Exception as e:
+        print("14) Setup FEHLER:", e)
+        failures.append("otp_setup")
+
+    # Falscher Code -> 401
+    st, j = post_form("/api/2fa/confirm", {"code": "000000"}, jar)
+    ok = st == 401
+    print("14) Confirm mit falschem Code:", st, j.get("message"))
+    if not ok:
+        failures.append("otp_confirm_wrong")
+
+    # Richtiger Code (pyotp generiert den aktuellen TOTP-Code)
+    code = pyotp.TOTP(secret).now()
+    st, j = post_form("/api/2fa/confirm", {"code": code}, jar)
+    ok = st == 200 and j.get("status") == "ok"
+    print("14) Confirm mit gültigem Code:", st, j.get("message"))
+    if not ok:
+        failures.append("otp_confirm")
+
+    # Status: enabled
+    st, j = get_json("/api/2fa/status", jar)
+    ok = st == 200 and j.get("enabled") is True
+    print("14) GET /api/2fa/status (nach Aktivierung):", st, j)
+    if not ok:
+        failures.append("otp_status_enabled")
+
+    # Logout, dann Login -> 2fa_required (Passwort allein reicht nicht mehr)
+    st, j = post_form("/api/logout", {}, jar)
+    login_d = urllib.parse.urlencode({"username": ADMIN_USER, "password": ADMIN_PASS}).encode()
+    login_req = urllib.request.Request(f"{BASE}/api/login", data=login_d, method="POST")
+    login_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        with login_opener.open(login_req, timeout=20) as lr:
+            lj = json.loads(lr.read() or b"{}")
+            login_status = lr.status
+    except urllib.error.HTTPError as e:
+        login_status, lj = e.code, json.loads(e.read() or b"{}")
+    ok = login_status == 200 and lj.get("status") == "2fa_required" and lj.get("pending_token")
+    print("15) Login ohne 2FA-Code:", login_status, lj.get("status"), "(pending_token:", "ja" if lj.get("pending_token") else "nein", ")")
+    if not ok:
+        failures.append("otp_login_2fa_required")
+    # Keine Session darf gestartet sein
+    st, sess = get_json("/api/session", jar)
+    if sess.get("logged_in"):
+        print("15) FEHLER: Session trotz fehlendem 2FA aktiv!")
+        failures.append("otp_no_session_without_code")
+
+    # Falscher Code beim Verify -> 401
+    st, j = post_form("/api/2fa/verify", {"pending_token": lj.get("pending_token", ""), "code": "000000"}, jar)
+    ok = st == 401
+    print("15) Verify mit falschem Code:", st, j.get("message"))
+    if not ok:
+        failures.append("otp_verify_wrong")
+
+    # Richtiger Code -> Session
+    code2 = pyotp.TOTP(secret).now()
+    st, j = post_form("/api/2fa/verify", {"pending_token": lj.get("pending_token", ""), "code": code2}, jar)
+    ok = st == 200 and j.get("status") == "ok"
+    print("15) Verify mit gültigem Code:", st, j.get("status"))
+    if not ok:
+        failures.append("otp_verify_ok")
+    st, sess = get_json("/api/session", jar)
+    ok = sess.get("logged_in") is True
+    print("15) Session nach 2FA:", "OK" if ok else f"FEHLER -> {sess}")
+    if not ok:
+        failures.append("otp_session_after_verify")
+
+    # Deaktivieren: falsches Passwort -> 401
+    st, j = post_form("/api/2fa/disable", {"password": "falsch123"}, jar)
+    ok = st == 401
+    print("16) Disable mit falschem Passwort:", st, j.get("message"))
+    if not ok:
+        failures.append("otp_disable_wrong_pw")
+
+    # Deaktivieren: richtiges Passwort -> ok
+    st, j = post_form("/api/2fa/disable", {"password": ADMIN_PASS}, jar)
+    ok = st == 200 and j.get("status") == "ok"
+    print("16) Disable mit richtigem Passwort:", st, j.get("message"))
+    if not ok:
+        failures.append("otp_disable")
+
+    st, j = get_json("/api/2fa/status", jar)
+    ok = st == 200 and j.get("enabled") is False
+    print("16) GET /api/2fa/status (nach Disable):", st, j)
+    if not ok:
+        failures.append("otp_status_disabled")
+
+    # Wichtig: 2FA wieder deaktiviert lassen, damit Folgetests/Updates des Nutzers nicht hängen
+    print("14–16) 2FA-Tests abgeschlossen (Admin wieder ohne 2FA) ✓")
 
     print("-" * 50)
     if failures:

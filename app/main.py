@@ -8,15 +8,20 @@ Eigenständiger FastAPI-Container:
 Läuft im Container unter /app, Datenbank in /data/atlas.db (Volume).
 """
 import asyncio
+import base64
 import json
 import os
 import secrets
 import sqlite3
+import time
 from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
 
 import aiohttp
 import bcrypt
+import pyotp
+import qrcode
+from qrcode.image.svg import SvgPathImage
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
 from fastapi import FastAPI, Form, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -53,6 +58,14 @@ def init_db():
         pass
     try:
         conn.execute("ALTER TABLE users ADD COLUMN allow_registration INTEGER")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN otp_secret TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN otp_confirmed INTEGER DEFAULT 0")
     except Exception:
         pass
     conn.commit()
@@ -228,6 +241,14 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Server-seitiger Session-Store: token -> user-dict
 app.state.user_sessions = {}
+# 2FA-Zwischenzustand nach Passwort-Login: token -> {user_id, username, expires}
+app.state.pending_2fa = {}
+
+# TOTP: 30s-Fenster, 1 Intervall Toleranz (vor/nach) gegen Tippzeit-Versatz
+OTP_WINDOW = 1
+# Pending-2FA-Token nur 5 Minuten gültig, max. 5 Prüfversuche
+PENDING_2FA_TTL = 300
+PENDING_2FA_MAX_ATTEMPTS = 5
 
 
 def start_session(user: dict) -> str:
@@ -284,9 +305,137 @@ async def login(username: str = Form(...), password: str = Form(...)):
         return JSONResponse({"status": "error", "message": "Falsche Zugangsdaten"}, status_code=401)
     if not user.get("is_active"):
         return JSONResponse({"status": "error", "message": "Dein Konto ist deaktiviert"}, status_code=403)
+    # 2FA-Stufe 1: Passwort korrekt, aber TOTP aktiv -> noch KEINE Session, erst Code prüfen
+    if user.get("otp_secret") and user.get("otp_confirmed"):
+        pending_token = secrets.token_urlsafe(32)
+        app.state.pending_2fa[pending_token] = {
+            "user_id": user["id"],
+            "username": user["username"],
+            "expires": time.time() + PENDING_2FA_TTL,
+            "attempts": 0,
+        }
+        return JSONResponse({"status": "2fa_required", "pending_token": pending_token})
     resp = JSONResponse({"status": "ok", "is_admin": bool(user.get("is_admin"))})
     resp.set_cookie(SESSION_COOKIE, start_session(user), httponly=True, samesite="lax")
     return resp
+
+
+@app.post("/api/2fa/verify")
+async def otp_verify(pending_token: str = Form(...), code: str = Form(...)):
+    """2FA-Stufe 2: prüft den TOTP-Code und startet erst dann die Session."""
+    pending = app.state.pending_2fa.get(pending_token)
+    if not pending or pending.get("expires", 0) < time.time():
+        app.state.pending_2fa.pop(pending_token, None)
+        return JSONResponse({"status": "error", "message": "Anmeldung abgelaufen – bitte erneut einloggen"}, status_code=401)
+    db_user = get_user_by_id(pending["user_id"]) or {}
+    secret = db_user.get("otp_secret")
+    if not secret or not db_user.get("otp_confirmed"):
+        app.state.pending_2fa.pop(pending_token, None)
+        return JSONResponse({"status": "error", "message": "2FA ist nicht mehr aktiv"}, status_code=401)
+    totp = pyotp.TOTP(secret)
+    if not totp.verify(code, valid_window=OTP_WINDOW):
+        pending["attempts"] += 1
+        if pending["attempts"] >= PENDING_2FA_MAX_ATTEMPTS:
+            app.state.pending_2fa.pop(pending_token, None)
+            return JSONResponse({"status": "error", "message": "Zu viele Fehlversuche – bitte erneut einloggen"}, status_code=401)
+        return JSONResponse({"status": "error", "message": "Code ungültig"}, status_code=401)
+    app.state.pending_2fa.pop(pending_token, None)
+    resp = JSONResponse({"status": "ok", "is_admin": bool(db_user.get("is_admin"))})
+    resp.set_cookie(SESSION_COOKIE, start_session(db_user), httponly=True, samesite="lax")
+    return resp
+
+
+@app.get("/api/2fa/status")
+async def otp_status(request: Request):
+    """2FA-Status für die Einstellungen (eingeloggt)."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    return JSONResponse({
+        "status": "ok",
+        "enabled": bool(db_user.get("otp_secret") and db_user.get("otp_confirmed")),
+        "pending": bool(db_user.get("otp_secret") and not db_user.get("otp_confirmed")),
+    })
+
+
+def otp_qr_data_url(provisioning_uri: str) -> str:
+    """Erzeugt ein QR-Code-SVG (data-URL) für die Authenticator-App."""
+    try:
+        qr = qrcode.QRCode(box_size=8, border=2)
+        qr.add_data(provisioning_uri)
+        qr.make(fit=True)
+        img = qr.make_image(image_factory=SvgPathImage)
+        buf = img.to_string()  # SVG-XML als bytes
+        b64 = base64.b64encode(buf).decode("ascii")
+        return f"data:image/svg+xml;base64,{b64}"
+    except Exception:
+        return ""
+
+
+@app.post("/api/2fa/setup")
+async def otp_setup(request: Request):
+    """Startet die 2FA-Einrichtung: erzeugt Secret + QR-Code, speichert Secret
+    (noch nicht aktiv — erst nach erfolgreicher Code-Bestätigung)."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    secret = pyotp.random_base32()
+    db_user = get_user_by_id(user["user_id"]) or {}
+    username = db_user.get("username", user.get("username", ""))
+    totp = pyotp.TOTP(secret)
+    uri = totp.provisioning_uri(name=username, issuer_name="Atlas")
+    conn = get_db()
+    conn.execute("UPDATE users SET otp_secret = ?, otp_confirmed = 0 WHERE id = ?", (secret, user["user_id"]))
+    conn.commit()
+    conn.close()
+    return JSONResponse({
+        "status": "ok",
+        "secret": secret,
+        "otpauth_uri": uri,
+        "qr_data_url": otp_qr_data_url(uri),
+    })
+
+
+@app.post("/api/2fa/confirm")
+async def otp_confirm(request: Request, code: str = Form(...)):
+    """Bestätigt die Einrichtung mit einem gültigen TOTP-Code -> 2FA wird aktiv."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    secret = db_user.get("otp_secret")
+    if not secret:
+        return JSONResponse({"status": "error", "message": "Kein 2FA-Secret vorhanden"}, status_code=400)
+    totp = pyotp.TOTP(secret)
+    if not totp.verify(code, valid_window=OTP_WINDOW):
+        return JSONResponse({"status": "error", "message": "Code ungültig – bitte prüfen und erneut versuchen"}, status_code=401)
+    conn = get_db()
+    conn.execute("UPDATE users SET otp_confirmed = 1 WHERE id = ?", (user["user_id"],))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok", "message": "2FA aktiviert ✓"})
+
+
+@app.post("/api/2fa/disable")
+async def otp_disable(request: Request, password: str = Form(...)):
+    """Deaktiviert 2FA — Passwort-Bestätigung nötig, damit niemand fremd
+    den Schutz einfach entfernen kann."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    if not db_user.get("otp_secret"):
+        return JSONResponse({"status": "error", "message": "2FA ist gar nicht aktiv"}, status_code=400)
+    if not db_user.get("password_hash") or not bcrypt.checkpw(
+        password.encode("utf-8"), db_user["password_hash"].encode("utf-8")
+    ):
+        return JSONResponse({"status": "error", "message": "Passwort falsch"}, status_code=401)
+    conn = get_db()
+    conn.execute("UPDATE users SET otp_secret = NULL, otp_confirmed = 0 WHERE id = ?", (user["user_id"],))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok", "message": "2FA deaktiviert"})
 
 
 @app.post("/api/logout")

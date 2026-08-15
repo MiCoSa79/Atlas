@@ -120,6 +120,12 @@
                 <input type="password" id="password" required autocomplete="current-password">
                 <button type="submit">Anmelden</button>
             </form>
+            <form id="otpForm" class="hidden">
+                <label>2FA-Code (aus deiner Authenticator-App)</label>
+                <input type="text" id="otpCode" required autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" style="letter-spacing:4px;text-align:center;font-size:22px;">
+                <button type="submit">Bestätigen</button>
+            </form>
+            <button id="backToLogin2fa" class="ghost hidden" style="width:100%;margin-top:8px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;">← Zurück zum Login</button>
             <button id="toggleRegister" class="ghost" style="width:100%;margin-top:12px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;">Noch kein Konto? Registrieren</button>
             <form id="registerForm" class="hidden">
                 <label>Benutzername</label>
@@ -176,6 +182,23 @@
             <p class="status-ok" id="profileStatus"></p>
             <p class="error-msg" id="profileError"></p>
             <p class="hint" style="margin-top:10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Hinweis: <b>Benutzer und Passwort</b> sind deine Hermes-Dashboard-Zugangsdaten (Basic Auth). Nach dem Speichern wird die Verbindung sofort getestet.</p>
+            <!-- Zwei-Faktor-Authentifizierung -->
+            <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
+                <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">🔐 Zwei-Faktor-Authentifizierung</h3>
+                <p class="hint" style="margin:0 0 10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;" id="otpStatusLine">Lädt…</p>
+                <button id="setupOtpBtn" class="hidden" style="width:auto;padding:8px 16px;font-size:13px;margin:0 8px 8px 0;">🔐 2FA einrichten</button>
+                <button id="disableOtpBtn" class="hidden" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid #e5534b;border-radius:10px;color:#e5534b;cursor:pointer;">2FA deaktivieren</button>
+                <!-- Einrichtungs-Panel (QR-Code + Secret + Code) -->
+                <div id="otpSetupPanel" class="hidden" style="margin-top:10px;">
+                    <img id="otpQr" alt="QR-Code" style="width:180px;height:180px;display:block;margin:0 auto 10px;border-radius:10px;background:#fff;padding:8px;">
+                    <p class="hint" style="margin:0 0 6px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Scanne den QR-Code mit deiner Authenticator-App (z.B. Google Authenticator, Aegis, 1Password) oder trage das Secret manuell ein:</p>
+                    <p id="otpSecretText" style="font-family:monospace;font-size:13px;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center;margin:0 0 10px;word-break:break-all;"></p>
+                    <input type="text" id="otpSetupCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="6-stelliger Code" style="letter-spacing:4px;text-align:center;font-size:20px;">
+                    <button id="confirmOtpBtn">Aktivieren</button>
+                    <button id="cancelOtpBtn" class="ghost">Abbrechen</button>
+                    <p class="error-msg" id="otpError"></p>
+                </div>
+            </div>
             <!-- Admin-Einstellungen (nur Admin) -->
             <div id="adminSettingsPanel" class="hidden" style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
                 <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">⚡ Admin-Bereich</h3>
@@ -309,6 +332,17 @@
             d.set('password', $('password').value);
             const r = await fetch('/api/login', { method: 'POST', body: d });
             const j = await r.json().catch(() => ({}));
+            if (r.ok && j.status === '2fa_required') {
+                // 2FA-Stufe 2: Code-Feld anzeigen, pending_token merken
+                pending2faToken = j.pending_token;
+                $('loginForm').classList.add('hidden');
+                $('toggleRegister').classList.add('hidden');
+                $('backToLogin2fa').classList.remove('hidden');
+                $('otpForm').classList.remove('hidden');
+                $('authError').textContent = '';
+                $('otpCode').focus();
+                return;
+            }
             if (r.ok) {
                 // Nach Login prüfen, ob Hermes schon verbunden ist
                 fetch('/api/session').then(r => r.json()).then(s => showChat(s)).catch(() => showChat({}));
@@ -316,6 +350,26 @@
                 $('authError').textContent = j.message || 'Anmeldung fehlgeschlagen';
             }
         };
+        $('otpForm').onsubmit = async e => {
+            e.preventDefault();
+            const d = new URLSearchParams();
+            d.set('pending_token', pending2faToken || '');
+            d.set('code', $('otpCode').value.trim());
+            const r = await fetch('/api/2fa/verify', { method: 'POST', body: d });
+            const j = await r.json().catch(() => ({}));
+            if (r.ok) {
+                fetch('/api/session').then(r => r.json()).then(s => showChat(s)).catch(() => showChat({}));
+            } else {
+                $('authError').textContent = j.message || 'Code ungültig';
+            }
+        };
+        $('backToLogin2fa').addEventListener('click', () => {
+            $('otpForm').classList.add('hidden');
+            $('backToLogin2fa').classList.add('hidden');
+            $('toggleRegister').classList.remove('hidden');
+            $('loginForm').classList.remove('hidden');
+            $('authError').textContent = '';
+        });
         // Registrierung (nur sichtbar, wenn der Admin sie erlaubt)
         $('toggleRegister').addEventListener('click', () => {
             $('loginForm').classList.add('hidden');
@@ -362,6 +416,7 @@
         // Einstellungen (Profil + Hermes-Anbindung)
         let selectedProfile = '';
         let isAdminUser = false;
+        let pending2faToken = null;  // Token aus 2FA-Stufe 1 (Login) bis zur Code-Bestätigung
         function openSettings() {
             $('profileStatus').textContent = '';
             $('profileError').textContent = '';
@@ -418,6 +473,87 @@
         $('settingsModal').addEventListener('click', e => {
             if (e.target === $('settingsModal')) $('settingsModal').classList.remove('active');
         });
+
+        // ---- 2FA (TOTP) ----
+        function loadOtpStatus() {
+            fetch('/api/2fa/status')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.status !== 'ok') return;
+                    $('otpStatusLine').textContent = d.enabled
+                        ? '✅ Zwei-Faktor-Authentifizierung ist aktiv.'
+                        : 'Zwei-Faktor-Authentifizierung ist derzeit nicht aktiv.';
+                    $('setupOtpBtn').classList.toggle('hidden', d.enabled || d.pending);
+                    $('disableOtpBtn').classList.toggle('hidden', !d.enabled || d.pending);
+                    if (!d.enabled && d.pending) {
+                        // Abgebrochener Setup-Versuch: Panel wieder schließen
+                        $('otpSetupPanel').classList.add('hidden');
+                    }
+                })
+                .catch(() => {});
+        }
+        $('setupOtpBtn').addEventListener('click', async () => {
+            $('otpError').textContent = '';
+            try {
+                const r = await fetch('/api/2fa/setup', { method: 'POST' });
+                const j = await r.json();
+                if (j.status !== 'ok') { $('otpError').textContent = j.message || 'Setup fehlgeschlagen'; return; }
+                $('otpQr').src = j.qr_data_url || '';
+                $('otpSecretText').textContent = j.secret || '';
+                $('otpSetupCode').value = '';
+                $('setupOtpBtn').classList.add('hidden');
+                $('disableOtpBtn').classList.add('hidden');
+                $('otpSetupPanel').classList.remove('hidden');
+                $('otpSetupCode').focus();
+            } catch (err) {
+                $('otpError').textContent = 'Verbindungsfehler';
+            }
+        });
+        $('confirmOtpBtn').addEventListener('click', async () => {
+            const d = new URLSearchParams();
+            d.set('code', $('otpSetupCode').value.trim());
+            try {
+                const r = await fetch('/api/2fa/confirm', { method: 'POST', body: d });
+                const j = await r.json();
+                if (r.ok) {
+                    $('otpSetupPanel').classList.add('hidden');
+                    loadOtpStatus();
+                    showToast('2FA aktiviert ✓');
+                } else {
+                    $('otpError').textContent = j.message || 'Code ungültig';
+                }
+            } catch (err) {
+                $('otpError').textContent = 'Verbindungsfehler';
+            }
+        });
+        $('cancelOtpBtn').addEventListener('click', () => {
+            $('otpSetupPanel').classList.add('hidden');
+            loadOtpStatus();
+        });
+        $('disableOtpBtn').addEventListener('click', async () => {
+            const pw = prompt('2FA deaktivieren?\n\nZur Sicherheit bitte dein Atlas-Passwort eingeben:');
+            if (!pw) return;
+            const d = new URLSearchParams();
+            d.set('password', pw);
+            try {
+                const r = await fetch('/api/2fa/disable', { method: 'POST', body: d });
+                const j = await r.json();
+                if (r.ok) {
+                    loadOtpStatus();
+                    showToast('2FA deaktiviert');
+                } else {
+                    showToast(j.message || 'Deaktivieren fehlgeschlagen');
+                }
+            } catch (err) {
+                showToast('Verbindungsfehler');
+            }
+        });
+        // Beim Öffnen der Einstellungen den 2FA-Status mitladen
+        const _origOpenSettings = openSettings;
+        openSettings = function () {
+            _origOpenSettings();
+            loadOtpStatus();
+        };
 
         // Admin: Neuanmeldungen erlauben -> speichern
         $('saveAdminSettings').addEventListener('click', async () => {
