@@ -608,16 +608,29 @@
                     addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
                     return;
                 }
-                if (resumeRpcId !== null && frame.id === resumeRpcId && frame.result) {
-                    // session.resume (alte Session fortsetzen) — die ID kennen wir bereits selbst
-                    console.log('[Atlas] resume antwortet, setze hermesSessionId = ' + activeSessionId);
-                    hermesSessionId = activeSessionId;  // aus unserer Warteschlange, nicht aus der Antwort
+                if (resumeRpcId !== null && frame.id === resumeRpcId && frame.result && frame.result.session_id) {
+                    // session.resume (alte Session fortsetzen): Hermes vergibt eine NEUE kurze
+                    // Live-Session-ID (uuid4-hex8) in result.session_id — nur mit dieser ID
+                    // findet prompt.submit die Session in der Live-Registry.
+                    console.log('[Atlas] resume antwortet, Live-Session-ID = ' + frame.result.session_id);
+                    hermesSessionId = frame.result.session_id;
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
                     historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
+                    // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
+                    if (frame.result.messages && frame.result.messages.length) {
+                        messagesDiv.innerHTML = '';
+                        frame.result.messages.forEach(m => {
+                            if (m.role === 'user' || m.role === 'assistant') {
+                                addMsg(m.role, m.text || '');
+                            } else if (m.role === 'tool') {
+                                addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                            }
+                        });
+                        addMsg('system', 'Session geladen ✓');
+                    }
                     $('currentSessionLabel').textContent = activeSessionId;
                     $('currentSessionLabel').classList.remove('hidden');
-                    addMsg('system', 'Session geladen ✓');
                     return;
                 }
                 if (frame.id === historyRpcId && frame.result && frame.result.messages) {
