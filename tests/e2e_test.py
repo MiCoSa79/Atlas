@@ -169,7 +169,25 @@ def main():
         print("5) WS-Chat FEHLER:", type(e).__name__, e)
         failures.append("chat")
 
-    # 7) Logout
+    # 8) Session-Liste prüfen (mindestens 1 Session nach Chat)
+    print("8) GET /api/sessions")
+    s_req = urllib.request.Request(f"{BASE}/api/sessions")
+    s_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    with s_opener.open(s_req, timeout=30) as sr:
+        sj = json.loads(sr.read() or b"{}")
+    print("8) Sessions:", sj)
+    if sj.get("status") == "ok" and len(sj.get("sessions", [])) >= 1:
+        print("8) Session-Liste enthält mindestens 1 Eintrag ✓")
+        first = sj["sessions"][0]
+        if not first.get("title"):
+            failures.append("session_title")
+        if not first.get("id"):
+            failures.append("session_id")
+    else:
+        print("8) Session-Liste FEHLER:", sj)
+        failures.append("sessions")
+
+    # 9) Logout
     st, j = post_form("/api/logout", {}, jar)
     st, j = get_json("/api/session", jar)
     ok = j.get("logged_in") is False
@@ -238,85 +256,85 @@ def main():
     else:
         failures.append("admin_users")
 
-    # 10b) Admin: Neuen Benutzer manuell anlegen
-    print("10b) Admin: POST /api/admin/users (neuer Benutzer)")
-    create_data = urllib.parse.urlencode({"username": "adminuser1", "password": "adminpass123"}).encode()
-    create_req = urllib.request.Request(f"{BASE}/api/admin/users", data=create_data, method="POST")
-    create_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    try:
-        with create_opener.open(create_req, timeout=20) as cr:
-            cj = json.loads(cr.read() or b"{}")
-        print("10b) Admin create user:", cr.status, cj)
-        if cr.status != 200:
+    # 11b) Admin: Neuen Benutzer manuell anlegen
+        print("11b) Admin: POST /api/admin/users (neuer Benutzer)")
+        create_data = urllib.parse.urlencode({"username": "adminuser1", "password": "adminpass123"}).encode()
+        create_req = urllib.request.Request(f"{BASE}/api/admin/users", data=create_data, method="POST")
+        create_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        try:
+            with create_opener.open(create_req, timeout=20) as cr:
+                cj = json.loads(cr.read() or b"{}")
+            print("11b) Admin create user:", cr.status, cj)
+            if cr.status != 200:
+                failures.append("admin_create_user")
+            else:
+                # Nachlegen: User sollte jetzt in der Liste sein (3 User)
+                st2, j2 = get_json("/api/admin/users", jar)
+                print("11b) User nach Anlegen:", st2, len(j2.get("users", [])) if st2 == 200 else j2)
+        except urllib.error.HTTPError as e:
+            print("11b) Admin create user FEHLER:", e.code, json.loads(e.read()))
             failures.append("admin_create_user")
-        else:
-            # Nachlegen: User sollte jetzt in der Liste sein (3 User)
-            st2, j2 = get_json("/api/admin/users", jar)
-            print("10b) User nach Anlegen:", st2, len(j2.get("users", [])) if st2 == 200 else j2)
-    except urllib.error.HTTPError as e:
-        print("10b) Admin create user FEHLER:", e.code, json.loads(e.read()))
-        failures.append("admin_create_user")
 
-    # 11) Admin: neuer User deaktivieren
-    if reg_status == 200:
-        print("11) Admin: PUT /api/admin/users/<id>/toggle (deaktivieren)")
-        st, j = get_json("/api/admin/users", jar)
-        testuser_id = None
-        for u in (j or {}).get("users", []):
-            if u["username"] == "testuser1":
-                testuser_id = u["id"]
-                break
-        if testuser_id:
-            d = urllib.parse.urlencode({"is_active": "0"}).encode()
-            t_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}/toggle", data=d, method="PUT")
-            t_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-            try:
-                with t_opener.open(t_req, timeout=20) as r:
-                    tj = json.loads(r.read() or b"{}")
-                print("11) Deaktivieren OK:", tj)
-                # Login sollte jetzt fehlschlagen (403)
-                f_req = urllib.request.Request(f"{BASE}/api/login", data=urllib.parse.urlencode({"username": "testuser1", "password": "test123"}).encode(), method="POST")
-                f_jar = http.cookiejar.CookieJar()
-                f_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(f_jar))
+        # 12) Admin: neuer User deaktivieren
+        if reg_status == 200:
+            print("12) Admin: PUT /api/admin/users/<id>/toggle (deaktivieren)")
+            st, j = get_json("/api/admin/users", jar)
+            testuser_id = None
+            for u in (j or {}).get("users", []):
+                if u["username"] == "testuser1":
+                    testuser_id = u["id"]
+                    break
+            if testuser_id:
+                d = urllib.parse.urlencode({"is_active": "0"}).encode()
+                t_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}/toggle", data=d, method="PUT")
+                t_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
                 try:
-                    with f_opener.open(f_req, timeout=20) as r2:
-                        rj2 = json.loads(r2.read() or b"{}")
-                        print("11) Login als deaktivierter User:", r2.status, rj2)
-                        failures.append("deactivated_login")
-                except urllib.error.HTTPError as e:
-                    if e.code == 403:
-                        print("11) Login als deaktivierter User: 403 ✓")
-                    else:
-                        print("11) Login als deaktivierter User: unerwarteter Status", e.code)
-                        failures.append("deactivated_login")
-            except Exception as e:
-                print("11) Toggle FEHLER:", e)
-                failures.append("admin_toggle")
-        else:
-            print("11) testuser1 nicht in DB gefunden, skip")
+                    with t_opener.open(t_req, timeout=20) as r:
+                        tj = json.loads(r.read() or b"{}")
+                    print("12) Deaktivieren OK:", tj)
+                    # Login sollte jetzt fehlschlagen (403)
+                    f_req = urllib.request.Request(f"{BASE}/api/login", data=urllib.parse.urlencode({"username": "testuser1", "password": "test123"}).encode(), method="POST")
+                    f_jar = http.cookiejar.CookieJar()
+                    f_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(f_jar))
+                    try:
+                        with f_opener.open(f_req, timeout=20) as r2:
+                            rj2 = json.loads(r2.read() or b"{}")
+                            print("12) Login als deaktivierter User:", r2.status, rj2)
+                            failures.append("deactivated_login")
+                    except urllib.error.HTTPError as e:
+                        if e.code == 403:
+                            print("12) Login als deaktivierter User: 403 ✓")
+                        else:
+                            print("12) Login als deaktivierter User: unerwarteter Status", e.code)
+                            failures.append("deactivated_login")
+                except Exception as e:
+                    print("12) Toggle FEHLER:", e)
+                    failures.append("admin_toggle")
+            else:
+                print("12) testuser1 nicht in DB gefunden, skip")
 
-    # 12) Admin: neuer User löschen
-    if reg_status == 200:
-        print("12) Admin: DELETE /api/admin/users/<id>")
-        if testuser_id:
-            d_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}", method="DELETE")
-            d_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-            try:
-                with d_opener.open(d_req, timeout=20) as r:
-                    dj = json.loads(r.read() or b"{}")
-                print("12) Löschen OK:", dj)
-                # Users Liste checken
-                st, j = get_json("/api/admin/users", jar)
-                users = j.get("users", []) if st == 200 else []
-                has_test = any(u["username"] == "testuser1" for u in users)
-                print("12) testuser1 noch in DB?", has_test)
-                if has_test:
+        # 13) Admin: neuer User löschen
+        if reg_status == 200:
+            print("13) Admin: DELETE /api/admin/users/<id>")
+            if testuser_id:
+                d_req = urllib.request.Request(f"{BASE}/api/admin/users/{testuser_id}", method="DELETE")
+                d_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+                try:
+                    with d_opener.open(d_req, timeout=20) as r:
+                        dj = json.loads(r.read() or b"{}")
+                    print("13) Löschen OK:", dj)
+                    # Users Liste checken
+                    st, j = get_json("/api/admin/users", jar)
+                    users = j.get("users", []) if st == 200 else []
+                    has_test = any(u["username"] == "testuser1" for u in users)
+                    print("13) testuser1 noch in DB?", has_test)
+                    if has_test:
+                        failures.append("delete_user")
+                except Exception as e:
+                    print("13) DELETE FEHLER:", e)
                     failures.append("delete_user")
-            except Exception as e:
-                print("12) DELETE FEHLER:", e)
-                failures.append("delete_user")
-        else:
-            print("12) testuser1 nicht gefunden, skip")
+            else:
+                print("13) testuser1 nicht gefunden, skip")
 
     print("-" * 50)
     if failures:

@@ -139,7 +139,11 @@
             <img class="logo" src="/static/icon.svg" alt="Atlas">
             <h1>Atlas</h1>
             <span id="userTag" class="user-tag"></span>
+            <span id="currentSessionLabel" class="user-tag hidden" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
             <span id="statusDot" class="status-dot"></span>
+            <button id="sessionsBtn" class="icon-btn" title="Frühere Chat-Sessions" style="display:none;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            </button>
             <button id="settingsBtn" class="icon-btn" title="Einstellungen">⚙️</button>
             <button id="logoutBtn" class="icon-btn" title="Abmelden">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -201,6 +205,17 @@
         </div>
     </div>
 
+    <!-- Sessions-Modal -->
+    <div id="sessionsModal" class="modal">
+        <div class="modal-card" style="max-width:600px;">
+            <h2>📚 Deine Chat-Sessions</h2>
+            <button id="newSessionBtn" style="width:100%;margin-bottom:12px;padding:10px;background:var(--accent);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;">➕ Neue Unterhaltung</button>
+            <p class="hint" style="margin:0 0 12px; font-size:12px;">Nur Sessions des in den Einstellungen gewählten Hermes-Profils.</p>
+            <div id="sessionsList" style="max-height:50vh;overflow-y:auto;margin:8px 0;"></div>
+            <button id="closeSessions" class="ghost">Schließen</button>
+        </div>
+    </div>
+
     <div id="toast" class="hidden"></div>
 
     <script>
@@ -214,6 +229,8 @@
         let bubble = null;
         let rpcId = 0;
         let hermesSessionId = null;
+        let activeSessionId = null;      // gewählte alte Session (null = neue Unterhaltung)
+        let historyRpcId = null;         // RPC-ID der session.history-Abfrage
 
         function showToast(msg) {
             const t = $('toast');
@@ -234,6 +251,12 @@
             // Profil merken (für session.create und Modal)
             selectedProfile = user.hermes_profile || '';
             isAdminUser = !!user.is_admin;
+            // Sessions-Button nur zeigen, wenn Hermes verbunden ist
+            if (user && user.hermes_configured) {
+                $('sessionsBtn').style.display = '';
+            } else {
+                $('sessionsBtn').style.display = 'none';
+            }
             // Banner: unterscheiden, was genau fehlt
             const banner = $('setupBanner');
             if (user && !user.hermes_configured) {
@@ -506,6 +529,9 @@
             const t = document.createElement('span');
             t.textContent = text;
             m.appendChild(t);
+            const meta = document.createElement('span');
+            meta.className = 'meta';
+            m.appendChild(meta);
             messagesDiv.appendChild(m);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
             return m;
@@ -525,11 +551,10 @@
             ws.onopen = () => {
                 statusDot.classList.add('online');
                 statusDot.classList.remove('offline');
-                if (!hermesSessionId) {
-                    const p = { close_on_disconnect: true, source: 'atlas-app' };
-                    if (selectedProfile) p.profile = selectedProfile;
-                    sendRpc('session.create', p);
-                }
+                const p = { close_on_disconnect: true, source: 'atlas-app' };
+                if (activeSessionId) p.session_id = activeSessionId;
+                if (selectedProfile) p.profile = selectedProfile;
+                sendRpc(activeSessionId ? 'session.resume' : 'session.create', p);
             };
             ws.onclose = ev => {
                 statusDot.classList.add('offline');
@@ -547,7 +572,37 @@
 
                 if (frame.id === 1 && frame.result && frame.result.session_id) {
                     hermesSessionId = frame.result.session_id;
-                    addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
+                    if (activeSessionId) {
+                        // Alte Session fortgesetzt -> Verlauf laden
+                        historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
+                        $('currentSessionLabel').textContent = frame.result.title || activeSessionId;
+                        $('currentSessionLabel').classList.remove('hidden');
+                        addMsg('system', 'Session geladen ✓');
+                    } else {
+                        messagesDiv.innerHTML = '';
+                        activeSessionId = null;
+                        $('currentSessionLabel').classList.add('hidden');
+                        addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
+                    }
+                    return;
+                }
+                if (frame.id === historyRpcId && frame.result && frame.result.messages) {
+                    const msgs = frame.result.messages || [];
+                    messagesDiv.innerHTML = '';
+                    msgs.forEach(m => {
+                        if (m.role === 'user' || m.role === 'assistant') {
+                            const mm = addMsg(m.role, m.text || '');
+                            const t = mm.querySelector('.meta');
+                            if (m.timestamp) {
+                                const d = new Date(m.timestamp * 1000);
+                                t.textContent = ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                            }
+                        } else if (m.role === 'tool') {
+                            addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                        }
+                    });
+                    const n = msgs.length;
+                    addMsg('system', n ? 'Verlauf geladen (' + n + ' Nachrichten) ✓' : 'Diese Session hat noch keine Nachrichten (starte einfach ein neues Thema).');
                     return;
                 }
                 if (frame.error) {
@@ -563,7 +618,7 @@
                 }
                 if (p.type === 'message.complete') {
                     if (bubble) {
-                        const meta = document.createElement('span');
+                        const meta = bubble.querySelector('.meta') || document.createElement('span');
                         meta.className = 'meta';
                         meta.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
                         bubble.appendChild(meta);
@@ -599,6 +654,72 @@
         document.querySelector('[data-action="send"]').addEventListener('click', () => {
             sendMessage($('input').value);
             $('input').value = '';
+        });
+
+        // ---------------------------------------------------------------- Sessions
+        function restartWS() {
+            // Bestehende Verbindung sauber beenden; connectWS baut danach neu auf
+            if (ws) {
+                const old = ws;
+                ws = null;
+                hermesSessionId = null;
+                try { old.close(); } catch (_) {}
+            }
+            messagesDiv.innerHTML = '';
+            bubble = null;
+            connectWS();
+            if (!ws) setTimeout(connectWS, 500);
+        }
+
+        $('sessionsBtn').addEventListener('click', () => {
+            $('sessionsModal').classList.add('active');
+            loadSessions();
+        });
+        $('closeSessions').addEventListener('click', () => $('sessionsModal').classList.remove('active'));
+        $('sessionsModal').addEventListener('click', e => {
+            if (e.target === $('sessionsModal')) $('sessionsModal').classList.remove('active');
+        });
+
+        async function loadSessions() {
+            const box = $('sessionsList');
+            box.innerHTML = '<p style="color:var(--muted);text-align:center;">Sessions werden geladen…</p>';
+            try {
+                const r = await fetch('/api/sessions');
+                const j = await r.json();
+                if (j.status !== 'ok' || !j.sessions) { box.innerHTML = '<p style="color:#e5534b;text-align:center;">' + (j.message || 'Fehler') + '</p>'; return; }
+                if (!j.sessions.length) {
+                    box.innerHTML = '<p style="color:var(--muted);text-align:center;">Noch keine früheren Sessions in diesem Profil.</p>';
+                    return;
+                }
+                const items = j.sessions.map(s => {
+                    const d = new Date((s.started_at || 0) * 1000);
+                    const dateStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                    const active = s.id === activeSessionId ? 'border:1px solid var(--accent);' : 'border:1px solid var(--border);';
+                    return `<button data-id="${s.id}" class="session-item" style="display:block;width:100%;text-align:left;padding:12px;margin-bottom:8px;background:var(--bg);${active}border-radius:10px;cursor:pointer;color:var(--text);">
+                        <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.title}</div>
+                        <div style="color:var(--muted);font-size:12px;margin-top:4px;">${dateStr} · ${s.message_count || 0} Nachrichten</div>
+                        ${s.preview ? `<div style="color:var(--muted);font-size:12px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.preview}</div>` : ''}
+                    </button>`;
+                }).join('');
+                box.innerHTML = items;
+                box.querySelectorAll('.session-item').forEach(b => b.addEventListener('click', () => {
+                    activeSessionId = b.dataset.id;
+                    $('currentSessionLabel').textContent = b.dataset.id + '…';
+                    $('currentSessionLabel').classList.remove('hidden');
+                    $('sessionsModal').classList.remove('active');
+                    restartWS();
+                }));
+            } catch (e) {
+                box.innerHTML = '<p style="color:#e5534b;text-align:center;">Fehler beim Laden</p>';
+            }
+        }
+
+        // Neue Unterhaltung starten
+        $('newSessionBtn').addEventListener('click', () => {
+            activeSessionId = null;
+            $('currentSessionLabel').classList.add('hidden');
+            $('sessionsModal').classList.remove('active');
+            restartWS();
         });
     </script>
 </body>
