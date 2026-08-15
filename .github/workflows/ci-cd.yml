@@ -26,6 +26,8 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         push: true
+        build-args: |
+          GIT_COMMIT=${{ steps.vars.outputs.sha_short }}
         tags: |
           micosa79/atlas:latest
           micosa79/atlas:${{ steps.vars.outputs.sha_short }}
