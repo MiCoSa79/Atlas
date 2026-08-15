@@ -67,12 +67,11 @@ def main():
         print("0) GET / FEHLER:", e)
         failures.append("setup seite")
 
-    # 1) Setup: Admin + Hermes-Anbindung
+    # 1) Setup: NUR Admin-Zugang (Hermes wird später im Profil eingerichtet)
     st, j = post_form("/api/setup", {
         "username": ADMIN_USER, "password": ADMIN_PASS,
-        "hermes_url": HERMES_URL, "hermes_user": HERMES_USER, "hermes_pass": HERMES_PASS,
     }, jar)
-    print("1) POST /api/setup:", st, j.get("status"))
+    print("1) POST /api/setup (nur Admin):", st, j.get("status"))
     if st != 200:
         failures.append("setup")
 
@@ -82,15 +81,23 @@ def main():
     if "atlas_session" not in cookies:
         failures.append("cookie")
 
-    # 3) /api/session -> eingeloggt
+    # 3) Profil: Hermes-Instanz in den Einstellungen hinterlegen
+    st, j = post_form("/api/profile", {
+        "hermes_url": HERMES_URL, "hermes_user": HERMES_USER, "hermes_pass": HERMES_PASS,
+    }, jar)
+    print("3) POST /api/profile:", st, j.get("status"))
+    if st != 200:
+        failures.append("profile")
+
+    # 4) /api/session -> eingeloggt + Hermes konfiguriert
     try:
         st, j = get_json("/api/session", jar)
-        ok = j.get("logged_in") is True and j.get("hermes_url") == HERMES_URL
-        print("3) GET /api/session:", "OK" if ok else f"FEHLER -> {j}")
+        ok = j.get("logged_in") is True and j.get("hermes_configured") is True
+        print("4) GET /api/session:", "OK" if ok else f"FEHLER -> {j}")
         if not ok:
             failures.append("session")
     except Exception as e:
-        print("3) GET /api/session FEHLER:", e)
+        print("4) GET /api/session FEHLER:", e)
         failures.append("session")
 
     # 4) Websocket-Chat (der eigentliche Kern)
@@ -117,7 +124,7 @@ def main():
                 frame = json.loads(raw)
                 if frame.get("id") == 1 and (frame.get("result") or {}).get("session_id"):
                     session_id = frame["result"]["session_id"]
-                    print("4) session.create -> session_id ok")
+                    print("5) session.create -> session_id ok")
                     await rpc("prompt.submit", {"session_id": session_id, "text": PROMPT})
                     continue
                 if frame.get("method") != "event":
@@ -130,7 +137,7 @@ def main():
                 elif etype == "message.complete":
                     done = True
                 elif etype == "error":
-                    print("4) HERMES-FEHLER:", payload.get("message"))
+                    print("5) HERMES-FEHLER:", payload.get("message"))
                     done, bubble = True, "FEHLER: " + payload.get("message", "")
             return session_id, bubble, events
 
@@ -138,19 +145,19 @@ def main():
         sid, answer, events = asyncio.run(chat())
         has_deltas = any(e == "message.delta" for e in events)
         has_complete = "message.complete" in events
-        print("4) Events:", events[:12])
-        print("5) Agent-Antwort:", (answer or "")[:200].replace("\n", " ⏎ "))
+        print("5) Events:", events[:12])
+        print("6) Agent-Antwort:", (answer or "")[:200].replace("\n", " ⏎ "))
         if not (sid and has_deltas and has_complete and answer):
             failures.append("chat")
     except Exception as e:
-        print("4) WS-Chat FEHLER:", type(e).__name__, e)
+        print("5) WS-Chat FEHLER:", type(e).__name__, e)
         failures.append("chat")
 
-    # 5) Logout
+    # 7) Logout
     st, j = post_form("/api/logout", {}, jar)
     st, j = get_json("/api/session", jar)
     ok = j.get("logged_in") is False
-    print("5) POST /api/logout -> session:", "OK" if ok else f"FEHLER -> {j}")
+    print("7) POST /api/logout -> session:", "OK" if ok else f"FEHLER -> {j}")
     if not ok:
         failures.append("logout")
 

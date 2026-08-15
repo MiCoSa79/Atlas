@@ -18,9 +18,16 @@
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; }
 
+        /* Scrollbalken ausblenden (überall) */
+        html, body { scrollbar-width: none; }
+        body::-webkit-scrollbar, html::-webkit-scrollbar { display: none; }
+        #messages { scrollbar-width: none; }
+        #messages::-webkit-scrollbar { display: none; }
+        .auth-card::-webkit-scrollbar { display: none; }
+
         /* Setup & Login */
         .auth-page { display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
-        .auth-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px; width: 100%; max-width: 400px; max-height: 92vh; overflow-y: auto; }
+        .auth-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px; width: 100%; max-width: 400px; }
         .auth-card h1 { text-align: center; margin: 0 0 24px; }
         .auth-card .hint { text-align: center; color: var(--muted); font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
         .auth-card label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
@@ -28,12 +35,15 @@
         .auth-card input:focus { border-color: var(--accent); }
         .auth-card button { width: 100%; margin-top: 20px; padding: 12px; background: var(--accent); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
         .auth-card button:hover { background: #3a70d1; }
-        .auth-card .section { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 2px; border-top: 1px solid var(--border); padding-top: 14px; }
         .error-msg { color: #e5534b; font-size: 13px; text-align: center; min-height: 16px; margin-top: 10px; }
 
         /* Chat */
         #app { display: none; flex-direction: column; height: 100dvh; }
         #app.active { display: flex; }
+        @media (min-width: 768px) {
+            #app { max-width: 880px; margin: 0 auto; width: 100%; }
+            #app .banner { border-radius: 0; }
+        }
         header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--panel); border-bottom: 1px solid var(--border); }
         header .logo { width: 30px; height: 30px; }
         header h1 { font-size: 17px; margin: 0; font-weight: 600; }
@@ -41,6 +51,11 @@
         header .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-left: auto; }
         header .status-dot.online { background: #3fb950; }
         header .status-dot.offline { background: #e5534b; }
+        header .icon-btn { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 6px; border-radius: 8px; }
+        header .icon-btn:hover { background: var(--bg); color: var(--text); }
+
+        .banner { background: #2b2a17; color: #d8c96a; font-size: 13px; text-align: center; padding: 8px 14px; }
+        .banner a { color: #e8dc8a; font-weight: 600; cursor: pointer; text-decoration: underline; }
 
         #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
         .msg { max-width: 84%; padding: 9px 13px; border-radius: var(--radius); font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
@@ -54,6 +69,20 @@
         #composer input:focus { border-color: var(--accent); }
         #composer button { width: 42px; height: 42px; border: none; border-radius: 50%; background: var(--accent); color: #fff; font-size: 17px; cursor: pointer; flex-shrink: 0; }
 
+        /* Einstellungen-Modal */
+        .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 30; align-items: center; justify-content: center; padding: 20px; }
+        .modal.active { display: flex; }
+        .modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px; width: 100%; max-width: 420px; max-height: 90vh; overflow-y: auto; scrollbar-width: none; }
+        .modal-card::-webkit-scrollbar { display: none; }
+        .modal-card h2 { margin: 0 0 16px; font-size: 17px; }
+        .modal-card label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+        .modal-card input { width: 100%; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 15px; outline: none; }
+        .modal-card input:focus { border-color: var(--accent); }
+        .modal-card button { margin-top: 16px; padding: 11px; background: var(--accent); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
+        .modal-card button.ghost { background: none; border: 1px solid var(--border); color: var(--muted); margin-top: 8px; }
+        .modal-card .status-ok { color: #3fb950; font-size: 13px; text-align: center; min-height: 16px; margin-top: 8px; }
+        .modal-card .error-msg { margin-top: 8px; }
+
         #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: #2b3340; color: var(--text); padding: 9px 16px; border-radius: 20px; font-size: 13.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 20; transition: opacity .25s; }
         #toast.hidden { display: none; }
     </style>
@@ -64,20 +93,12 @@
         <div class="auth-card">
             <h1>🏛️ Atlas</h1>
             {% if setup_mode %}
-            <p class="hint">Willkommen! Richte Atlas ein:<br>Admin-Zugang + deine Hermes-Instanz.</p>
+            <p class="hint">Willkommen! Lege zuerst deinen Admin-Zugang an.<br>Die Hermes-Verbindung richtest du danach in den <b>Einstellungen</b> ein.</p>
             <form id="setupForm">
-                <div class="section">Admin-Zugang</div>
                 <label>Benutzername</label>
                 <input type="text" id="s_username" required autocomplete="username" minlength="3">
                 <label>Passwort (min. 6 Zeichen)</label>
                 <input type="password" id="s_password" required autocomplete="new-password" minlength="6">
-                <div class="section">Hermes-Verbindung</div>
-                <label>Hermes-URL (z. B. http://10.0.25.60:9119)</label>
-                <input type="url" id="s_hermes_url" placeholder="http://10.0.25.60:9119">
-                <label>Hermes-Benutzer (Dashboard-Login)</label>
-                <input type="text" id="s_hermes_user" autocomplete="username">
-                <label>Hermes-Passwort</label>
-                <input type="password" id="s_hermes_pass" autocomplete="current-password">
                 <button type="submit">Installation starten</button>
             </form>
             {% else %}
@@ -101,11 +122,30 @@
             <h1>Atlas</h1>
             <span id="userTag" class="user-tag"></span>
             <span id="statusDot" class="status-dot"></span>
+            <button id="settingsBtn" class="icon-btn" title="Einstellungen">⚙️</button>
         </header>
+        <div id="setupBanner" class="banner hidden">⚠️ Noch keine Hermes-Instanz verbunden — bitte in den <a id="bannerLink">Einstellungen</a> einrichten.</div>
         <div id="messages"></div>
         <div id="composer">
             <input id="input" type="text" placeholder="Nachricht an Atlas..." autocomplete="off" enterkeyhint="send">
             <button data-action="send">➤</button>
+        </div>
+    </div>
+
+    <!-- Einstellungen-Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-card">
+            <h2>⚙️ Einstellungen</h2>
+            <label>Hermes-URL</label>
+            <input type="url" id="p_url" placeholder="http://10.0.25.60:9119">
+            <label>Hermes-Benutzer (Dashboard-Login)</label>
+            <input type="text" id="p_user" autocomplete="username">
+            <label>Hermes-Passwort <span style="color:var(--muted);font-size:11px;">(nur bei Änderung)</span></label>
+            <input type="password" id="p_pass" autocomplete="new-password">
+            <button id="saveProfile">Speichern</button>
+            <button id="closeSettings" class="ghost">Schließen</button>
+            <p class="status-ok" id="profileStatus"></p>
+            <p class="error-msg" id="profileError"></p>
         </div>
     </div>
 
@@ -117,6 +157,7 @@
         const app = $('app');
         const statusDot = $('statusDot');
         const messagesDiv = $('messages');
+        const banner = $('setupBanner');
         let ws = null;
         let bubble = null;
         let rpcId = 0;
@@ -138,6 +179,11 @@
             authPage.style.display = 'none';
             app.classList.add('active');
             if (user && user.username) $('userTag').textContent = user.username;
+            if (user && user.hermes_configured === false) {
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+            }
             connectWS();
         }
 
@@ -153,13 +199,14 @@
             const d = new URLSearchParams();
             d.set('username', $('s_username').value.trim());
             d.set('password', $('s_password').value);
-            d.set('hermes_url', $('s_hermes_url').value.trim());
-            d.set('hermes_user', $('s_hermes_user').value.trim());
-            d.set('hermes_pass', $('s_hermes_pass').value);
             const r = await fetch('/api/setup', { method: 'POST', body: d });
             const j = await r.json().catch(() => ({}));
-            if (r.ok) { showChat({ username: $('s_username').value.trim() }); }
-            else { $('authError').textContent = j.message || 'Setup fehlgeschlagen'; }
+            if (r.ok) {
+                showChat({ username: $('s_username').value.trim(), hermes_configured: false });
+                openSettings();
+            } else {
+                $('authError').textContent = j.message || 'Setup fehlgeschlagen';
+            }
         };
         {% else %}
         $('loginForm').onsubmit = async e => {
@@ -169,10 +216,56 @@
             d.set('password', $('password').value);
             const r = await fetch('/api/login', { method: 'POST', body: d });
             const j = await r.json().catch(() => ({}));
-            if (r.ok) { showChat({ username: $('username').value.trim() }); }
-            else { $('authError').textContent = j.message || 'Anmeldung fehlgeschlagen'; }
+            if (r.ok) {
+                // Nach Login prüfen, ob Hermes schon verbunden ist
+                fetch('/api/session').then(r => r.json()).then(s => showChat(s)).catch(() => showChat({}));
+            } else {
+                $('authError').textContent = j.message || 'Anmeldung fehlgeschlagen';
+            }
         };
         {% endif %}
+
+        // Einstellungen (Profil)
+        function openSettings() {
+            $('profileStatus').textContent = '';
+            $('profileError').textContent = '';
+            fetch('/api/profile')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.status === 'ok') {
+                        $('p_url').value = d.hermes_url || '';
+                        $('p_user').value = d.hermes_user || '';
+                        $('p_pass').value = '';
+                    }
+                })
+                .catch(() => {});
+            $('settingsModal').classList.add('active');
+        }
+
+        $('settingsBtn').addEventListener('click', openSettings);
+        $('bannerLink').addEventListener('click', openSettings);
+        $('closeSettings').addEventListener('click', () => $('settingsModal').classList.remove('active'));
+        $('settingsModal').addEventListener('click', e => {
+            if (e.target === $('settingsModal')) $('settingsModal').classList.remove('active');
+        });
+
+        $('saveProfile').addEventListener('click', async () => {
+            $('profileError').textContent = '';
+            const d = new URLSearchParams();
+            d.set('hermes_url', $('p_url').value.trim());
+            d.set('hermes_user', $('p_user').value.trim());
+            d.set('hermes_pass', $('p_pass').value);
+            const r = await fetch('/api/profile', { method: 'POST', body: d });
+            const j = await r.json().catch(() => ({}));
+            if (r.ok) {
+                $('profileStatus').textContent = '✓ Gespeichert';
+                $('settingsModal').classList.remove('active');
+                showToast('Hermes-Verbindung gespeichert');
+                fetch('/api/session').then(r => r.json()).then(s => showChat(s));
+            } else {
+                $('profileError').textContent = j.message || 'Speichern fehlgeschlagen';
+            }
+        });
 
         function addMsg(role, text) {
             const m = document.createElement('div');
@@ -195,7 +288,6 @@
             if (ws) return;
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${proto}//${location.host}/ws`);
-            let reconnected = !hermesSessionId;
 
             ws.onopen = () => {
                 statusDot.classList.add('online');
@@ -215,7 +307,6 @@
                 let frame;
                 try { frame = JSON.parse(ev.data); } catch (_) { return; }
 
-                // Antwort auf session.create -> session_id merken
                 if (frame.id === 1 && frame.result && frame.result.session_id) {
                     hermesSessionId = frame.result.session_id;
                     addMsg('system', 'Verbunden mit Atlas ✓');

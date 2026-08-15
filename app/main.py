@@ -88,6 +88,13 @@ def verify_user(username, password):
     return None
 
 
+def get_user_by_id(user_id):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 # ---------------------------------------------------------------- App-Setup
 
 @asynccontextmanager
@@ -105,7 +112,7 @@ app.state.user_sessions = {}
 
 def start_session(user: dict) -> str:
     token = secrets.token_urlsafe(32)
-    app.state.user_sessions[token] = dict(user)
+    app.state.user_sessions[token] = {"user_id": user["id"], "username": user["username"]}
     return token
 
 
@@ -132,16 +139,12 @@ async def root(request: Request):
 async def setup_admin(
     username: str = Form(...),
     password: str = Form(...),
-    hermes_url: str = Form(""),
-    hermes_user: str = Form(""),
-    hermes_pass: str = Form(""),
 ):
     if user_count() > 0:
         return JSONResponse({"status": "error", "message": "Setup bereits abgeschlossen"}, status_code=400)
     if len(username) < 3 or len(password) < 6:
         return JSONResponse({"status": "error", "message": "Benutzername (min. 3) und Passwort (min. 6 Zeichen) prüfen"}, status_code=400)
-    if not create_user(username, password, is_admin=1, hermes_url=hermes_url or None,
-                       hermes_user=hermes_user or None, hermes_pass=hermes_pass or None):
+    if not create_user(username, password, is_admin=1):
         return JSONResponse({"status": "error", "message": "Benutzername bereits vergeben"}, status_code=500)
     user = verify_user(username, password)
     if not user:
@@ -176,12 +179,63 @@ async def api_session(request: Request):
     user = session_from_request(request)
     if not user:
         return JSONResponse({"logged_in": False})
+    db_user = get_user_by_id(user["user_id"]) or {}
     return JSONResponse({
         "logged_in": True,
         "username": user.get("username"),
-        "hermes_url": user.get("hermes_url"),
-        "hermes_profile": user.get("hermes_profile"),
+        "hermes_url": db_user.get("hermes_url"),
+        "hermes_profile": db_user.get("hermes_profile"),
+        "hermes_configured": bool(db_user.get("hermes_url") and db_user.get("hermes_auth")),
     })
+
+
+@app.get("/api/profile")
+async def api_profile(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    hermes_user = db_user.get("hermes_auth", "").partition(":")[0] if db_user.get("hermes_auth") else ""
+    return JSONResponse({
+        "status": "ok",
+        "hermes_url": db_user.get("hermes_url") or "",
+        "hermes_user": hermes_user,
+        "hermes_configured": bool(db_user.get("hermes_url") and db_user.get("hermes_auth")),
+    })
+
+
+@app.post("/api/profile")
+async def api_profile_save(request: Request,
+                           hermes_url: str = Form(""),
+                           hermes_user: str = Form(""),
+                           hermes_pass: str = Form("")):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    hermes_url = hermes_url.strip().rstrip("/")
+    if hermes_url and not hermes_url.startswith(("http://", "https://")):
+        return JSONResponse({"status": "error", "message": "Hermes-URL muss mit http(s):// beginnen"}, status_code=400)
+    if bool(hermes_user) != bool(hermes_pass):
+        return JSONResponse({"status": "error", "message": "Hermes-Benutzer und -Passwort immer zusammen angeben"}, status_code=400)
+
+    conn = get_db()
+    db_user = conn.execute("SELECT * FROM users WHERE id = ?", (user["user_id"],)).fetchone()
+    if not db_user:
+        conn.close()
+        return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden"}, status_code=404)
+
+    if hermes_user and hermes_pass:
+        new_auth = f"{hermes_user}:{hermes_pass}"
+    else:
+        new_auth = db_user["hermes_auth"] if hermes_url else None
+    if not hermes_url:
+        new_auth = None
+
+    conn.execute("UPDATE users SET hermes_url = ?, hermes_auth = ? WHERE id = ?",
+                 (hermes_url or None, new_auth, user["user_id"]))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok"})
 
 
 # ---------------------------------------------------------------- Chat-Proxy
@@ -189,13 +243,15 @@ async def api_session(request: Request):
 @app.websocket("/ws")
 async def websocket_proxy(ws: WebSocket):
     await ws.accept()
-    user = session_from_ws(ws)
-    if not user:
+    session = session_from_ws(ws)
+    if not session:
         await ws.close(code=4001, reason="Nicht angemeldet")
         return
 
-    hermes_url = user.get("hermes_url")
-    hermes_auth = user.get("hermes_auth")
+    # Hermes-Zugang immer frisch aus der DB laden (Profiländerungen wirken sofort)
+    db_user = get_user_by_id(session["user_id"]) or {}
+    hermes_url = db_user.get("hermes_url")
+    hermes_auth = db_user.get("hermes_auth")
     if not hermes_url or not hermes_auth:
         await ws.close(code=4001, reason="Kein Hermes-Zugang hinterlegt")
         return
