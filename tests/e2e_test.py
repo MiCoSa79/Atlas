@@ -81,12 +81,13 @@ def main():
     if "atlas_session" not in cookies:
         failures.append("cookie")
 
-    # 3) Profil: Hermes-Instanz in den Einstellungen hinterlegen
+    # 3) Profil: Hermes-Instanz in den Einstellungen hinterlegen (mit Verbindungstest)
     st, j = post_form("/api/profile", {
         "hermes_url": HERMES_URL, "hermes_user": HERMES_USER, "hermes_pass": HERMES_PASS,
     }, jar)
-    print("3) POST /api/profile:", st, j.get("status"))
-    if st != 200:
+    ok = st == 200 and j.get("test") == "connected"
+    print("3) POST /api/profile:", st, j.get("status"), "| Test:", j.get("test"), j.get("test_error") or "")
+    if not ok:
         failures.append("profile")
 
     # 4) /api/session -> eingeloggt + Hermes konfiguriert

@@ -95,6 +95,46 @@ def get_user_by_id(user_id):
     return dict(row) if row else None
 
 
+def user_hermes_info(user: dict) -> dict:
+    """Hermes-Status eines Benutzers (URL getrennt von Auth, damit das Frontend
+    genau sagen kann, was fehlt)."""
+    auth = user.get("hermes_auth") or ""
+    auth_user = auth.partition(":")[0] if auth else ""
+    return {
+        "hermes_url": user.get("hermes_url") or "",
+        "hermes_user": auth_user,
+        "hermes_url_set": bool(user.get("hermes_url")),
+        "hermes_auth_set": bool(auth),
+        "hermes_configured": bool(user.get("hermes_url") and auth),
+    }
+
+
+async def test_hermes_connection(hermes_url: str, auth: str) -> tuple:
+    """Probiert den Login am Hermes-Gateway aus. Gibt (status, detail) zurück:
+    status in ("connected", "missing", "failed")."""
+    if not hermes_url or not auth:
+        return ("missing", "")
+    auth_user, _, auth_pass = auth.partition(":")
+    if not auth_user:
+        return ("missing", "")
+    try:
+        async with ClientSession() as http:
+            async with http.post(
+                f"{hermes_url}/auth/password-login",
+                json={"provider": "basic", "username": auth_user, "password": auth_pass, "next": ""},
+                timeout=ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    return ("connected", "")
+                return ("failed", f"Login abgelehnt (Status {resp.status}) – Zugangsdaten prüfen")
+    except asyncio.TimeoutError:
+        return ("failed", "Zeitüberschreitung – URL nicht erreichbar")
+    except aiohttp.ClientConnectorError as e:
+        return ("failed", f"URL nicht erreichbar: {e}")
+    except Exception as e:
+        return ("failed", f"Unerwarteter Fehler: {type(e).__name__}")
+
+
 # ---------------------------------------------------------------- App-Setup
 
 @asynccontextmanager
@@ -180,12 +220,13 @@ async def api_session(request: Request):
     if not user:
         return JSONResponse({"logged_in": False})
     db_user = get_user_by_id(user["user_id"]) or {}
+    info = user_hermes_info(db_user)
     return JSONResponse({
         "logged_in": True,
         "username": user.get("username"),
-        "hermes_url": db_user.get("hermes_url"),
+        "hermes_url": info["hermes_url"],
         "hermes_profile": db_user.get("hermes_profile"),
-        "hermes_configured": bool(db_user.get("hermes_url") and db_user.get("hermes_auth")),
+        "hermes_configured": info["hermes_configured"],
     })
 
 
@@ -195,13 +236,8 @@ async def api_profile(request: Request):
     if not user:
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
     db_user = get_user_by_id(user["user_id"]) or {}
-    hermes_user = db_user.get("hermes_auth", "").partition(":")[0] if db_user.get("hermes_auth") else ""
-    return JSONResponse({
-        "status": "ok",
-        "hermes_url": db_user.get("hermes_url") or "",
-        "hermes_user": hermes_user,
-        "hermes_configured": bool(db_user.get("hermes_url") and db_user.get("hermes_auth")),
-    })
+    info = user_hermes_info(db_user)
+    return JSONResponse({"status": "ok", **info})
 
 
 @app.post("/api/profile")
@@ -215,14 +251,19 @@ async def api_profile_save(request: Request,
     hermes_url = hermes_url.strip().rstrip("/")
     if hermes_url and not hermes_url.startswith(("http://", "https://")):
         return JSONResponse({"status": "error", "message": "Hermes-URL muss mit http(s):// beginnen"}, status_code=400)
-    if bool(hermes_user) != bool(hermes_pass):
-        return JSONResponse({"status": "error", "message": "Hermes-Benutzer und -Passwort immer zusammen angeben"}, status_code=400)
 
     conn = get_db()
     db_user = conn.execute("SELECT * FROM users WHERE id = ?", (user["user_id"],)).fetchone()
     if not db_user:
         conn.close()
         return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden"}, status_code=404)
+
+    if hermes_user and not hermes_pass:
+        conn.close()
+        return JSONResponse({"status": "error", "message": "Bei Hermes-Benutzer muss auch das Passwort angegeben werden"}, status_code=400)
+    if hermes_pass and not hermes_user:
+        conn.close()
+        return JSONResponse({"status": "error", "message": "Bei Hermes-Passwort muss auch der Benutzer angegeben werden"}, status_code=400)
 
     if hermes_user and hermes_pass:
         new_auth = f"{hermes_user}:{hermes_pass}"
@@ -235,7 +276,13 @@ async def api_profile_save(request: Request,
                  (hermes_url or None, new_auth, user["user_id"]))
     conn.commit()
     conn.close()
-    return JSONResponse({"status": "ok"})
+
+    # Nach dem Speichern: Verbindung sofort testen, damit der Nutzer weiß, ob es klappt
+    if hermes_url and new_auth:
+        test, detail = await test_hermes_connection(hermes_url, new_auth)
+    else:
+        test, detail = ("missing", "Benutzer und Passwort fehlen")
+    return JSONResponse({"status": "ok", "test": test, "test_error": detail})
 
 
 # ---------------------------------------------------------------- Chat-Proxy
