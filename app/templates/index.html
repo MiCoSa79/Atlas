@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Atlas</title>
     <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="icon" href="/static/icon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="/static/icon-180.png">
+    <meta name="theme-color" content="#0e1116">
     <style>
         :root {
             --bg: #0e1116;
@@ -28,7 +31,8 @@
         /* Setup & Login */
         .auth-page { display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
         .auth-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px; width: 100%; max-width: 400px; }
-        .auth-card h1 { text-align: center; margin: 0 0 24px; }
+        .auth-card h1 { text-align: center; margin: 0 0 24px; display: flex; align-items: center; justify-content: center; }
+        .auth-card .auth-logo { width: 30px; height: 30px; margin-right: 8px; }
         .auth-card .hint { text-align: center; color: var(--muted); font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
         .auth-card label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
         .auth-card input { width: 100%; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 15px; outline: none; }
@@ -91,7 +95,7 @@
     <!-- Auth-Seite (Setup-Wizard oder Login) -->
     <div class="auth-page" id="authPage">
         <div class="auth-card">
-            <h1>🏛️ Atlas</h1>
+            <h1><img class="auth-logo" src="/static/icon.svg" alt="Atlas"> Atlas</h1>
             {% if setup_mode %}
             <p class="hint">Willkommen! Lege zuerst deinen Admin-Zugang an.<br>Die Hermes-Verbindung richtest du danach in den <b>Einstellungen</b> ein.</p>
             <form id="setupForm">
