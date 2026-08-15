@@ -251,7 +251,10 @@ def session_from_ws(ws: WebSocket):
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse(
-        "index.html", {"request": request, "setup_mode": user_count() == 0}
+        "index.html",
+        {"request": request, "setup_mode": user_count() == 0,
+         "BUILD_VERSION": os.environ.get("APP_VERSION", "unknown"),
+         "BUILD_DATE": os.environ.get("BUILD_DATE", "unknown")}
     )
 
 
@@ -538,7 +541,9 @@ async def api_sessions(request: Request):
 async def websocket_proxy(ws: WebSocket):
     await ws.accept()
     session = session_from_ws(ws)
+    print(f"[WS-Proxy] accept, session={session}")
     if not session:
+        print("[WS-Proxy] Kein User → close")
         await ws.close(code=4001, reason="Nicht angemeldet")
         return
 
@@ -546,6 +551,7 @@ async def websocket_proxy(ws: WebSocket):
     db_user = get_user_by_id(session["user_id"]) or {}
     hermes_url = db_user.get("hermes_url")
     hermes_auth = db_user.get("hermes_auth")
+    hermes_profile = db_user.get("hermes_profile") or ""
     if not hermes_url or not hermes_auth:
         await ws.close(code=4001, reason="Kein Hermes-Zugang hinterlegt")
         return
@@ -607,9 +613,10 @@ async def websocket_proxy(ws: WebSocket):
                             if msg.type == WSMsgType.TEXT:
                                 await ws.send_text(msg.data)
                             elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR, WSMsgType.CLOSED):
+                                print(f"[WS-Proxy] gateway closed/error: type={msg.type}")
                                 break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[WS-Proxy] fwd_hermes_to_client exception: {e}")
                     try:
                         await ws.close()
                     except Exception:
@@ -620,8 +627,8 @@ async def websocket_proxy(ws: WebSocket):
                         while True:
                             raw = await ws.receive_text()
                             await hws.send_str(raw)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[WS-Proxy] fwd_client_to_hermes exception: {e}")
                     try:
                         await hws.close()
                     except Exception:
@@ -630,6 +637,7 @@ async def websocket_proxy(ws: WebSocket):
                 t1 = asyncio.create_task(fwd_hermes_to_client())
                 t2 = asyncio.create_task(fwd_client_to_hermes())
                 done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+                print(f"[WS-Proxy] finished: done={len(done)} pending={len(pending)}")
                 for t in pending:
                     t.cancel()
     except Exception as e:

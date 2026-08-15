@@ -217,6 +217,9 @@
     </div>
 
     <div id="toast" class="hidden"></div>
+    <div id="buildInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-top:12px;">
+        Build {{ BUILD_VERSION }} · {{ BUILD_DATE }}
+    </div>
 
     <script>
         const $ = id => document.getElementById(id);
@@ -232,6 +235,7 @@
         let activeSessionId = null;      // gewählte alte Session (null = neue Unterhaltung)
         let historyRpcId = null;         // RPC-ID der session.history-Abfrage
         let pendingMessages = [];        // Warteschlange: Nachrichten die auf session.create warten
+        let connectAttempts = 0;         // Reconnect-Versuche (max 5)
 
         function showToast(msg) {
             const t = $('toast');
@@ -546,14 +550,28 @@
 
         function connectWS() {
             if (ws) return;
+            // Reconnect limitieren (max 5 Versuche, sonst aufhören)
+            connectAttempts++;
+            if (connectAttempts > 5) {
+                addMsg('system', '⚠️ Verbindung kann nicht hergestellt werden. Bitte Seite neu laden.');
+                return;
+            }
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            console.log('[Atlas] WS connect to:', `${proto}//${location.host}/ws`);
             ws = new WebSocket(`${proto}//${location.host}/ws`);
 
             ws.onopen = () => {
+                console.log('[Atlas] WS connected, attempt #' + connectAttempts);
+                connectAttempts = 0;  // Zähler zurücksetzen bei Erfolg
                 statusDot.classList.add('online');
                 statusDot.classList.remove('offline');
                 const p = { close_on_disconnect: true, source: 'atlas-app' };
-                if (activeSessionId) p.session_id = activeSessionId;
+                if (activeSessionId) {
+                    p.session_id = activeSessionId;
+                    console.log('[Atlas] session.resume(' + activeSessionId + ')');
+                } else {
+                    console.log('[Atlas] session.create');
+                }
                 if (selectedProfile) p.profile = selectedProfile;
                 sendRpc(activeSessionId ? 'session.resume' : 'session.create', p);
             };
@@ -566,10 +584,16 @@
                 ws = null;
                 setTimeout(connectWS, 3000);
             };
-            ws.onerror = () => {};
+            ws.onerror = () => console.log('[Atlas] WS error');
             ws.onmessage = ev => {
                 let frame;
                 try { frame = JSON.parse(ev.data); } catch (_) { return; }
+                // Debug-Log: Alle eingehenden WS-Nachrichten
+                const logData = frame.id !== undefined ?
+                    'id=' + frame.id + (frame.method ? ' method=' + frame.method : ' result.type=' + (frame.result && frame.result.type)) :
+                    (frame.method || '?');
+                console.log('[Atlas] ← WS msg:', logData);
+                console.log('[Atlas] ← WS message:', JSON.stringify(frame).substring(0, 200));
 
                 if (frame.id === 1 && frame.result && frame.result.session_id) {
                     hermesSessionId = frame.result.session_id;
