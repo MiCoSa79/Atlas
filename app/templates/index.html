@@ -596,20 +596,25 @@
                 console.log('[Atlas] ← WS message:', JSON.stringify(frame).substring(0, 200));
 
                 if (frame.id === 1 && frame.result && frame.result.session_id) {
+                    // session.create (Neue Unterhaltung)
                     hermesSessionId = frame.result.session_id;
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
-                    if (activeSessionId) {
-                        // Alte Session fortgesetzt -> Verlauf laden
-                        historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
-                        $('currentSessionLabel').textContent = frame.result.title || activeSessionId;
-                        $('currentSessionLabel').classList.remove('hidden');
-                        addMsg('system', 'Session geladen ✓');
-                    } else {
-                        messagesDiv.innerHTML = '';
-                        activeSessionId = null;
-                        $('currentSessionLabel').classList.add('hidden');
-                        addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
-                    }
+                    messagesDiv.innerHTML = '';
+                    activeSessionId = null;
+                    $('currentSessionLabel').classList.add('hidden');
+                    addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
+                    return;
+                }
+                if (frame.id === 2 && frame.result && frame.result.stored_session_id) {
+                    // session.resume (alte Session fortsetzen)
+                    hermesSessionId = frame.result.stored_session_id;
+                    flushPendingMessages();  // gepufferte Nachrichten sofort senden
+                    // Verlauf laden (history antwortet auf id=3)
+                    historyRpcId = 3;
+                    sendRpc('session.history', { session_id: hermesSessionId });
+                    $('currentSessionLabel').textContent = frame.result.title || activeSessionId;
+                    $('currentSessionLabel').classList.remove('hidden');
+                    addMsg('system', 'Session geladen ✓');
                     return;
                 }
                 if (frame.id === historyRpcId && frame.result && frame.result.messages) {
