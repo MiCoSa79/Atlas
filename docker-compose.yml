@@ -1,0 +1,13 @@
+version: '3'
+services:
+  atlas:
+    build: .
+    restart: always
+    network_mode: host
+    environment:
+      - HERMES_URL=http://10.0.25.60:9119
+      - HERMES_USER=axel@meiser.cool
+      - HERMES_PASS=DEIN_PASSWORT
+      - ADMIN_SETUP_TOKEN=GEHEIM_123
+    volumes:
+      - ./config.json:/app/config.json

@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+websockets
+pydantic
+pydantic-settings
+bcrypt
+aiosqlite
+httpx
