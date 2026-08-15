@@ -1,9 +1,9 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# Build-Argument: Commit-SHA aus GitHub Actions -> wird auf der Hello-World-Seite angezeigt
-ARG GIT_COMMIT=unbekannt
-ENV GIT_COMMIT=${GIT_COMMIT}
+# Build-Argument: Versionsnummer (v0.0.1, ...) aus GitHub Actions -> wird auf der Hello-World-Seite angezeigt
+ARG APP_VERSION=unbekannt
+ENV APP_VERSION=${APP_VERSION}
 
 COPY app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

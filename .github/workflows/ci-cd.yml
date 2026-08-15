@@ -5,15 +5,38 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-    - name: Generate commit hash tag
-      id: vars
-      run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    - name: Determine next version (v0.0.1, v0.0.2, ...)
+      id: version
+      run: |
+        LAST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)
+        if [ -z "$LAST" ]; then
+          NEXT="v0.0.1"
+        else
+          BASE="${LAST#v}"
+          IFS='.' read -r MAJ MIN PAT <<< "$BASE"
+          PAT=$((PAT + 1))
+          NEXT="v$MAJ.$MIN.$PAT"
+        fi
+        echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+        echo "Neue Version: $NEXT"
+
+    - name: Create and push Git tag
+      run: |
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+        git tag "${{ steps.version.outputs.next }}"
+        git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${{ steps.version.outputs.next }}"
 
     - name: Login to Docker Hub
       uses: docker/login-action@v3
@@ -27,10 +50,10 @@ jobs:
       with:
         push: true
         build-args: |
-          GIT_COMMIT=${{ steps.vars.outputs.sha_short }}
+          APP_VERSION=${{ steps.version.outputs.next }}
         tags: |
           micosa79/atlas:latest
-          micosa79/atlas:${{ steps.vars.outputs.sha_short }}
+          micosa79/atlas:${{ steps.version.outputs.next }}
 
     - name: Image digest
       run: echo ${{ steps.docker_build.outputs.digest }}

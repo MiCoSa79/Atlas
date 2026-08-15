@@ -4,8 +4,8 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="Atlas Hello World")
 
-# Wird beim Docker-Build gesetzt (GitHub Actions) - zeigt die exakte Version
-COMMIT = os.environ.get("GIT_COMMIT", "lokal")
+# Wird beim Docker-Build gesetzt (GitHub Actions) - zeigt die exakte Version (v0.0.1, ...)
+VERSION = os.environ.get("APP_VERSION", "lokal")
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -28,6 +28,6 @@ async def root():
 <body>
   <h1>Hello World!</h1>
   <p>Atlas-Container läuft einwandfrei.</p>
-  <div class="version">Version: {COMMIT}</div>
+  <div class="version">Version: {VERSION}</div>
 </body>
 </html>"""
