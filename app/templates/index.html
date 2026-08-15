@@ -231,6 +231,7 @@
         let hermesSessionId = null;
         let activeSessionId = null;      // gewählte alte Session (null = neue Unterhaltung)
         let historyRpcId = null;         // RPC-ID der session.history-Abfrage
+        let pendingMessages = [];        // Warteschlange: Nachrichten die auf session.create warten
 
         function showToast(msg) {
             const t = $('toast');
@@ -572,6 +573,7 @@
 
                 if (frame.id === 1 && frame.result && frame.result.session_id) {
                     hermesSessionId = frame.result.session_id;
+                    flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     if (activeSessionId) {
                         // Alte Session fortgesetzt -> Verlauf laden
                         historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
@@ -642,10 +644,19 @@
                 return;
             }
             if (!hermesSessionId) {
-                addMsg('system', 'Verbindung wird aufgebaut… versuche es in einem Moment erneut');
+                // Puffern: Sobald session.create geantwortet hat, wird automatisch gesendet
+                pendingMessages.push(text);
                 return;
             }
             sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+        }
+
+        function flushPendingMessages() {
+            if (!hermesSessionId) return;
+            const msgs = pendingMessages.splice(0);
+            for (const text of msgs) {
+                sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+            }
         }
 
         $('input').addEventListener('keydown', e => {
@@ -658,17 +669,20 @@
 
         // ---------------------------------------------------------------- Sessions
         function restartWS() {
-            // Bestehende Verbindung sauber beenden; connectWS baut danach neu auf
+            // Bestehende Verbindung sauber beenden, OHNE dass ihr onclose-Handler
+            // die neue Verbindung sabotiert (Race: alter onclose setzt ws=null
+            // und plant Reconnect, nachdem die neue Verbindung schon läuft)
             if (ws) {
                 const old = ws;
                 ws = null;
-                hermesSessionId = null;
+                old.onclose = null;   // alten Handler deaktivieren
+                old.onerror = null;
                 try { old.close(); } catch (_) {}
             }
+            hermesSessionId = null;
             messagesDiv.innerHTML = '';
             bubble = null;
             connectWS();
-            if (!ws) setTimeout(connectWS, 500);
         }
 
         $('sessionsBtn').addEventListener('click', () => {
