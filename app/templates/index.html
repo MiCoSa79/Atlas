@@ -980,45 +980,54 @@
             if (!hermesSessionId) return;
             
             // Zuerst Nachricht SOFORT im Chat anzeigen (wie bisher)
-            const userBubble = addMessage('user', text || '📎 ' + pendingFiles.map(f => f.name).join(', '));
+            const userBubble = addMsg('user', text || pendingFiles.map(f => f.name).join(', '));
             userBubble.classList.add('upload-bubble');
             
             // Anhänge hochladen (parallel, asynchron)
-            const promises = [];
-            const fileIds = [];
+            let uploadPromises = [];
+            let fileIds = [];
             
-            for (const pf of pendingFiles) {
-                if (!pf.id) {
-                    const fd = new FormData();
-                    fd.append('file', pf.file);
-                    promises.push(
-                        fetch('/api/upload', { method: 'POST', body: fd })
-                            .then(r => r.json())
-                            .then(j => {
-                                pf.id = j.file_id;
-                                fileIds.push(pf.id);
-                                return true;
-                            })
-                            .catch(err => {
-                                console.error('[Atlas] Upload fehlgeschlagen:', err);
-                                return false;
-                            })
-                    );
-                } else {
-                    fileIds.push(pf.id);
+            if (pendingFiles.length > 0) {
+                for (let i = 0; i < pendingFiles.length; i++) {
+                    const pf = pendingFiles[i];
+                    if (!pf.id) {
+                        const fd = new FormData();
+                        fd.append('file', pf.file);
+                        uploadPromises.push(
+                            fetch('/api/upload', { method: 'POST', body: fd })
+                                .then(r => r.json())
+                                .then(j => {
+                                    if (j.status === 'ok') {
+                                        pf.id = j.file_id;
+                                        fileIds.push(j.file_id);
+                                    } else {
+                                        console.error('[Atlas] Upload fehlgeschlagen:', j.message);
+                                    }
+                                })
+                                .catch(err => {
+                                    console.error('[Atlas] Upload fehlgeschlagen:', err);
+                                })
+                        );
+                    } else {
+                        fileIds.push(pf.id);
+                    }
                 }
             }
 
             // Wenn Anhänge hochgeladen wurden, dann an Hermes senden
-            if (promises.length > 0) {
-                Promise.all(promises).then(() => {
-                    const success = promises.some(p => p); // Prüfen ob mindestens einer erfolgreich
+            if (uploadPromises.length > 0) {
+                Promise.all(uploadPromises).then(() => {
                     if (text.trim()) {
                         sendRpc('prompt.submit', { session_id: hermesSessionId, text: text, attachments: fileIds });
-                    } else if (!success) {
-                        showToast('⚠️ Hochladen fehlgeschlagen');
                     }
                     // Nach Senden aufräumen
+                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
+                    pendingFiles = [];
+                    renderFilePreviews();
+                    $('input').value = '';
+                }).catch(err => {
+                    console.error('[Atlas] Upload-Fehler:', err);
+                    // Auch bei Fehler aufräumen
                     pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
                     pendingFiles = [];
                     renderFilePreviews();
