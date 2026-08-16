@@ -812,7 +812,9 @@
             meta.className = 'meta';
             m.appendChild(meta);
             messagesDiv.appendChild(m);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            // Smart-Scroll: nur nach unten folgen, wenn der Nutzer unten ist (v0.0.70)
+            const nearBottomAdd = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
+            if (nearBottomAdd) messagesDiv.scrollTop = messagesDiv.scrollHeight;
             return m;
         }
 
@@ -838,7 +840,8 @@
                 const span = leaseWaitBubble.querySelector('span');
                 if (span) span.textContent = text;
             }
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            const nearBottomLease = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
+            if (nearBottomLease) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
         // Beendet die Lease-Bubble: finalText gesetzt = Text ersetzen + Button entfernen,
@@ -959,6 +962,8 @@
                             }
                         });
                         addMsg('system', 'Session geladen ✓');
+                        // Session wurde gewechselt → bewusst ans Ende springen
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     }
                     $('currentSessionLabel').textContent = activeSessionId;
                     $('currentSessionLabel').classList.remove('hidden');
@@ -991,6 +996,8 @@
                     });
                     const n = msgs.length;
                     addMsg('system', n ? 'Verlauf geladen (' + n + ' Nachrichten) ✓' : 'Diese Session hat noch keine Nachrichten (starte einfach ein neues Thema).');
+                    // Session wurde geöffnet → bewusst ans Ende springen (neueste Nachricht)
+                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     return;
                 }
                 // RPC-Antworten (keine Events): Attach-Responses speichern,
@@ -1027,14 +1034,16 @@
                         thinkingBubble.classList.add('done');
                         thinkingBubble = null;
                     }
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    const nearBottomStart = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
+                    if (nearBottomStart) messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     return;
                 }
                 // Statuszeilen ("warte auf Modell…") — kleine zentrierte Zeile
                 if (p.type === 'thinking.delta' && p.payload && p.payload.text && showStatus) {
                     if (!statusBubble) statusBubble = addMsg('status', p.payload.text);
                     else statusBubble.querySelector('span').textContent = p.payload.text;
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+const isNearBottom3 = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
+                    if (isNearBottom3) messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     return;
                 }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
@@ -1051,7 +1060,8 @@
                     }
                     if (!bubble) bubble = addMsg('assistant', '');
                     bubble.querySelector('span').textContent += p.payload.text;
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    const isNearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
+                    if (isNearBottom) messagesDiv.scrollTop = messagesDiv.scrollHeight;
                 }
                 if (p.type === 'message.complete') {
                     if (leaseWaitBubble) clearLeaseWait();
@@ -1386,7 +1396,8 @@
                 wrap.appendChild(btn);
             }
             bubble.appendChild(wrap);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            const isNearBottom2 = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
+            if (isNearBottom2) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
         // Vorschau aus localStorage rekonstruieren (für Session-Wechsel / History-Laden)
