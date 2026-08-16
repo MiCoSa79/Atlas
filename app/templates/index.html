@@ -923,10 +923,12 @@
                 // bei 'frame.method !== event' verworfen und nie in
                 // pendingAttachResponses landen → falscher Timeout im Frontend.
                 if (frame.id !== undefined && !frame.method) {
+                    console.log('[Atlas] RPC response captured: id=' + frame.id + ', result=' + JSON.stringify(frame.result).substring(0, 100));
                     if (frame.error) {
                         pendingAttachResponses[frame.id] = { error: frame.error };
                     } else if (frame.result) {
                         pendingAttachResponses[frame.id] = frame.result;
+                        console.log('[Atlas] Attached to pendingAttachResponses[' + frame.id + ']: ' + (frame.result.attached || 'no attached field'));
                     }
                     return;
                 }
