@@ -951,8 +951,10 @@ async def download_from_hermes(hermes_url, auth, filename):
     if not cookie_header:
         return None
     
-    # Datei-Pfad vom Hermes-Server ermitteln (normalerweise /opt/data/images/ oder /opt/data/)
+    # Datei-Pfad vom Hermes-Server ermitteln (normalerweise /opt/data/images/, /opt/data/uploads/ oder /opt/data/)
     hermes_path = f"/opt/data/images/{filename}"
+    if not os.path.exists(hermes_path):
+        hermes_path = f"/opt/data/uploads/{filename}"
     if not os.path.exists(hermes_path):
         hermes_path = f"/opt/data/{filename}"
     
