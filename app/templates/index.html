@@ -902,11 +902,15 @@
             ws.onclose = ev => {
                 statusDot.classList.add('offline');
                 statusDot.classList.remove('online');
+                const isRateLimit = ev.reason && ev.reason.includes('429');
                 if (ev.reason && ev.reason !== '' && ev.reason !== 'Normal closure' && !ev.reason.startsWith('go away')) {
                     addMsg('system', '⚠️ Verbindung getrennt: ' + ev.reason);
                 }
                 ws = null;
-                setTimeout(connectWS, 3000);
+                // Bei Rate-Limit (429) nicht alle 3s reconnecten — das würde das
+                // Hermes-Login-Limit weiter anheizen. Stattdessen 30s warten.
+                const delay = isRateLimit ? 30000 : 3000;
+                setTimeout(connectWS, delay);
             };
             ws.onerror = () => console.log('[Atlas] WS error');
             ws.onmessage = ev => {
@@ -1081,19 +1085,22 @@
             };
         }
 
+        let isSending = false;
+
         async function sendMessage(text) {
+            if (isSending) return;
             if (!text.trim() && pendingFiles.length === 0) return;
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 addMsg('system', 'Fehler: Nicht verbunden');
                 return;
             }
             if (!hermesSessionId) {
-                // Puffern: Sobald session.create geantwortet hat, wird automatisch gesendet
                 pendingMessages.push(text);
                 return;
             }
+            isSending = true; // verhindert Doppel-Sende (Enter + Klick gleichzeitig)
             
-            // Zuerst Vorschau-HTML vorbereiten (nur für lokalen DOM)
+            // Vorschau-HTML vorbereiten (nur für lokalen DOM)
             let attachmentsHtml = '';
             if (pendingFiles.length > 0) {
                 attachmentsHtml = pendingFiles.map(pf => {
@@ -1105,26 +1112,25 @@
                 }).join('');
             }
             
-            // Nachricht SOFORT im Chat anzeigen (reiner Text → keine HTML-Einbettung)
+            // Nachricht SOFORT im Chat anzeigen (reiner Text)
             const displayName = text || (pendingFiles.length > 0 ? pendingFiles.map(f => f.name).join(', ') : '');
             const userBubble = addMsg('user', displayName);
             userBubble.classList.add('upload-bubble');
             
-            // Vorschau nur hier anhängen (einmalig!)
+            // Vorschau NUR hier anhängen (einmalig!)
             if (pendingFiles.length > 0) {
                 const attachmentsDiv = document.createElement('div');
                 attachmentsDiv.innerHTML = attachmentsHtml;
                 userBubble.appendChild(attachmentsDiv);
             }
             
-            // Anhänge zuerst an Hermes attachen (WS-RPC)
+            // Anhänge an Hermes attachen (WS-RPC)
             if (pendingFiles.length > 0) {
                 let attachPromises = [];
                 for (const pf of pendingFiles) {
                     if (pf.base64Url) {
                         attachPromises.push(attachFileToHermes(pf));
                     } else {
-                        // base64 noch nicht fertig? Jetzt umwandeln und warten!
                         console.log('[Atlas] Warte auf base64-Konvertierung:', pf.name);
                         attachPromises.push(
                             fileToBase64(pf.file).then(b64 => {
@@ -1134,18 +1140,24 @@
                         );
                     }
                 }
-                // WARTEN bis alle Attachments bei Hermes angekommen sind!
                 await Promise.all(attachPromises);
             }
             
-            // JETZT erst prompt.submit senden (nachdem Attachments verarbeitet wurden)
-            sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+            // JETZT erst prompt.submit senden — Dateinamen in Text einbetten,
+            // damit Hermes sie in der History speichert (für Vorschau-Restore!)
+            const attachNames = pendingFiles.map(f => f.name).join(', ');
+            // Immer mit [Name]-Block (auch bei leerem Text), damit restoreAttachmentPreview
+            // den Block in der History sicher findet
+            const promptText = attachNames ? (text ? text + ' [' + attachNames + ']' : '[' + attachNames + ']') : text;
+            sendRpc('prompt.submit', { session_id: hermesSessionId, text: promptText });
+            // Persistenz VOR dem Leeren speichern (sonst ist pendingFiles leer!)
+            saveAttachmentPreviews();
             // Nach Senden aufräumen
             pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
             pendingFiles = [];
             renderFilePreviews();
-            saveAttachmentPreviews(); // ← Persistenz für Session-Wechsel
             $('input').value = '';
+            isSending = false;
         }
 
         // Vorschau-Daten persistent speichern (für Session-Wechsel)
@@ -1271,13 +1283,15 @@
         // Vorschau aus localStorage rekonstruieren (für Session-Wechsel / History-Laden)
         function restoreAttachmentPreview(userBubble, text) {
             if (!text) return;
-            // Prüfe ob Dateinamen im Text enthalten sind (z.B. "Datei.png" oder "a.jpg, b.png")
-            const match = text.match(/([\w._-]+\.(?:png|jpg|jpeg|gif|webp|pdf|docx?|xlsx?|pptx?|txt|zip|rar))/gi);
-            if (!match) return;
+            // Dateinamen aus [Name1, Name2]-Block extrahieren (von sendMessage so gesendet)
+            const bracketMatch = text.match(/\[([^\]]+)\]/);
+            if (!bracketMatch) return;
+            const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+            if (!names.length) return;
             
             // Erstelle Vorschau-HTML für jede Datei
             let attachmentsHtml = '';
-            for (const name of match) {
+            for (const name of names) {
                 const key = 'atlas_attach_' + name;
                 const data = localStorage.getItem(key);
                 if (data) {
@@ -1286,8 +1300,6 @@
                     } else {
                         attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${name}</span></div>`;
                     }
-                    // Bereinige localStorage nach erfolgreichem Restore
-                    localStorage.removeItem(key);
                 } else {
                     // Fallback: nur Dateiname als Text
                     attachmentsHtml += `<div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${name}</div>`;
@@ -1297,6 +1309,8 @@
                 const div = document.createElement('div');
                 div.innerHTML = attachmentsHtml;
                 userBubble.appendChild(div);
+                // Bereinige localStorage nach erfolgreichem Restore
+                names.forEach(n => localStorage.removeItem('atlas_attach_' + n));
             }
         }
 

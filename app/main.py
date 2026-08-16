@@ -828,6 +828,71 @@ async def api_sessions(request: Request):
 
 # ---------------------------------------------------------------- Chat-Proxy
 
+# Hermes drosselt Logins (10 pro 60s pro IP, Brute-Force-Schutz). Atlas würde bei
+# JEDER WS-Verbindung (Session-Wechsel, Reconnect, mehreren Tabs) frisch einloggen
+# → 429. Deshalb: Login-Cookie pro (hermes_url, user) cachen und wiederverwenden.
+_HERMES_LOGIN_LOCK = None  # wird beim ersten Gebrauch erzeugt (asyncio.Lock)
+_HERMES_LOGIN_CACHE = {}   # (hermes_url, auth_user) -> (cookie_header, timestamp)
+_HERMES_LOGIN_TTL = 600.0  # 10 Min — Hermes-Session-Cookie hält ~15+ Min
+
+
+def _hermes_login_lock():
+    global _HERMES_LOGIN_LOCK
+    if _HERMES_LOGIN_LOCK is None:
+        _HERMES_LOGIN_LOCK = asyncio.Lock()
+    return _HERMES_LOGIN_LOCK
+
+
+async def hermes_login_cookie(hermes_url: str, auth_user: str, auth_pass: str) -> str:
+    """Liefert einen gültigen Hermes-Login-Cookie-Header — aus dem Cache oder
+    frisch eingeloggt. Beim 429 (Rate-Limit) wird kurz gewartet und erneut
+    versucht. Rückgabe: Cookie-Header oder '' bei Fehlschlag.
+    """
+    async with _hermes_login_lock():
+        now = time.time()
+        cached = _HERMES_LOGIN_CACHE.get((hermes_url, auth_user))
+        if cached and (now - cached[1]) < _HERMES_LOGIN_TTL:
+            print("[WS-Proxy] Login-Cookie aus Cache verwendet")
+            return cached[0]
+
+        for attempt in range(3):
+            try:
+                async with ClientSession() as http:
+                    async with http.post(
+                        f"{hermes_url}/auth/password-login",
+                        json={"provider": "basic", "username": auth_user, "password": auth_pass, "next": ""},
+                        timeout=ClientTimeout(total=15),
+                    ) as resp:
+                        if resp.status == 429:
+                            # Rate-Limit: warten und erneut versuchen (5s, 10s)
+                            if attempt < 2:
+                                wait = 5 * (attempt + 1)
+                                print(f"[WS-Proxy] Login 429 — warte {wait}s und versuche erneut")
+                                await asyncio.sleep(wait)
+                                continue
+                            print("[WS-Proxy] Login 429 nach 3 Versuchen — aufgegeben")
+                            return ""
+                        if resp.status != 200:
+                            print(f"[WS-Proxy] Login-Status {resp.status}")
+                            return ""
+                        parts = []
+                        for header in resp.headers.getall("Set-Cookie", []):
+                            sc = SimpleCookie()
+                            sc.load(header)
+                            for m in sc.values():
+                                parts.append(f"{m.key}={m.value}")
+                        cookie_header = "; ".join(parts)
+                        _HERMES_LOGIN_CACHE[(hermes_url, auth_user)] = (cookie_header, time.time())
+                        print("[WS-Proxy] Frisch eingeloggt (Cookie gecacht)")
+                        return cookie_header
+            except Exception as e:
+                print(f"[WS-Proxy] Login-Exception: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+        return ""
+
+
 @app.websocket("/ws")
 async def websocket_proxy(ws: WebSocket):
     await ws.accept()
@@ -852,37 +917,36 @@ async def websocket_proxy(ws: WebSocket):
         await ws.close(code=4001, reason="Hermes-Zugang unvollständig")
         return
 
-    # 1) Am Hermes-Gateway einloggen (Session-Cookie wird manuell übernommen,
-    #    weil aiohttp 3.9.x die Set-Cookie-Header nicht zuverlässig im Jar speichert)
-    try:
-        async with ClientSession() as http:
-            async with http.post(
-                f"{hermes_url}/auth/password-login",
-                json={"provider": "basic", "username": auth_user, "password": auth_pass, "next": ""},
-                timeout=ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    await ws.close(code=4001, reason=f"Hermes-Login-Status {resp.status}")
-                    return
-                parts = []
-                for header in resp.headers.getall("Set-Cookie", []):
-                    sc = SimpleCookie()
-                    sc.load(header)
-                    for m in sc.values():
-                        parts.append(f"{m.key}={m.value}")
-            cookie_header = "; ".join(parts)
+    # 1) Login-Cookie holen. Hermes drosselt Logins (10 pro 60s pro IP) —
+    #    ohne Cache kollidiert Atlas bei Session-Wechseln/Reconnects damit.
+    cookie_header = await hermes_login_cookie(hermes_url, auth_user, auth_pass)
+    if not cookie_header:
+        await ws.close(code=4001, reason="Hermes-Login-Status 429 (Rate-Limit) — bitte kurz warten und Seite neu laden")
+        return
 
-            # 2) Einmaliges WS-Ticket mit der frischen Session holen
-            async with http.post(
-                f"{hermes_url}/api/auth/ws-ticket",
-                headers={"Cookie": cookie_header} if cookie_header else {},
-                timeout=ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
+    # 2) Einmaliges WS-Ticket holen (bei abgelaufenem Cookie: automatisch neu einloggen)
+    try:
+        ticket = None
+        for _attempt in range(2):
+            async with ClientSession() as http:
+                async with http.post(
+                    f"{hermes_url}/api/auth/ws-ticket",
+                    headers={"Cookie": cookie_header} if cookie_header else {},
+                    timeout=ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        ticket = (data or {}).get("ticket")
+                        break
+                    if resp.status in (401, 403):
+                        # Session-Cookie abgelaufen → Cache verwerfen, frisch einloggen
+                        _HERMES_LOGIN_CACHE.pop((hermes_url, auth_user), None)
+                        cookie_header = await hermes_login_cookie(hermes_url, auth_user, auth_pass)
+                        if not cookie_header:
+                            break
+                        continue
                     await ws.close(code=4001, reason=f"Ticket-Status {resp.status}")
                     return
-                data = await resp.json()
-                ticket = (data or {}).get("ticket")
     except Exception as e:
         await ws.close(code=4001, reason=f"Ticket-Fehler: {e}")
         return
