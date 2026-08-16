@@ -300,6 +300,7 @@
         const messagesDiv = $('messages');
         const banner = $('setupBanner');
         let ws = null;
+        let pendingAttachResponses = {};
         let bubble = null;
         let thinkingBubble = null;      // laufende "Denken"-Box (reasoning.delta)
         let statusBubble = null;        // laufende Statuszeile (thinking.delta)
@@ -1151,7 +1152,6 @@
                 }, 8000);
             });
         }
-        let pendingAttachResponses = {};
 
         $('attachBtn').addEventListener('click', () => $('fileInput').click());
         $('fileInput').addEventListener('change', async e => {
