@@ -296,13 +296,6 @@
     <!-- Build-Nummer lebt jetzt im Header (oben rechts, immer sichtbar) -->
 
     <script>
-        // Web Push: beim ersten Klick initPush aufrufen
-        document.addEventListener('DOMContentLoaded', () => {
-            const user = JSON.parse(localStorage.getItem('atlas_session') || '{}');
-            if (user?.user_id || user?.session?.user_id) {
-                setTimeout(initPush, 1000);
-            }
-        });
         const $ = id => document.getElementById(id);
         const authPage = $('authPage');
         const app = $('app');
@@ -816,7 +809,7 @@
                 renderMediaDownloads(m, text);
             }
             const meta = document.createElement('span');
-            metaTag.className = 'meta';
+            meta.className = 'meta';
             m.appendChild(meta);
             messagesDiv.appendChild(m);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -838,7 +831,7 @@
                 leaseWaitTimer = setInterval(() => {
                     const s = Math.round((Date.now() - leaseWaitStart) / 1000);
                     const meta = leaseWaitBubble && leaseWaitBubble.querySelector('.meta');
-                    if (meta) metaTag.textContent = ' · wartet seit ' + s + 's';
+                    if (meta) meta.textContent = ' · wartet seit ' + s + 's';
                 }, 1000);
             } else {
                 // Hermes wiederholt alle paar Sekunden "Still waiting…" → Text aktualisieren
@@ -1063,23 +1056,15 @@
                 if (p.type === 'message.complete') {
                     if (leaseWaitBubble) clearLeaseWait();
                     if (bubble) {
-                        const meta = bubble.querySelector('.meta') || document.createElement('span');
-                        metaTag.className = 'meta';
-                        metaTag.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-                        // Web Push: Notification wenn Seite verdeckt (v0.0.68)
-                        if (pushPublicKey && document.hidden && Notification.permission === 'granted') {
-                            try {
-                                const finalText = bubble.querySelector('span')?.textContent || '';
-                                const preview = finalText.trim().substring(0, 200).replace(/\n+/g, ' ');
-                                if (preview) new Notification('Atlas', {body: preview, icon: '/favicon.ico', tag: 'atlas-reply'});
-                            } catch {}
+                        // MEDIA:-Tags der fertigen Antwort in Download-Buttons umwandeln
+                        const finalSpan = bubble.querySelector('span');
+                        if (finalSpan && finalSpan.textContent && finalSpan.textContent.includes('MEDIA:')) {
+                            renderMediaDownloads(bubble, finalSpan.textContent);
                         }
-                        bubble.appendChild(metaTag);
-                        bubble = null;
-                        const metaTag = bubble.querySelector('.meta') || document.createElement('span');
-                        metaTag.className = 'meta';
-                        metaTag.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-                        bubble.appendChild(metaTag);
+                        const meta = bubble.querySelector('.meta') || document.createElement('span');
+                        meta.className = 'meta';
+                        meta.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                        bubble.appendChild(meta);
                         bubble = null;
                     }
                     if (thinkingBubble) {
@@ -1314,62 +1299,7 @@
         });
 
 
-        
-        // --------------------------------------------------------------- Web Push (v0.0.68)
-        // Public key vom Backend laden und Push-Abo starten.
-        let pushPublicKey = '';
-        try {
-            const pkResp = await fetch('/api/push/vapid-public-key');
-            if (pkResp.ok) {
-                const pkData = await pkResp.json();
-                pushPublicKey = pkData.public_key || '';
-                console.log('[Push] Public key geladen');
-            }
-        } catch (e) { console.log('[Push] key-Fetch fehlgeschlagen:', e); }
-
-        async function initPush() {
-            if (!pushPublicKey) { console.log('[Push] Kein public key — Push deaktiviert'); return; }
-            if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-                console.log('[Push] Web Push nicht unterstützt'); return;
-            }
-            try {
-                const reg = await navigator.serviceWorker.register('/static/sw.js');
-                console.log('[Push] SW registriert:', reg.active?.state);
-            } catch (e) { console.log('[Push] SW-Registrierung fehlgeschlagen:', e); return; }
-
-            // Berechtigung + Abo (nur beim ersten Besuch nach Button-Klick)
-            if (localStorage.getItem('atlas_push_initialized')) return;
-            localStorage.setItem('atlas_push_initialized', '1');
-
-            const permission = await Notification.requestPermission();
-            if (permission !== 'granted') { console.log('[Push] Berechtigung:', permission); return; }
-
-            try {
-                const reg = await navigator.serviceWorker.ready;
-                const sub = await reg.pushManager.getSubscription();
-                if (sub) { console.log('[Push] Bestehendes Abo'); return; }
-
-                const newSub = await reg.pushManager.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: pushPublicKey
-                });
-                const p256dh = btoa(String.fromCharCode.apply(null, new Uint8Array(newSub.getKey('p256dh'))));
-                const auth = btoa(String.fromCharCode.apply(null, new Uint8Array(newSub.getKey('auth'))));
-
-                await fetch('/api/push/subscribe', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        endpoint: newSub.endpoint,
-                        p256dh: p256dh,
-                        auth: auth
-                    })
-                });
-                console.log('[Push] Abo gespeichert');
-            } catch (e) { console.log('[Push] subscribe-Fehler:', e); }
-        }
-
-// ---------------------------------------------------------------- Datei-Downloads im Chat
+        // ---------------------------------------------------------------- Datei-Downloads im Chat
         // Generischer Weg (wie Hermes Desktop App): Der Agent schreibt
         // MEDIA:/absoluter/pfad/datei in seine Antwort → Atlas rendert daraus
         // einen Download-Button, der die Datei per Atlas-Proxy (/api/files/download)
@@ -1628,91 +1558,5 @@
             restartWS();
         });
     </script>
-        // VAPID public key vom Backend abrufen
-        let pushPublicKey = '';
-        try {
-            const pkResp = await fetch('/api/push/vapid-public-key');
-            if (pkResp.ok) {
-                const pkData = await pkResp.json();
-                pushPublicKey = pkData.public_key || '';
-            }
-        } catch (e) {
-            console.log('[Push] public_key-Fetch fehlgeschlagen:', e);
-        }
-
-        // ---------------------------------------------------------------- Web Push Benachrichtigungen (v0.0.68)
-        // Service Worker registrieren + Push-Abo erstellen.
-        // Läuft auf Desktop Safari, Chrome, Firefox, iOS Safari (PWA).
-        async function initPush() {
-            if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-                return;
-            }
-            try {
-                const reg = await navigator.serviceWorker.register('/static/sw.js');
-                console.log('[Push] SW registriert:', reg.scope);
-
-                // Berechtigung anfragen (nur vom User ausgelöst)
-                const permission = await Notification.requestPermission();
-                if (permission !== 'granted') {
-                    console.log('[Push] Berechtigung verweigert');
-                    return;
-                }
-
-                // Bestehendes Abo abrufen (über Backend)
-                const sessionData = localStorage.getItem('atlas_session');
-                if (!sessionData) return;
-                const sid = JSON.parse(sessionData);
-                const user_id = sid?.user_id || sid?.session?.user_id;
-                if (!user_id) return;
-
-                // Prüfen ob Abo existiert
-                let sub = null;
-                try {
-                    const sw = reg.pushManager.getSubscription();
-                    sub = await sw;
-                } catch {}
-
-                if (sub) {
-                    console.log('[Push] Bestehendes Abo gefunden');
-                    return;
-                }
-
-                // Neues Abo erstellen
-                const newSub = await reg.pushManager.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: pushPublicKey
-                });
-                const endpoint = newSub.endpoint;
-                const p256dh = btoa(String.fromCharCode.apply(null, new Uint8Array(newSub.getKey('p256dh'))));
-                const auth = btoa(String.fromCharCode.apply(null, new Uint8Array(newSub.getKey('auth'))));
-
-                // Abo an Backend senden
-                try {
-                    const resp = await fetch('/api/push/subscribe', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({endpoint, p256dh, auth})
-                    });
-                    console.log('[Push] Abo gespeichert:', resp.status);
-                } catch (e) {
-                    console.log('[Push] Abo-Fehler:', e);
-                }
-            } catch (e) {
-                console.log('[Push] SW-Registrierung fehlgeschlagen:', e);
-            }
-        }
-
-        // initPush beim ersten Klick aufrufen (Browser erfordern User-Geste für Notification.requestPermission)
-        document.addEventListener('DOMContentLoaded', () => {
-            // Push-Button in den Einstellungen erstellen
-            if (user && user.user_id) {
-                setTimeout(initPush, 500);  // kurzes Delay für SW-Init
-            }
-        });
-
-        // Push-Notification-Click → zur App springen
-        if ('Notification' in window && Notification.permission === 'granted') {
-            // Notification.onclick ist in SW definiert
-        }
 </body>
 </html>
