@@ -1002,7 +1002,14 @@
                     if (pf.base64Url) {
                         attachPromises.push(attachFileToHermes(pf));
                     } else {
-                        console.warn('[Atlas] Datei ohne base64, wird ignoriert:', pf.name);
+                        // base64 noch nicht fertig? Jetzt umwandeln und warten!
+                        console.log('[Atlas] Warte auf base64-Konvertierung:', pf.name);
+                        attachPromises.push(
+                            fileToBase64(pf.file).then(b64 => {
+                                pf.base64Url = b64;
+                                return attachFileToHermes(pf);
+                            })
+                        );
                     }
                 }
                 // Warten bis alle Attachments bei Hermes ankommen
