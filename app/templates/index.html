@@ -827,7 +827,7 @@
                 btn.onclick = () => {
                     if (!hermesSessionId) return;
                     btn.disabled = true;
-                    btn.textContent = '⏹ Unterbrechung angefordert…';
+                    btn.textContent = '⏹ Unterbrechnung angefordert…';
                     console.log('[Atlas] session.interrupt gesendet für', hermesSessionId);
                     leaseWaitRpcId = sendRpc('session.interrupt', { session_id: hermesSessionId });
                 };
@@ -996,13 +996,13 @@
                                         return;
                                     }
                                     if (frame.error) {
-                        pendingAttachResponses[frame.id] = { error: frame.error };
-                    } else if (frame.result) {
-                        pendingAttachResponses[frame.id] = frame.result;
-                        console.log('[Atlas] Attached to pendingAttachResponses[' + frame.id + ']: ' + (frame.result.attached || 'no attached field'));
-                    }
-                    return;
-                }
+                                        pendingAttachResponses[frame.id] = { error: frame.error };
+                                    } else if (frame.result) {
+                                        pendingAttachResponses[frame.id] = frame.result;
+                                        console.log('[Atlas] Attached to pendingAttachResponses[' + frame.id + ']: ' + (frame.result.attached || 'no attached field'));
+                                    }
+                                    return;
+                                }
                 if (frame.error) {
                     showToast('Fehler: ' + (frame.error.message || 'unbekannt'));
                     return;
@@ -1317,8 +1317,6 @@
                 const div = document.createElement('div');
                 div.innerHTML = attachmentsHtml;
                 userBubble.appendChild(div);
-                // Bereinige localStorage nach erfolgreichem Restore
-                names.forEach(n => localStorage.removeItem('atlas_attach_' + n));
             }
         }
 
