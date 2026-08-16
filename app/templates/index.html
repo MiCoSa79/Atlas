@@ -916,6 +916,20 @@
                     addMsg('system', n ? 'Verlauf geladen (' + n + ' Nachrichten) ✓' : 'Diese Session hat noch keine Nachrichten (starte einfach ein neues Thema).');
                     return;
                 }
+                // RPC-Antworten (keine Events): Attach-Responses speichern,
+                // OHNE sie an der 'event'-Hürde scheitern zu lassen.
+                // WICHTIG: image.attach_bytes/pdf.attach/file.attach antworten
+                // mit {"id":X,"result":{...}} — kein method-Feld → würden sonst
+                // bei 'frame.method !== event' verworfen und nie in
+                // pendingAttachResponses landen → falscher Timeout im Frontend.
+                if (frame.id !== undefined && !frame.method) {
+                    if (frame.error) {
+                        pendingAttachResponses[frame.id] = { error: frame.error };
+                    } else if (frame.result) {
+                        pendingAttachResponses[frame.id] = frame.result;
+                    }
+                    return;
+                }
                 if (frame.error) {
                     showToast('Fehler: ' + (frame.error.message || 'unbekannt'));
                     return;
