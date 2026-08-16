@@ -1303,11 +1303,13 @@
         // Vorschau aus localStorage rekonstruieren (für Session-Wechsel / History-Laden)
         function restoreAttachmentPreview(userBubble, text) {
             if (!text) return;
-            // Dateinamen aus [Name1, Name2]-Block extrahieren (von sendMessage so gesendet)
+            // Datei-Namen aus [Name1, Name2]-Block extrahieren (von sendMessage so gesendet)
             const bracketMatch = text.match(/\[([^\]]+)\]/);
             if (bracketMatch) {
-                // Zeige den [Dateiname]-Block NICHT im Bubble-Text — wird als Vorschau gerendert.
-                userBubble.querySelector('span').textContent = text.replace(bracketMatch[0], '').trim();
+                // Zeige den [Dateiname]- und @image:…-Block NICHT im Bubble-Text —
+                // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
+                const cleaned = text.replace(bracketMatch[0], '').replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').trim();
+                userBubble.querySelector('span').textContent = cleaned;
             }
             if (!bracketMatch) return;
             const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
