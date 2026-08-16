@@ -142,6 +142,18 @@ def init_db():
         )
     """)
     conn.execute("""CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)""")
+    # Usage-Tracking: session.usage Events (Hermes → Atlas)
+    conn.execute("""CREATE TABLE IF NOT EXISTS usage_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        session_id TEXT NOT NULL,
+        model TEXT,
+        input_tokens INTEGER DEFAULT 0,
+        output_tokens INTEGER DEFAULT 0,
+        total_tokens INTEGER DEFAULT 0,
+        cost REAL DEFAULT 0.0,
+        recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
     # Alte DBs: fehlende Spalten nachträglich hinzufügen (ignoriert Fehler, wenn schon da)
     try:
         conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
@@ -344,6 +356,163 @@ async def test_hermes_connection(hermes_url: str, auth: str) -> tuple:
 # ---------------------------------------------------------------- App-Setup
 
 @asynccontextmanager
+
+
+# ---------------------------------------------------------------- Usage-Tracking (v0.0.76)
+def _parse_usage_from_hermes(data):
+    '''Extrahiert Token-Nutzung aus Hermes-WS-Payload.'''
+    if not isinstance(data, dict):
+        return None
+    if data.get('type') == 'session.usage':
+        return {
+            'input_tokens': data.get('input_tokens', 0) or 0,
+            'output_tokens': data.get('output_tokens', 0) or 0,
+            'total_tokens': data.get('total_tokens', 0) or 0,
+            'cost': data.get('cost') or 0,
+            'model': data.get('model', '') or '',
+        }
+    if data.get('type') == 'message.complete':
+        usage = data.get('usage') or {}
+        if usage:
+            return {
+                'input_tokens': usage.get('input_tokens', usage.get('prompt_tokens', 0)) or 0,
+                'output_tokens': usage.get('output_tokens', usage.get('completion_tokens', 0)) or 0,
+                'total_tokens': usage.get('total_tokens', 0) or 0,
+                'cost': usage.get('cost', 0) or 0,
+                'model': data.get('model', '') or (usage.get('model', '') or ''),
+            }
+    return None
+
+def _store_usage(db_conn, user_id, session_id, usage):
+    '''Speichert Usage-Daten pro User/Session.'''
+    if not usage or usage.get('total_tokens', 0) == 0:
+        return
+    db_conn.execute(
+        '''INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost)
+           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        (user_id, session_id, usage.get('model', ''),
+         usage.get('input_tokens', 0),
+         usage.get('output_tokens', 0),
+         usage.get('total_tokens', 0),
+         usage.get('cost', 0))
+    )
+
+@app.get('/api/usage/today')
+async def api_usage_today(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error'}, status_code=401)
+    db_conn = get_db()
+    today = datetime.now().strftime('%Y-%m-%d')
+    row = db_conn.execute(
+        'SELECT SUM(input_tokens), SUM(output_tokens), SUM(total_tokens), SUM(cost) FROM usage_records WHERE user_id = ? AND date(recorded_at) = ?',
+        (user['user_id'], today)
+    ).fetchone()
+    db_conn.close()
+    return JSONResponse({
+        'status': 'ok',
+        'input_tokens': row[0] or 0,
+        'output_tokens': row[1] or 0,
+        'total_tokens': row[2] or 0,
+        'cost': row[3] or 0,
+        'date': today,
+    })
+
+@app.post('/api/usage/reset')
+async def api_usage_reset(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
+    db_user = get_user_by_id(user['user_id'])
+    if not db_user or not db_user['is_admin']:
+        return JSONResponse({'status': 'error', 'message': 'Nicht autorisiert'}, status_code=403)
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM usage_records WHERE date(recorded_at) = date('now', 'localtime')")
+    conn.commit()
+    conn.close()
+    return JSONResponse({'status': 'ok'})
+
+
+
+
+# ---------------------------------------------------------------- Usage-Tracking (v0.0.76)
+def _parse_usage_from_hermes(data):
+    """Extrahiert Token-Nutzung aus Hermes-WS-Payload."""
+    if not isinstance(data, dict):
+        return None
+    if data.get('type') == 'session.usage':
+        return {
+            'input_tokens': data.get('input_tokens', 0) or 0,
+            'output_tokens': data.get('output_tokens', 0) or 0,
+            'total_tokens': data.get('total_tokens', 0) or 0,
+            'cost': data.get('cost') or 0,
+            'model': data.get('model', '') or '',
+        }
+    if data.get('type') == 'message.complete':
+        usage = data.get('usage') or {}
+        if usage:
+            return {
+                'input_tokens': usage.get('input_tokens', usage.get('prompt_tokens', 0)) or 0,
+                'output_tokens': usage.get('output_tokens', usage.get('completion_tokens', 0)) or 0,
+                'total_tokens': usage.get('total_tokens', 0) or 0,
+                'cost': usage.get('cost', 0) or 0,
+                'model': data.get('model', '') or (usage.get('model', '') or ''),
+            }
+    return None
+
+
+def _store_usage(db_conn, user_id, session_id, usage):
+    """Speichert Usage-Daten pro User/Session."""
+    if not usage or usage.get('total_tokens', 0) == 0:
+        return
+    db_conn.execute(
+        'INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (user_id, session_id, usage.get('model', ''),
+         usage.get('input_tokens', 0),
+         usage.get('output_tokens', 0),
+         usage.get('total_tokens', 0),
+         usage.get('cost', 0))
+    )
+
+
+@app.get('/api/usage/today')
+async def api_usage_today(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error'}, status_code=401)
+    db_conn = get_db()
+    today = datetime.now().strftime('%Y-%m-%d')
+    row = db_conn.execute(
+        'SELECT SUM(input_tokens), SUM(output_tokens), SUM(total_tokens), SUM(cost) FROM usage_records WHERE user_id = ? AND date(recorded_at) = ?',
+        (user['user_id'], today)
+    ).fetchone()
+    db_conn.close()
+    return JSONResponse({
+        'status': 'ok',
+        'input_tokens': row[0] or 0,
+        'output_tokens': row[1] or 0,
+        'total_tokens': row[2] or 0,
+        'cost': row[3] or 0,
+        'date': today,
+    })
+
+
+@app.post('/api/usage/reset')
+async def api_usage_reset(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
+    db_user = get_user_by_id(user['user_id'])
+    if not db_user or not db_user['is_admin']:
+        return JSONResponse({'status': 'error', 'message': 'Nicht autorisiert'}, status_code=403)
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM usage_records WHERE date(recorded_at) = date('now', 'localtime')")
+    conn.commit()
+    conn.close()
+    return JSONResponse({'status': 'ok'})
+
 async def lifespan(app: FastAPI):
     init_db()
     # Zugangsdaten-Verschlüsselung: Altbestand automatisch konvertieren
@@ -1151,6 +1320,16 @@ async def websocket_proxy(ws: WebSocket):
                     try:
                         async for msg in hws:
                             if msg.type == WSMsgType.TEXT:
+                                try:
+                                    data = json.loads(msg.data)
+                                    if isinstance(data, dict) and data.get('method') == 'session.usage':
+                                        usage = _parse_usage_from_hermes(data.get('params') or data)
+                                        if usage:
+                                            with get_db() as db_conn:
+                                                session_id = data.get('params', {}).get('session_id', 'unknown')
+                                                _store_usage(db_conn, session["user_id"], session_id, usage)
+                                except Exception:
+                                    pass
                                 await ws.send_text(msg.data)
                             elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR, WSMsgType.CLOSED):
                                 print(f"[WS-Proxy] gateway closed/error: type={msg.type}")
