@@ -993,7 +993,28 @@
             
             // Zuerst Nachricht SOFORT im Chat anzeigen (wie bisher)
             const displayName = text || pendingFiles.map(f => f.name).join(', ');
-            addMsg('user', displayName);
+            const userBubble = addMsg('user', displayName);
+            userBubble.classList.add('upload-bubble');
+            
+            // Vorschau in die Nachricht einfügen
+            if (pendingFiles.length > 0) {
+                const attachmentsHtml = pendingFiles.map(pf => {
+                    if (pf.isImage && pf.previewUrl) {
+                        return `<div style="margin-top:6px;">
+                            <img src="${pf.previewUrl}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;">
+                            <div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${pf.name}</div>
+                        </div>`;
+                    } else {
+                        return `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;">
+                            <span style="font-size:20px;">📄</span>
+                            <span style="font-size:13px;color:var(--text);">${pf.name}</span>
+                        </div>`;
+                    }
+                }).join('');
+                const attachmentsDiv = document.createElement('div');
+                attachmentsDiv.innerHTML = attachmentsHtml;
+                userBubble.appendChild(attachmentsDiv);
+            }
             
             // Anhänge zuerst an Hermes attachen (WS-RPC)
             if (pendingFiles.length > 0) {
@@ -1058,10 +1079,11 @@
             });
         }
         
-        // Datei an Hermes attachen (WS-RPC)
+// Datei an Hermes attachen (WS-RPC)
         async function attachFileToHermes(pf) {
+            addMsg('system', '📎 Hänge Datei an Hermes an: ' + pf.name);
             if (!ws || ws.readyState !== WebSocket.OPEN) {
-                console.warn('[Atlas] WS nicht offen, kann Datei nicht attachen');
+                addMsg('system', '❌ Keine Verbindung zu Hermes — Datei konnte nicht übertragen werden');
                 return false;
             }
             const isImage = pf.type.startsWith('image/');
@@ -1078,6 +1100,7 @@
                 delete params.content_base64;
             }
             console.log('[Atlas] Hermes attach:', method, pf.name);
+            addMsg('system', '📤 Übertrage ' + pf.name + ' an Hermes (' + method + ') …');
             return new Promise((resolve) => {
                 const attachRpcId = sendRpc(method, params);
                 // Antwort wird von onmessage behandelt
@@ -1085,15 +1108,22 @@
                 const checkAttach = setInterval(() => {
                     if (pendingAttachResponses[attachRpcId]) {
                         clearInterval(checkAttach);
-                        resolve(pendingAttachResponses[attachRpcId]);
+                        const resp = pendingAttachResponses[attachRpcId];
+                        if (resp && (resp.attached || resp.count !== undefined)) {
+                            addMsg('system', '✅ ' + pf.name + ' bei Hermes registriert');
+                        } else {
+                            addMsg('system', '⚠️ Unerwartete Antwort für ' + pf.name + ': ' + JSON.stringify(resp).substring(0, 150));
+                        }
+                        resolve(resp);
                     }
                 }, 100);
-                // Timeout nach 5s
+                // Timeout nach 8s
                 setTimeout(() => {
                     clearInterval(checkAttach);
+                    addMsg('system', '⏱️ Timeout bei Übertragung von ' + pf.name + ' — Hermes hat nicht geantwortet!');
                     console.warn('[Atlas] Attach-Timeout:', pf.name);
                     resolve(null);
-                }, 5000);
+                }, 8000);
             });
         }
         let pendingAttachResponses = {};
@@ -1167,100 +1197,6 @@
         }
 
         // ---------------------------------------------------------------- Chat
-        function sendMessage(text) {
-            if (!text.trim() && pendingFiles.length === 0) return;
-            if (!hermesSessionId) return;
-            
-            // Zuerst Nachricht SOFORT im Chat anzeigen (wie bisher)
-            const userBubble = addMsg('user', text || pendingFiles.map(f => f.name).join(', '));
-            userBubble.classList.add('upload-bubble');
-            
-            // Anhänge hochladen (parallel, asynchron)
-            let uploadPromises = [];
-            let fileIds = [];
-            
-            if (pendingFiles.length > 0) {
-                for (let i = 0; i < pendingFiles.length; i++) {
-                    const pf = pendingFiles[i];
-                    if (!pf.id) {
-                        const fd = new FormData();
-                        fd.append('file', pf.file);
-                        uploadPromises.push(
-                            fetch('/api/upload', { method: 'POST', body: fd })
-                                .then(r => r.json())
-                                .then(j => {
-                                    if (j.status === 'ok') {
-                                        pf.id = j.file_id;
-                                        fileIds.push(j.file_id);
-                                    } else {
-                                        console.error('[Atlas] Upload fehlgeschlagen:', j.message);
-                                    }
-                                })
-                                .catch(err => {
-                                    console.error('[Atlas] Upload fehlgeschlagen:', err);
-                                })
-                        );
-                    } else {
-                        fileIds.push(pf.id);
-                    }
-                }
-            }
-
-            // Wenn Anhänge hochgeladen wurden, dann an Hermes senden
-            if (uploadPromises.length > 0) {
-                Promise.all(uploadPromises).then(() => {
-                    // Vorschau im Chat anzeigen
-                    if (pendingFiles.length > 0) {
-                        // Bestehende Nachricht aktualisieren mit Vorschau
-                        const msgText = text || pendingFiles.map(f => f.name).join(', ');
-                        const attachmentsHtml = pendingFiles.map(pf => {
-                            if (pf.isImage && pf.previewUrl) {
-                                return `<div style="margin-top:6px;">
-                                    <img src="${pf.previewUrl}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;">
-                                    <div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${pf.filename || pf.name}</div>
-                                </div>`;
-                            } else {
-                                return `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;">
-                                    <span style="font-size:20px;">📄</span>
-                                    <span style="font-size:13px;color:var(--text);">${pf.filename || pf.name}</span>
-                                </div>`;
-                            }
-                        }).join('');
-                        
-                        // Erste Zeile (Text) beibehalten, Anhänge anhängen
-                        const msgSpan = userBubble.querySelector('span');
-                        if (msgText) {
-                            msgSpan.textContent = msgText;
-                        }
-                        // Anhänge nach dem Text anhängen
-                        const attachmentsDiv = document.createElement('div');
-                        attachmentsDiv.innerHTML = attachmentsHtml;
-                        userBubble.appendChild(attachmentsDiv);
-                    }
-                    
-                    if (text.trim()) {
-                        sendRpc('prompt.submit', { session_id: hermesSessionId, text: text, attachments: fileIds });
-                    }
-                    // Nach Senden aufräumen
-                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
-                    pendingFiles = [];
-                    renderFilePreviews();
-                    $('input').value = '';
-                }).catch(err => {
-                    console.error('[Atlas] Upload-Fehler:', err);
-                    // Auch bei Fehler aufräumen
-                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
-                    pendingFiles = [];
-                    renderFilePreviews();
-                    $('input').value = '';
-                });
-            } else {
-                // Nur Text, keine Anhänge -> direkt senden
-                sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
-                $('input').value = '';
-            }
-        }
-
         $('input').addEventListener('keydown', e => {
             if (e.key === 'Enter') { sendMessage($('input').value); $('input').value = ''; }
         });
