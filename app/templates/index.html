@@ -173,9 +173,15 @@
         </header>
         <div id="setupBanner" class="banner hidden">⚠️ Noch keine Hermes-Instanz verbunden — bitte in den <a id="bannerLink">Einstellungen</a> einrichten.</div>
         <div id="messages"></div>
-        <div id="composer">
-            <input id="input" type="text" placeholder="Nachricht an Atlas..." autocomplete="off" enterkeyhint="send">
-            <button data-action="send">➤</button>
+        <div id="composer" style="flex-direction:column; padding: 10px;">
+            <!-- Datei-Vorschau -->
+            <div id="filePreview" style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;"></div>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <input id="input" type="text" placeholder="Nachricht an Atlas..." autocomplete="off" enterkeyhint="send" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:15px; padding:10px 14px; outline:none;">
+                <input id="fileInput" type="file" hidden multiple>
+                <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; font-size:18px;">📎</button>
+                <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
+            </div>
         </div>
     </div>
 
@@ -902,6 +908,117 @@
             const msgs = pendingMessages.splice(0);
             for (const text of msgs) {
                 sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+            }
+        }
+
+        // ---------------------------------------------------------------- Upload
+        let pendingFiles = []; // {id, name, previewUrl, type}
+
+        $('attachBtn').addEventListener('click', () => $('fileInput').click());
+        $('fileInput').addEventListener('change', e => {
+            const files = e.target.files;
+            if (!files.length) return;
+            for (const f of files) {
+                const url = URL.createObjectURL(f);
+                const isImage = f.type.startsWith('image/');
+                pendingFiles.push({
+                    id: null, // wird nach Upload gesetzt
+                    name: f.name,
+                    previewUrl: url,
+                    type: f.type,
+                    isImage: isImage,
+                    file: f
+                });
+            }
+            renderFilePreviews();
+            // Reset, damit gleiche Datei erneut wählbar ist
+            $('fileInput').value = '';
+        });
+
+        function renderFilePreviews() {
+            const box = $('filePreview');
+            box.innerHTML = '';
+            pendingFiles.forEach((pf, idx) => {
+                const el = document.createElement('div');
+                el.style.cssText = 'display:flex; align-items:center; gap:6px; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:12px; font-size:13px; color:var(--text); max-width:200px;';
+                
+                if (pf.isImage && pf.previewUrl) {
+                    const img = document.createElement('img');
+                    img.src = pf.previewUrl;
+                    img.style.cssText = 'width:32px; height:32px; object-fit:cover; border-radius:6px;';
+                    el.appendChild(img);
+                } else {
+                    const icon = document.createElement('span');
+                    icon.textContent = '📄';
+                    icon.style.cssText = 'font-size:20px;';
+                    el.appendChild(icon);
+                }
+
+                const span = document.createElement('span');
+                span.textContent = pf.name;
+                span.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+                el.appendChild(span);
+
+                const del = document.createElement('button');
+                del.textContent = '✕';
+                del.style.cssText = 'background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; padding:0 4px;';
+                del.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    pendingFiles.splice(idx, 1);
+                    URL.revokeObjectURL(pf.previewUrl);
+                    renderFilePreviews();
+                });
+                el.appendChild(del);
+
+                box.appendChild(el);
+            });
+        }
+
+        // ---------------------------------------------------------------- Chat
+        function sendMessage(text) {
+            if (!text.trim() && pendingFiles.length === 0) return;
+            if (!hermesSessionId) return;
+            
+            // Anhänge hochladen
+            const promises = [];
+            const fileIds = [];
+            
+            for (const pf of pendingFiles) {
+                if (!pf.id) {
+                    const fd = new FormData();
+                    fd.append('file', pf.file);
+                    promises.push(
+                        fetch('/api/upload', { method: 'POST', body: fd })
+                            .then(r => r.json())
+                            .then(j => {
+                                pf.id = j.file_id;
+                                fileIds.push(pf.id);
+                            })
+                    );
+                } else {
+                    fileIds.push(pf.id);
+                }
+            }
+
+            // Wenn Anhänge hochgeladen werden, warten, dann senden
+            if (promises.length > 0) {
+                Promise.all(promises).then(() => {
+                    if (text.trim()) {
+                        sendRpc('prompt.submit', { session_id: hermesSessionId, text: text, attachments: fileIds });
+                    }
+                    // Nach Senden aufräumen
+                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
+                    pendingFiles = [];
+                    renderFilePreviews();
+                    $('input').value = '';
+                }).catch(err => {
+                    showToast('Fehler beim Hochladen: ' + err.message);
+                });
+            } else {
+                if (text.trim()) {
+                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+                }
+                $('input').value = '';
             }
         }
 

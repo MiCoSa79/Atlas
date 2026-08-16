@@ -583,6 +583,32 @@ def main():
 
     print("18) Admin-Rechte-Tests abgeschlossen ✓")
 
+    # ---------------------------------------------------------------- Datei-Upload (Schritt 19)
+    print("19) Datei-Upload testen")
+    # Datei erstellen
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    test_file_path = os.path.join(test_dir, "test_upload.txt")
+    with open(test_file_path, "w") as f:
+        f.write("Atlas Testdatei für Upload-Etappen")
+    
+    # Datei hochladen (multipart/form-data)
+    import requests
+    upload_url = f"{BASE}/api/upload"
+    with open(test_file_path, "rb") as f:
+        r = requests.post(upload_url, files={"file": ("test_upload.txt", f)}, cookies=jar)
+    try:
+        j = r.json()
+    except Exception:
+        j = {"message": r.text[:200]}
+    print("19) POST /api/upload:", r.status_code, j)
+    ok = r.status_code == 200 and j.get("status") == "ok"
+    if not ok:
+        failures.append("upload")
+    
+    # Datei aufräumen
+    os.remove(test_file_path)
+    print("19) Datei-Upload-Test abgeschlossen ✓")
+
     print("-" * 50)
     if failures:
         print("ERGEBNIS: FEHLGESCHLAGEN ->", ", ".join(failures))

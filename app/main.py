@@ -9,27 +9,32 @@ Läuft im Container unter /app, Datenbank in /data/atlas.db (Volume).
 """
 import asyncio
 import base64
+import aiohttp
+import bcrypt
 import json
 import os
 import secrets
+import shutil
 import sqlite3
 import time
+import uuid
 from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
 
-import aiohttp
-import bcrypt
 import pyotp
 import qrcode
 from qrcode.image.svg import SvgPathImage
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
-from fastapi import FastAPI, Form, Request, WebSocket
+from fastapi import FastAPI, Form, Request, UploadFile, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 DB_PATH = os.environ.get("ATLAS_DB", "/data/atlas.db")
+UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")
 SESSION_COOKIE = "atlas_session"
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # ---------------------------------------------------------------- Datenbank
@@ -725,6 +730,36 @@ async def admin_delete_user(user_id: int, request: Request):
     conn.commit()
     conn.close()
     return JSONResponse({"status": "ok"})
+
+
+# ---------------------------------------------------------------- Datei-Upload
+
+@app.post("/api/upload")
+async def api_upload(request: Request, file: UploadFile):
+    """Speichert eine Datei lokal und gibt eine interne ID zurück."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    if file.filename is None or file.filename == "":
+        return JSONResponse({"status": "error", "message": "Kein Dateiname"}, status_code=400)
+    
+    # Datei-ID generieren
+    file_id = uuid.uuid4().hex
+    ext = os.path.splitext(file.filename)[1] or ".bin"
+    save_path = os.path.join(UPLOAD_DIR, f"{file_id}{ext}")
+    
+    try:
+        # Datei schreiben
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        return JSONResponse({
+            "status": "ok",
+            "file_id": file_id,
+            "filename": file.filename,
+            "path": save_path
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 # ---------------------------------------------------------------- Session-REST-Endpoints
