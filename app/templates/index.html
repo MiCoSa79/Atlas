@@ -979,7 +979,11 @@
             if (!text.trim() && pendingFiles.length === 0) return;
             if (!hermesSessionId) return;
             
-            // Anhänge hochladen
+            // Zuerst Nachricht SOFORT im Chat anzeigen (wie bisher)
+            const userBubble = addMessage('user', text || '📎 ' + pendingFiles.map(f => f.name).join(', '));
+            userBubble.classList.add('upload-bubble');
+            
+            // Anhänge hochladen (parallel, asynchron)
             const promises = [];
             const fileIds = [];
             
@@ -993,6 +997,11 @@
                             .then(j => {
                                 pf.id = j.file_id;
                                 fileIds.push(pf.id);
+                                return true;
+                            })
+                            .catch(err => {
+                                console.error('[Atlas] Upload fehlgeschlagen:', err);
+                                return false;
                             })
                     );
                 } else {
@@ -1000,24 +1009,24 @@
                 }
             }
 
-            // Wenn Anhänge hochgeladen werden, warten, dann senden
+            // Wenn Anhänge hochgeladen wurden, dann an Hermes senden
             if (promises.length > 0) {
                 Promise.all(promises).then(() => {
+                    const success = promises.some(p => p); // Prüfen ob mindestens einer erfolgreich
                     if (text.trim()) {
                         sendRpc('prompt.submit', { session_id: hermesSessionId, text: text, attachments: fileIds });
+                    } else if (!success) {
+                        showToast('⚠️ Hochladen fehlgeschlagen');
                     }
                     // Nach Senden aufräumen
                     pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
                     pendingFiles = [];
                     renderFilePreviews();
                     $('input').value = '';
-                }).catch(err => {
-                    showToast('Fehler beim Hochladen: ' + err.message);
                 });
             } else {
-                if (text.trim()) {
-                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
-                }
+                // Nur Text, keine Anhänge -> direkt senden
+                sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
                 $('input').value = '';
             }
         }
