@@ -813,6 +813,7 @@
         let leaseWaitBubble = null;   // dauerhafte System-Bubble statt Toast
         let leaseWaitStart = 0;       // Startzeit in ms
         let leaseWaitTimer = null;    // Intervall für Sekundenzähler
+        let leaseWaitRpcId = null;    // RPC-ID für Interrupt-Anfrage
 
         // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
         // mit Sekundenzähler und "Unterbrechen"-Button (session.interrupt).
@@ -828,7 +829,7 @@
                     btn.disabled = true;
                     btn.textContent = '⏹ Unterbrechung angefordert…';
                     console.log('[Atlas] session.interrupt gesendet für', hermesSessionId);
-                    sendRpc('session.interrupt', { session_id: hermesSessionId });
+                    leaseWaitRpcId = sendRpc('session.interrupt', { session_id: hermesSessionId });
                 };
                 leaseWaitBubble.appendChild(btn);
                 // Sekundenzähler in der Meta-Zeile
@@ -980,14 +981,21 @@
                     return;
                 }
                 // RPC-Antworten (keine Events): Attach-Responses speichern,
-                // OHNE sie an der 'event'-Hürde scheitern zu lassen.
-                // WICHTIG: image.attach_bytes/pdf.attach/file.attach antworten
-                // mit {"id":X,"result":{...}} — kein method-Feld → würden sonst
-                // bei 'frame.method !== event' verworfen und nie in
-                // pendingAttachResponses landen → falscher Timeout im Frontend.
-                if (frame.id !== undefined && !frame.method) {
-                    console.log('[Atlas] RPC response captured: id=' + frame.id + ', result=' + JSON.stringify(frame.result).substring(0, 100));
-                    if (frame.error) {
+                                // OHNE sie an der 'event'-Hürde scheitern zu lassen.
+                                // WICHTIG: image.attach_bytes/pdf.attach/file.attach antworten
+                                // mit {"id":X,"result":{...}} — kein method-Feld → würden sonst
+                                // bei 'frame.method !== event' verworfen und nie in
+                                // pendingAttachResponses landen → falscher Timeout im Frontend.
+                                // AUCH: session.interrupt Antworten behandeln → Lease-Bubble schließen.
+                                if (frame.id !== undefined && !frame.method) {
+                                    console.log('[Atlas] RPC response captured: id=' + frame.id + ', result=' + JSON.stringify(frame.result).substring(0, 100));
+                                    // Lease-Interrupt erfolgreich? Bubble sofort entfernen!
+                                    if (frame.id === leaseWaitRpcId) {
+                                        leaseWaitRpcId = null;
+                                        clearLeaseWait('⏹ Unterbrechung erfolgreich');
+                                        return;
+                                    }
+                                    if (frame.error) {
                         pendingAttachResponses[frame.id] = { error: frame.error };
                     } else if (frame.result) {
                         pendingAttachResponses[frame.id] = frame.result;
