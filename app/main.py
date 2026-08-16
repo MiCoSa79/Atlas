@@ -991,15 +991,15 @@ async def local_file_download(request: Request):
     # Sicherheitscheck: nur Dateinamen ohne Path-Traversal
     safe_filename = os.path.basename(filename)
     
-    # 1. Suche zuerst im lokalen Atlas-Upload-Verzeichnis
-    file_path = os.path.join(UPLOAD_DIR, safe_filename)
-    
-    # 2. Wenn nicht gefunden, suche im gemeinsamen Hermes-Pfad
-    if not os.path.exists(file_path):
-        hermes_shared_path = os.path.join(HERMES_SHARED_DIR, safe_filename)
-        if os.path.exists(hermes_shared_path):
-            file_path = hermes_shared_path
-            print(f"[LocalFiles] Gefunden im Hermes-Gemeinsam-Pfad: {file_path}")
+    # 1. Suche zuerst im gemeinsamen Hermes-Upload-Verzeichnis (Volume-Mount)
+    #    Damit Atlas generierte Dateien (PDFs, etc.) sofort aus dem Hermes-Ordner nutzt.
+    hermes_shared_path = os.path.join(HERMES_SHARED_DIR, safe_filename)
+    if os.path.exists(hermes_shared_path):
+        file_path = hermes_shared_path
+        print(f"[LocalFiles] Gefunden im gemeinsamen Hermes-Pfad: {file_path}")
+    else:
+        # 2. Fallback: Suche im lokalen Atlas-Upload-Verzeichnis (Cache)
+        file_path = os.path.join(UPLOAD_DIR, safe_filename)
     
     # 3. Wenn immer noch nicht gefunden, lade vom Hermes-Server über Proxy
     if not os.path.exists(file_path):
