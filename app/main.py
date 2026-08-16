@@ -934,6 +934,32 @@ async def proxy_file_download(request: Request):
                                 headers={"Content-Disposition": f'attachment; filename="{path.split("/")[-1]}"'})
 
 
+# ---------------------------------------------------------------- Lokale Datei-Download (Atlas-Uploads)
+
+@app.get("/api/local-files/download")
+async def local_file_download(request: Request):
+    """Streamt eine lokale Datei aus dem Atlas-Upload-Verzeichnis.
+    Ermöglicht Download von generierten Dateien (PDFs, etc.) direkt im Chat."""
+    user = session_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Nicht angemeldet")
+    filename = request.query_params.get("filename", "")
+    if not filename:
+        raise HTTPException(status_code=400, detail="Kein Dateiname angegeben")
+    # Sicherheitscheck: nur Dateinamen ohne Path-Traversal
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+    # MIME-Type ermitteln
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+    from fastapi.responses import FileResponse
+    return FileResponse(file_path, filename=safe_filename, media_type=mime_type)
+
+
 @app.websocket("/ws")
 async def websocket_proxy(ws: WebSocket):
     await ws.accept()
