@@ -1308,19 +1308,41 @@
         // MEDIA:-Zeile allein in einer Zeile (wie die Desktop-App):
         //   MEDIA:/opt/data/uploads/datei.pdf
         const MEDIA_LINE_RE = /(^|\n)[\t ]*[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?[\t ]*(\n|$)/g;
-        // MEDIA:-Tag inline im Text:
-        //   … hier ist die Datei: MEDIA:/opt/data/uploads/datei.pdf …
-        const MEDIA_TAG_RE = /[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?/g;
+        // MEDIA:-Tag inline — WICHTIG: kein /g-Flag! Wird pro Aufruf neu erstellt
+        // um lastIndex-Problem zu vermeiden.
+        function makeMediaTagRe() {
+            return /[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?/;
+        }
 
-        function unquoteMediaPath(value) {
-            const trimmed = String(value || '').trim();
-            const q = trimmed[0];
-            return q && q === trimmed.charAt(trimmed.length - 1) && ['"', "'", '`'].includes(q)
-                ? trimmed.slice(1, -1) : trimmed;
+                function unquoteMediaPath(value) {
+            let trimmed = String(value || '').trim();
+            // 1) Echte umschließende Quotes zuerst entfernen (z.B.
+            //    `MEDIA:/pfad/datei.pdf` oder MEDIA:'/pfad/datei.pdf') —
+            //    sonst würde das schließende Hochkomma als Satzzeichen gefressen.
+            if (trimmed.length > 1) {
+                const q = trimmed[0];
+                if ((q === '"' || q === "'" || q === '`') && q === trimmed.charAt(trimmed.length - 1)) {
+                    trimmed = trimmed.slice(1, -1);
+                }
+            }
+            // 2) Abschließende Zeichensetzung entfernen (.,!?;'") — der Agent
+            //    setzt diese nach dem Pfad, z.B. "datei.pdf'" oder "datei.pdf."
+            const trail = "[.,!'?:;\"]";
+            while (trimmed.length > 0 && trail.indexOf(trimmed.charAt(trimmed.length - 1)) >= 0) {
+                trimmed = trimmed.slice(0, -1);
+            }
+            return trimmed;
         }
 
         // Durchsucht den Text einer Nachricht nach MEDIA:-Tags und hängt für
         // jeden Pfad einen klickbaren Download-Button an die Bubble an.
+        // Nur echte Dateipfade sind gültige Downloads (wie Desktop-App isFileMediaPath()):
+        // absoluter Unix-Pfad (/opt/data/...), http(s)-URL, ~/ oder file:-URI.
+        // Erklär-Texte des Agents wie „MEDIA:`~Tag`“ werden damit NICHT zu Buttons.
+        function isValidMediaPath(p) {
+            return /^(?:https?:|file:|\/|~\/)/i.test(p) && !/\s/.test(p);
+        }
+
         function renderMediaDownloads(bubble, rawText) {
             if (!bubble || !rawText || !rawText.includes('MEDIA:')) return;
             const span = bubble.querySelector('span');
@@ -1328,15 +1350,16 @@
 
             const paths = [];
             // 1) MEDIA:-Zeilen entfernen und Pfade sammeln
-            let text = rawText.replace(MEDIA_LINE_RE, (_m, _lead, value, _trailer) => {
+            let text = rawText.replace(MEDIA_LINE_RE, (_m, _lead, value) => {
                 const p = unquoteMediaPath(value);
-                if (p) paths.push(p);
+                if (p && isValidMediaPath(p)) paths.push(p);
                 return '\n';
             });
             // 2) Inline-MEDIA:-Tags entfernen und Pfade sammeln
-            text = text.replace(MEDIA_TAG_RE, (_m, value) => {
+            const tagRe = makeMediaTagRe();
+            text = text.replace(tagRe, (_m, value) => {
                 const p = unquoteMediaPath(value);
-                if (p) paths.push(p);
+                if (p && isValidMediaPath(p)) paths.push(p);
                 return '';
             });
 
