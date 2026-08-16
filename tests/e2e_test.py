@@ -609,6 +609,53 @@ def main():
     os.remove(test_file_path)
     print("19) Datei-Upload-Test abgeschlossen ✓")
 
+    # ---------------------------------------------------------------- Anzeige-Einstellungen (Schritt 20)
+    print("20) Anzeige-Einstellungen: show_reasoning / show_status")
+    st, j = get_json("/api/profile", jar)
+    sr = j.get("show_reasoning", 1)
+    ss = j.get("show_status", 1)
+    print("20) Default: show_reasoning =", sr, "| show_status =", ss)
+    ok = sr == 1 and ss == 1
+    if not ok:
+        failures.append("profile_defaults")
+
+    # a) Beide ausschalten
+    d = urllib.parse.urlencode({
+        "hermes_url": "", "hermes_user": "", "hermes_pass": "",
+        "hermes_profile": "", "show_reasoning": "0", "show_status": "0"
+    })
+    req = urllib.request.Request(f"{BASE}/api/profile", data=d.encode(),
+                                 method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    with opener.open(req, timeout=20) as r:
+        r.read()
+    st, j = get_json("/api/profile", jar)
+    sr2 = j.get("show_reasoning", 1)
+    ss2 = j.get("show_status", 1)
+    ok = sr2 == 0 and ss2 == 0
+    print("20a) Beide aus:", sr2, ss2)
+    if not ok:
+        failures.append("profile_disable")
+
+    # b) Beide wieder einschalten (Cleanup)
+    d2 = urllib.parse.urlencode({
+        "hermes_url": "", "hermes_user": "", "hermes_pass": "",
+        "hermes_profile": "", "show_reasoning": "1", "show_status": "1"
+    })
+    req2 = urllib.request.Request(f"{BASE}/api/profile", data=d2.encode(),
+                                   method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+    opener2 = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    with opener2.open(req2, timeout=20) as r2:
+        r2.read()
+    st, j = get_json("/api/profile", jar)
+    sr3 = j.get("show_reasoning", 1)
+    ss3 = j.get("show_status", 1)
+    print("20b) Cleanup beide an:", sr3, ss3)
+    ok = sr3 == 1 and ss3 == 1
+    if not ok:
+        failures.append("profile_cleanup")
+    print("20) Anzeige-Einstellungen abgeschlossen ✓")
+
     print("-" * 50)
     if failures:
         print("ERGEBNIS: FEHLGESCHLAGEN ->", ", ".join(failures))

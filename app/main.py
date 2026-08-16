@@ -66,6 +66,14 @@ def init_db():
     except Exception:
         pass
     try:
+        conn.execute("ALTER TABLE users ADD COLUMN show_reasoning INTEGER DEFAULT 1")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN show_status INTEGER DEFAULT 1")
+    except Exception:
+        pass
+    try:
         conn.execute("ALTER TABLE users ADD COLUMN otp_secret TEXT")
     except Exception:
         pass
@@ -150,6 +158,8 @@ def user_hermes_info(user: dict) -> dict:
         "hermes_auth_set": bool(auth),
         "hermes_configured": bool(user.get("hermes_url") and auth),
         "hermes_profile": user.get("hermes_profile") or "",
+        "show_reasoning": user.get("show_reasoning") if user.get("show_reasoning") is not None else 1,
+        "show_status": user.get("show_status") if user.get("show_status") is not None else 1,
     }
 
 
@@ -531,7 +541,9 @@ async def api_profile_save(request: Request,
                            hermes_url: str = Form(""),
                            hermes_user: str = Form(""),
                            hermes_pass: str = Form(""),
-                           hermes_profile: str = Form("")):
+                           hermes_profile: str = Form(""),
+                           show_reasoning: str = Form(""),
+                           show_status: str = Form("")):
     user = session_from_request(request)
     if not user:
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
@@ -559,9 +571,30 @@ async def api_profile_save(request: Request,
     if not hermes_url:
         new_auth = None
 
-    conn.execute("UPDATE users SET hermes_url = ?, hermes_auth = ?, hermes_profile = ? WHERE id = ?",
-                 (hermes_url or None, new_auth, hermes_profile.strip() if hermes_profile else None, user["user_id"]))
-    conn.commit()
+    # Nur übergebene Felder aktualisieren
+    sets = []
+    values = []
+    if hermes_url != "":
+        sets.append("hermes_url = ?")
+        values.append(hermes_url or None)
+    if hermes_user or hermes_pass:
+        sets.append("hermes_auth = ?")
+        values.append(new_auth)
+    if hermes_profile != "":
+        sets.append("hermes_profile = ?")
+        values.append(hermes_profile.strip() if hermes_profile else None)
+    if show_reasoning != "":
+        sets.append("show_reasoning = ?")
+        values.append(1 if show_reasoning == "1" else 0)
+    if show_status != "":
+        sets.append("show_status = ?")
+        values.append(1 if show_status == "1" else 0)
+
+    if sets:
+        sql = f"UPDATE users SET {', '.join(sets)} WHERE id = ?"
+        values.append(user["user_id"])
+        conn.execute(sql, values)
+        conn.commit()
     conn.close()
 
     # Nach dem Speichern: Verbindung sofort testen, damit der Nutzer weiß, ob es klappt

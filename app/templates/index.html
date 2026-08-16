@@ -203,6 +203,16 @@
             <select id="p_profile" style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;outline:none;appearance:none;">
                 <option value="">Standard (default)</option>
             </select>
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text);margin-bottom:8px;">
+                    <input type="checkbox" id="p_show_reasoning" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;">
+                    Agent-Denken (💭 Reasoning) anzeigen
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text);">
+                    <input type="checkbox" id="p_show_status" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;">
+                    Statuszeilen (z. B. „warte auf Modell…") anzeigen
+                </label>
+            </div>
             <button id="saveProfile">Speichern</button>
             <button id="closeSettings" class="ghost">Schließen</button>
             <p class="status-ok" id="profileStatus"></p>
@@ -459,6 +469,8 @@
         let selectedProfile = '';
         let isAdminUser = false;
         let pending2faToken = null;  // Token aus 2FA-Stufe 1 (Login) bis zur Code-Bestätigung
+        let showReasoning = true;     // pro Benutzer einstellbar
+        let showStatus = true;        // pro Benutzer einstellbar
         function openSettings() {
             $('profileStatus').textContent = '';
             $('profileError').textContent = '';
@@ -487,6 +499,10 @@
                         $('p_user').value = d.hermes_user || '';
                         $('p_pass').value = '';
                         selectedProfile = d.hermes_profile || '';
+                        showReasoning = (d.show_reasoning !== undefined) ? !!d.show_reasoning : true;
+                        showStatus = (d.show_status !== undefined) ? !!d.show_status : true;
+                        $('p_show_reasoning').checked = showReasoning;
+                        $('p_show_status').checked = showStatus;
                     }
                 })
                 .catch(() => {});
@@ -718,6 +734,8 @@
             d.set('hermes_user', $('p_user').value.trim());
             d.set('hermes_pass', $('p_pass').value);
             d.set('hermes_profile', $('p_profile').value);
+            d.set('show_reasoning', $('p_show_reasoning').checked ? '1' : '0');
+            d.set('show_status', $('p_show_status').checked ? '1' : '0');
             try {
                 const r = await fetch('/api/profile', { method: 'POST', body: d });
                 const j = await r.json().catch(() => ({}));
@@ -872,7 +890,7 @@
                 if (frame.method !== 'event') return;
                 const p = frame.params || {};
                 // "Denken" des Agenten (Reasoning) — kompakte, gedimmte Box vor der Antwort
-                if (p.type === 'reasoning.delta' && p.payload && p.payload.text) {
+                if (p.type === 'reasoning.delta' && p.payload && p.payload.text && showReasoning) {
                     if (!bubble) {
                         if (!thinkingBubble) {
                             thinkingBubble = addMsg('thinking', '💭 ' + p.payload.text);
@@ -887,7 +905,7 @@
                     return;
                 }
                 // Statuszeilen ("warte auf Modell…") — kleine zentrierte Zeile
-                if (p.type === 'thinking.delta' && p.payload && p.payload.text) {
+                if (p.type === 'thinking.delta' && p.payload && p.payload.text && showStatus) {
                     if (!statusBubble) statusBubble = addMsg('status', p.payload.text);
                     else statusBubble.querySelector('span').textContent = p.payload.text;
                     messagesDiv.scrollTop = messagesDiv.scrollHeight;
