@@ -1117,12 +1117,18 @@
             addMsg('system', '📤 Übertrage ' + pf.name + ' an Hermes (' + method + ') …');
             return new Promise((resolve) => {
                 const attachRpcId = sendRpc(method, params);
+                let settled = false;  // verhindert doppeltes resolve + Timeout nach Erfolg
                 // Antwort wird von onmessage behandelt
                 // Wir warten kurz auf die Antwort
                 const checkAttach = setInterval(() => {
+                    if (settled) return;
                     if (pendingAttachResponses[attachRpcId]) {
+                        settled = true;
                         clearInterval(checkAttach);
+                        clearTimeout(timeoutTimer);  // ← Timer stoppen, sonst kommt
+                        // trotz Erfolg die Timeout-Meldung!
                         const resp = pendingAttachResponses[attachRpcId];
+                        delete pendingAttachResponses[attachRpcId]; // aufräumen
                         if (resp && (resp.attached || resp.count !== undefined)) {
                             addMsg('system', '✅ ' + pf.name + ' bei Hermes registriert');
                         } else {
@@ -1131,8 +1137,10 @@
                         resolve(resp);
                     }
                 }, 100);
-                // Timeout nach 8s
-                setTimeout(() => {
+                // Timeout nach 8s — wird bei erhaltener Antwort gecancelt
+                const timeoutTimer = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
                     clearInterval(checkAttach);
                     addMsg('system', '⏱️ Timeout bei Übertragung von ' + pf.name + ' — Hermes hat nicht geantwortet!');
                     console.warn('[Atlas] Attach-Timeout:', pf.name);
