@@ -1146,11 +1146,16 @@ const isNearBottom3 = messagesDiv.scrollHeight - messagesDiv.scrollTop - message
             const userBubble = addMsg('user', displayName);
             userBubble.classList.add('upload-bubble');
             
+            // Beim Senden IMMER ans Ende springen (aktives Aktion — User will
+            // seine Nachricht + die Antwort sehen). (v0.0.71)
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
             // Vorschau NUR hier anhängen (einmalig!)
             if (pendingFiles.length > 0) {
                 const attachmentsDiv = document.createElement('div');
                 attachmentsDiv.innerHTML = attachmentsHtml;
                 userBubble.appendChild(attachmentsDiv);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
             }
             
             // Anhänge an Hermes attachen (WS-RPC)
