@@ -948,7 +948,13 @@
                         messagesDiv.innerHTML = '';
                         frame.result.messages.forEach(m => {
                             if (m.role === 'user' || m.role === 'assistant') {
-                                const mm = addMsg(m.role, m.text || '');
+                                let displayText = m.text || '';
+                                // User-Nachrichten: @image:… und [Dateiname] aus dem sichtbaren Text entfernen,
+                                // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
+                                if (m.role === 'user') {
+                                    displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
+                                }
+                                const mm = addMsg(m.role, displayText);
                                 if (m.role === 'user') restoreAttachmentPreview(mm, m.text);
                             } else if (m.role === 'tool') {
                                 addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
@@ -965,7 +971,13 @@
                     messagesDiv.innerHTML = '';
                     msgs.forEach(m => {
                         if (m.role === 'user' || m.role === 'assistant') {
-                            const mm = addMsg(m.role, m.text || '');
+                            let displayText = m.text || '';
+                            // User-Nachrichten: @image:… und [Dateiname] aus dem sichtbaren Text entfernen,
+                            // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
+                            if (m.role === 'user') {
+                                displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
+                            }
+                            const mm = addMsg(m.role, displayText);
                             if (m.role === 'user') restoreAttachmentPreview(mm, m.text);
                             const t = mm.querySelector('.meta');
                             if (m.timestamp) {
