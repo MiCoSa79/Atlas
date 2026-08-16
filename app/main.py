@@ -27,7 +27,7 @@ import qrcode
 from qrcode.image.svg import SvgPathImage
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -897,31 +897,33 @@ async def hermes_login_cookie(hermes_url: str, auth_user: str, auth_pass: str) -
 # ---------------------------------------------------------------- File-Download-Proxy
 
 async def file_generator(http, url, headers):
-    """Streamt Bytes von der Hermes-Proxy-URL an den Client.
+    """Lädt die Datei VOLLSTÄNDIG von der Hermes-Proxy-URL.
 
-    Gibt (status, content_type, chunk-generator) zurück — der Status wird
-    geprüft, damit Fehler von Hermes nicht als „erfolgreicher“ 200-Download
-    mit kaputtem Body beim Nutzer ankommen.
+    Gibt (status, content_type, bytes) zurück — der Status wird geprüft,
+    damit Fehler von Hermes nicht als „erfolgreicher“ 200-Download mit
+    kaputtem Body beim Nutzer ankommen.
+
+    WICHTIG (v0.0.67-Fix): Vorher wurde ein LAZY Chunk-Generator zurückgegeben,
+    dessen `async with http.get(...)`-Kontext bereits geschlossen war, sobald
+    file_generator() zurückkehrte. StreamingResponse konsumierte den Generator
+    erst danach → die Hermes-Verbindung war zu, der Stream brach mitten in der
+    Datei ab (IncompleteRead) → Downloads ankamen abgeschnitten/korrupt
+    („Acrobat Reader: Datei ist fehlerhaft“). Jetzt wird die Datei komplett
+    in den Speicher geladen und als fertige Bytes zurückgegeben — für
+    Agenten-Dateien (PDFs, Bilder, Dokumente) völlig ausreichend.
     """
     try:
         async with http.get(url, headers=headers, timeout=ClientTimeout(total=60)) as resp:
             if resp.status != 200:
                 print(f"[FileProxy] Hermes-Status {resp.status} für {url}")
-                return resp.status, "text/plain", _empty_chunks()
+                return resp.status, "text/plain", b""
             content_type = resp.headers.get("Content-Type", "application/octet-stream")
-            return resp.status, content_type, _stream_chunks(resp)
+            data = await resp.read()
+            print(f"[FileProxy] OK: {len(data)} Bytes ({url})")
+            return resp.status, content_type, data
     except Exception as e:
         print(f"[FileProxy] Download error: {e}")
-        return 502, "text/plain", _empty_chunks()
-
-
-async def _stream_chunks(resp):
-    async for chunk in resp.content.iter_chunked(8192):
-        yield chunk
-
-
-async def _empty_chunks():
-    yield b""
+        return 502, "text/plain", b""
 
 
 @app.get("/api/files/download")
@@ -952,11 +954,13 @@ async def proxy_file_download(request: Request):
     proxy_url = f"{hermes_url}/api/files/download?path={quote(path, safe='/')}"
     headers = {"Cookie": cookie_header}
     async with ClientSession() as http:
-        status, content_type, gen = await file_generator(http, proxy_url, headers)
+        status, content_type, data = await file_generator(http, proxy_url, headers)
         if status != 200:
             raise HTTPException(status_code=status, detail="Hermes-Download fehlgeschlagen")
-        return StreamingResponse(
-            gen,
+        # Antwort als fertige Bytes (v0.0.67: kein lazy Streaming mehr, das
+        # wegen vorzeitig geschlossener Hermes-Verbindung abbrach)
+        return Response(
+            content=data,
             media_type=content_type,
             headers={"Content-Disposition": f'attachment; filename="{path.split("/")[-1]}"'},
         )
