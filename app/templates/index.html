@@ -1291,16 +1291,23 @@
         function restoreAttachmentPreview(userBubble, text) {
             if (!text) return;
             // Datei-Namen aus [Name1, Name2]-Block extrahieren (von sendMessage so gesendet)
-            const bracketMatch = text.match(/\[([^\]]+)\]/);
+            // ODER aus @file:/path/to/file direkt extrahieren
+            let fileName = null;
+            let bracketMatch = text.match(/\[([^\]]+)\]/);
             if (bracketMatch) {
                 // Zeige den [Dateiname]- und @image:…-Block NICHT im Bubble-Text —
                 // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
                 const cleaned = text.replace(bracketMatch[0], '').replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').trim();
                 userBubble.querySelector('span').textContent = cleaned;
+                fileName = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean)[0];
+            } else {
+                // Direkter @file:-Pfad: nur den Dateinamen am Ende extrahieren
+                const fileMatch = text.match(/@file:\s*([^\s]+\.pdf)/i);
+                if (fileMatch) {
+                    fileName = fileMatch[1].split('/').pop();
+                }
             }
-            if (!bracketMatch) return;
-            const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
-            if (!names.length) return;
+            if (!fileName) return;
             
             // Erstelle Vorschau-HTML für jede Datei (localStorage oder @file:-Pfade)
             let attachmentsHtml = '';
