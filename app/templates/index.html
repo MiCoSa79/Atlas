@@ -972,12 +972,15 @@
                 if (p.type === 'error' && p.payload && p.payload.message) {
                     showToast('Hermes: ' + p.payload.message);
                 }
+                // RPC-Antworten für Attachments speichern
+                if (frame.id && frame.result) {
+                    pendingAttachResponses[frame.id] = frame.result;
+                }
             };
         }
 
         function sendMessage(text) {
-            if (!text.trim()) return;
-            addMsg('user', text);
+            if (!text.trim() && pendingFiles.length === 0) return;
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 addMsg('system', 'Fehler: Nicht verbunden');
                 return;
@@ -987,7 +990,44 @@
                 pendingMessages.push(text);
                 return;
             }
-            sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+            
+            // Zuerst Nachricht SOFORT im Chat anzeigen (wie bisher)
+            const displayName = text || pendingFiles.map(f => f.name).join(', ');
+            addMsg('user', displayName);
+            
+            // Anhänge zuerst an Hermes attachen (WS-RPC)
+            if (pendingFiles.length > 0) {
+                let attachPromises = [];
+                for (const pf of pendingFiles) {
+                    if (pf.base64Url) {
+                        attachPromises.push(attachFileToHermes(pf));
+                    } else {
+                        console.warn('[Atlas] Datei ohne base64, wird ignoriert:', pf.name);
+                    }
+                }
+                // Warten bis alle Attachments bei Hermes ankommen
+                Promise.all(attachPromises).then(() => {
+                    // Jetzt erst prompt.submit senden
+                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+                    // Nach Senden aufräumen
+                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
+                    pendingFiles = [];
+                    renderFilePreviews();
+                    $('input').value = '';
+                }).catch(err => {
+                    console.error('[Atlas] Attach-Fehler:', err);
+                    // Auch bei Fehler die Nachricht senden
+                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
+                    pendingFiles = [];
+                    renderFilePreviews();
+                    $('input').value = '';
+                });
+            } else {
+                // Nur Text, keine Anhänge -> direkt senden
+                sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+                $('input').value = '';
+            }
         }
 
         function flushPendingMessages() {
@@ -999,22 +1039,80 @@
         }
 
         // ---------------------------------------------------------------- Upload
-        let pendingFiles = []; // {id, name, previewUrl, type}
+        let pendingFiles = []; // {id, name, previewUrl, type, base64Url}
+        
+        // Datei in base64-Daten-URL umwandeln (für Hermes RPC-Upload)
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result); // data:xxx;base64,xxx
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+        
+        // Datei an Hermes attachen (WS-RPC)
+        async function attachFileToHermes(pf) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                console.warn('[Atlas] WS nicht offen, kann Datei nicht attachen');
+                return false;
+            }
+            const isImage = pf.type.startsWith('image/');
+            const isPdf = pf.name.toLowerCase().endsWith('.pdf');
+            const method = isImage ? 'image.attach_bytes' : (isPdf ? 'pdf.attach' : 'file.attach');
+            const params = {
+                session_id: hermesSessionId,
+                content_base64: pf.base64Url.replace(/^data:[^;]+;base64,/, ''),
+                filename: pf.name,
+            };
+            if (!isPdf && !isImage && !pf.type) {
+                // Generische Dateien brauchen data_url statt content_base64
+                params.data_url = pf.base64Url;
+                delete params.content_base64;
+            }
+            console.log('[Atlas] Hermes attach:', method, pf.name);
+            return new Promise((resolve) => {
+                const attachRpcId = sendRpc(method, params);
+                // Antwort wird von onmessage behandelt
+                // Wir warten kurz auf die Antwort
+                const checkAttach = setInterval(() => {
+                    if (pendingAttachResponses[attachRpcId]) {
+                        clearInterval(checkAttach);
+                        resolve(pendingAttachResponses[attachRpcId]);
+                    }
+                }, 100);
+                // Timeout nach 5s
+                setTimeout(() => {
+                    clearInterval(checkAttach);
+                    console.warn('[Atlas] Attach-Timeout:', pf.name);
+                    resolve(null);
+                }, 5000);
+            });
+        }
+        let pendingAttachResponses = {};
 
         $('attachBtn').addEventListener('click', () => $('fileInput').click());
-        $('fileInput').addEventListener('change', e => {
+        $('fileInput').addEventListener('change', async e => {
             const files = e.target.files;
             if (!files.length) return;
             for (const f of files) {
                 const url = URL.createObjectURL(f);
                 const isImage = f.type.startsWith('image/');
+                // Datei SOFORT als base64 laden (für Hermes RPC)
+                let base64Url = null;
+                try {
+                    base64Url = await fileToBase64(f);
+                } catch (err) {
+                    console.error('[Atlas] base64-Konvertierung fehlgeschlagen:', f.name, err);
+                }
                 pendingFiles.push({
                     id: null, // wird nach Upload gesetzt
                     name: f.name,
                     previewUrl: url,
                     type: f.type,
                     isImage: isImage,
-                    file: f
+                    file: f,
+                    base64Url: base64Url,
                 });
             }
             renderFilePreviews();
