@@ -809,6 +809,62 @@
             return m;
         }
 
+        // ---- "Session von anderem Prozess benutzt" (Turn-Lease) ----
+        let leaseWaitBubble = null;   // dauerhafte System-Bubble statt Toast
+        let leaseWaitStart = 0;       // Startzeit in ms
+        let leaseWaitTimer = null;    // Intervall für Sekundenzähler
+
+        // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
+        // mit Sekundenzähler und "Unterbrechen"-Button (session.interrupt).
+        function showLeaseWait(text) {
+            if (!leaseWaitBubble) {
+                leaseWaitBubble = addMsg('system', text);
+                leaseWaitStart = Date.now();
+                const btn = document.createElement('button');
+                btn.textContent = '⏹ Unterbrechen';
+                btn.style.cssText = 'margin-top:8px;margin-right:6px;padding:6px 12px;border:1px solid #e5534b;background:rgba(229,83,75,.12);color:#e5534b;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;';
+                btn.onclick = () => {
+                    if (!hermesSessionId) return;
+                    btn.disabled = true;
+                    btn.textContent = '⏹ Unterbrechung angefordert…';
+                    console.log('[Atlas] session.interrupt gesendet für', hermesSessionId);
+                    sendRpc('session.interrupt', { session_id: hermesSessionId });
+                };
+                leaseWaitBubble.appendChild(btn);
+                // Sekundenzähler in der Meta-Zeile
+                leaseWaitTimer = setInterval(() => {
+                    const s = Math.round((Date.now() - leaseWaitStart) / 1000);
+                    const meta = leaseWaitBubble && leaseWaitBubble.querySelector('.meta');
+                    if (meta) meta.textContent = ' · wartet seit ' + s + 's';
+                }, 1000);
+            } else {
+                // Hermes wiederholt alle paar Sekunden "Still waiting…" → Text aktualisieren
+                const span = leaseWaitBubble.querySelector('span');
+                if (span) span.textContent = text;
+            }
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Beendet die Lease-Bubble: finalText gesetzt = Text ersetzen + Button entfernen,
+        // sonst Bubble als 'done' markieren.
+        function clearLeaseWait(finalText) {
+            if (leaseWaitTimer) {
+                clearInterval(leaseWaitTimer);
+                leaseWaitTimer = null;
+            }
+            if (leaseWaitBubble) {
+                if (finalText) {
+                    const span = leaseWaitBubble.querySelector('span');
+                    if (span) span.textContent = finalText;
+                    const btn = leaseWaitBubble.querySelector('button');
+                    if (btn) btn.remove();
+                } else {
+                    leaseWaitBubble.classList.add('done');
+                }
+                leaseWaitBubble = null;
+            }
+        }
+
         function sendRpc(method, params) {
             rpcId += 1;
             ws.send(JSON.stringify({ jsonrpc: "2.0", id: rpcId, method: method, params: params || {} }));
@@ -964,7 +1020,9 @@
                     return;
                 }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
-                    // Antwort beginnt → Denk-Box abschließen, Statuszeile entfernen
+                    // Antwort beginnt → Denk-Box abschließen, Statuszeile entfernen,
+                    // Lease-Warte-Bubble (falls vorhanden) ebenfalls beenden
+                    if (leaseWaitBubble) clearLeaseWait();
                     if (thinkingBubble && !bubble) {
                         thinkingBubble.classList.add('done');
                         thinkingBubble = null;
@@ -978,6 +1036,7 @@
                     messagesDiv.scrollTop = messagesDiv.scrollHeight;
                 }
                 if (p.type === 'message.complete') {
+                    if (leaseWaitBubble) clearLeaseWait();
                     if (bubble) {
                         const meta = bubble.querySelector('.meta') || document.createElement('span');
                         meta.className = 'meta';
@@ -995,7 +1054,22 @@
                     }
                 }
                 if (p.type === 'status.update' && p.payload && p.payload.text) {
-                    if (!bubble) showToast(p.payload.text);
+                    const t = p.payload.text;
+                    // Turn-Lease-Warnung ("anderer Hermes-Prozess nutzt diese Session"):
+                    // dauerhafte System-Nachricht mit Sekundenzähler + Unterbrechen-Button.
+                    if (/Hermes process/.test(t)) {
+                        if (/Stopped waiting/.test(t)) {
+                            // Interrupt wurde ausgeführt → Bubble finalisieren, KEINE neue erzeugen
+                            clearLeaseWait('⏹ ' + t);
+                        } else if (/kept this session busy too long/.test(t)) {
+                            // Endmeldung (Timeout nach 30 Min) → Bubble finalisieren
+                            clearLeaseWait('⏱️ ' + t + ' — Sende die Nachricht später erneut.');
+                        } else {
+                            showLeaseWait(t);
+                        }
+                    } else if (!bubble) {
+                        showToast(t);
+                    }
                 }
                 if (p.type === 'error' && p.payload && p.payload.message) {
                     showToast('Hermes: ' + p.payload.message);
@@ -1289,6 +1363,9 @@
             hermesSessionId = null;
             messagesDiv.innerHTML = '';
             bubble = null;
+            if (leaseWaitBubble) clearLeaseWait();   // Warte-Bubble beim Wechsel aufräumen
+            if (thinkingBubble) { thinkingBubble = null; }
+            if (statusBubble) { statusBubble = null; }
             // Anzeige-Einstellungen (Denken/Statuszeilen) frisch laden — gilt auch nach Session-Wechsel
             loadDisplaySettings();
             connectWS();
