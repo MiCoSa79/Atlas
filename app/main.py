@@ -935,11 +935,46 @@ async def proxy_file_download(request: Request):
 
 
 # ---------------------------------------------------------------- Lokale Datei-Download (Atlas-Uploads)
+# Ermöglicht Download von generierten Dateien (PDFs, etc.) direkt im Chat.
+# Wenn die Datei lokal nicht existiert, lädt Atlas sie automatisch
+# vom Hermes-Server über den bestehenden /api/files/download-Proxy.
+
+async def download_from_hermes(hermes_url, auth, filename):
+    """Lädt eine Datei vom Hermes-Server und speichert sie lokal."""
+    user, _, password = auth.partition(":")
+    cookie_header = await hermes_login_cookie(hermes_url, user, password)
+    if not cookie_header:
+        return None
+    
+    # Datei-Pfad vom Hermes-Server ermitteln (normalerweise /opt/data/images/ oder /opt/data/)
+    hermes_path = f"/opt/data/images/{filename}"
+    if not os.path.exists(hermes_path):
+        hermes_path = f"/opt/data/{filename}"
+    
+    proxy_url = f"{hermes_url.rstrip('/')}/api/files/download?path={hermes_path}"
+    headers = {"Cookie": cookie_header}
+    
+    async with ClientSession() as http:
+        try:
+            async with http.get(proxy_url, headers=headers, timeout=ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    content = await resp.read()
+                    # Datei lokal speichern
+                    save_path = os.path.join(UPLOAD_DIR, filename)
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    with open(save_path, 'wb') as f:
+                        f.write(content)
+                    return save_path
+        except Exception as e:
+            print(f"[LocalFiles] Download von Hermes fehlgeschlagen: {e}")
+    return None
+
 
 @app.get("/api/local-files/download")
 async def local_file_download(request: Request):
     """Streamt eine lokale Datei aus dem Atlas-Upload-Verzeichnis.
-    Ermöglicht Download von generierten Dateien (PDFs, etc.) direkt im Chat."""
+    Wenn Datei nicht lokal existiert, lädt Atlas sie automatisch
+    vom Hermes-Server über /api/files/download-Proxy und cached sie."""
     user = session_from_request(request)
     if not user:
         raise HTTPException(status_code=401, detail="Nicht angemeldet")
@@ -949,8 +984,22 @@ async def local_file_download(request: Request):
     # Sicherheitscheck: nur Dateinamen ohne Path-Traversal
     safe_filename = os.path.basename(filename)
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
+    
+    # Wenn Datei nicht lokal existiert, versuche von Hermes zu laden
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+        db_user = get_user_by_id(user["user_id"]) or {}
+        hermes_url = db_user.get("hermes_url") or ""
+        hermes_auth = db_user.get("hermes_auth") or ""
+        if hermes_url and hermes_auth:
+            print(f"[LocalFiles] Datei {safe_filename} nicht lokal, lade von Hermes...")
+            local_path = await download_from_hermes(hermes_url, hermes_auth, safe_filename)
+            if local_path:
+                file_path = local_path
+            else:
+                raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+        else:
+            raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+    
     # MIME-Type ermitteln
     import mimetypes
     mime_type, _ = mimetypes.guess_type(file_path)
