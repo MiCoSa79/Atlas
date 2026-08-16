@@ -34,7 +34,11 @@ DB_PATH = os.environ.get("ATLAS_DB", "/data/atlas.db")
 UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")
 SESSION_COOKIE = "atlas_session"
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Upload-Verzeichnis nur erstellen, wenn es noch nicht existiert (verhindert PermissionErrors bei nicht-root)
+try:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+except Exception:
+    pass
 
 
 # ---------------------------------------------------------------- Datenbank
