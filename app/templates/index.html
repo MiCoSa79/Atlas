@@ -813,25 +813,13 @@
         let leaseWaitBubble = null;   // dauerhafte System-Bubble statt Toast
         let leaseWaitStart = 0;       // Startzeit in ms
         let leaseWaitTimer = null;    // Intervall für Sekundenzähler
-        let leaseWaitRpcId = null;    // RPC-ID für Interrupt-Anfrage
 
         // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
-        // mit Sekundenzähler und "Unterbrechen"-Button (session.interrupt).
+        // mit Sekundenzähler (kein Unterbrechen-Button).
         function showLeaseWait(text) {
             if (!leaseWaitBubble) {
                 leaseWaitBubble = addMsg('system', text);
                 leaseWaitStart = Date.now();
-                const btn = document.createElement('button');
-                btn.textContent = '⏹ Unterbrechen';
-                btn.style.cssText = 'margin-top:8px;margin-right:6px;padding:6px 12px;border:1px solid #e5534b;background:rgba(229,83,75,.12);color:#e5534b;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;';
-                btn.onclick = () => {
-                    if (!hermesSessionId) return;
-                    btn.disabled = true;
-                    btn.textContent = '⏹ Unterbrechnung angefordert…';
-                    console.log('[Atlas] session.interrupt gesendet für', hermesSessionId);
-                    leaseWaitRpcId = sendRpc('session.interrupt', { session_id: hermesSessionId });
-                };
-                leaseWaitBubble.appendChild(btn);
                 // Sekundenzähler in der Meta-Zeile
                 leaseWaitTimer = setInterval(() => {
                     const s = Math.round((Date.now() - leaseWaitStart) / 1000);
@@ -998,15 +986,8 @@
                                 // mit {"id":X,"result":{...}} — kein method-Feld → würden sonst
                                 // bei 'frame.method !== event' verworfen und nie in
                                 // pendingAttachResponses landen → falscher Timeout im Frontend.
-                                // AUCH: session.interrupt Antworten behandeln → Lease-Bubble schließen.
                                 if (frame.id !== undefined && !frame.method) {
                                     console.log('[Atlas] RPC response captured: id=' + frame.id + ', result=' + JSON.stringify(frame.result).substring(0, 100));
-                                    // Lease-Interrupt erfolgreich? Bubble sofort entfernen!
-                                    if (frame.id === leaseWaitRpcId) {
-                                        leaseWaitRpcId = null;
-                                        clearLeaseWait('⏹ Unterbrechung erfolgreich');
-                                        return;
-                                    }
                                     if (frame.error) {
                                         pendingAttachResponses[frame.id] = { error: frame.error };
                                     } else if (frame.result) {
