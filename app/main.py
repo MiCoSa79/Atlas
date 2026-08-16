@@ -26,6 +26,7 @@ import pyotp
 import qrcode
 from qrcode.image.svg import SvgPathImage
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
+from cryptography.fernet import Fernet
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +35,86 @@ from fastapi.templating import Jinja2Templates
 DB_PATH = os.environ.get("ATLAS_DB", "/data/atlas.db")
 UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")
 SESSION_COOKIE = "atlas_session"
+# ---------------------------------------------------------------- Zugangsdaten-Verschlüsselung (v0.0.73)
+# Hermes-Zugangsdaten (hermes_auth = "user:pass") werden mit Fernet (AES-128-CBC)
+# verschlüsselt in der DB gespeichert. Der Schlüssel liegt NEBEN der DB
+# (/data/.atlas_key, chmod 600) — schützt gegen unbefugtes Lesen der DB-Datei
+# (Volume-Klau, Backup-Restore), gleiches Schutzlevel wie die DB selbst.
+# Präfix "enc:" markiert verschlüsselte Werte → idempotent: Werte werden nie
+# doppelt verschlüsselt, Alt-Klartext wird von decrypt_secret() weiterhin gelesen
+# und von migrate_hermes_auth_encryption() beim Start einmalig konvertiert.
+
+def _load_or_create_key():
+    key_path = os.path.join(os.path.dirname(DB_PATH) or ".", ".atlas_key")
+    if os.path.exists(key_path):
+        try:
+            with open(key_path, "rb") as f:
+                return f.read()
+        except Exception:
+            pass
+    key = Fernet.generate_key()
+    try:
+        with open(key_path, "wb") as f:
+            f.write(key)
+        os.chmod(key_path, 0o600)  # nur Besitzer lesbar
+        print(f"[Crypto] Neuer Schlüssel erzeugt: {key_path}")
+    except Exception as e:
+        print(f"[Crypto] Schlüssel-Speicherung fehlgeschlagen: {e}")
+    return key
+
+
+_ATLAS_KEY = _load_or_create_key()
+_ATLAS_FERNET = Fernet(_ATLAS_KEY) if _ATLAS_KEY else None
+
+
+def encrypt_secret(plain):
+    """Verschlüsselt einen Klartext-Wert. Idempotent: bereits "enc:"-Werte
+    werden unverändert zurückgegeben."""
+    if not plain or _ATLAS_FERNET is None:
+        return plain
+    if plain.startswith("enc:"):
+        return plain
+    try:
+        return "enc:" + _ATLAS_FERNET.encrypt(plain.encode("utf-8")).decode("utf-8")
+    except Exception as e:
+        print(f"[Crypto] encrypt error: {e}")
+        return plain
+
+
+def decrypt_secret(stored):
+    """Entschlüsselt einen gespeicherten Wert. Klartext-Altbestand wird
+    unverändert zurückgegeben (Migration konvertiert ihn beim Start)."""
+    if not stored or _ATLAS_FERNET is None:
+        return stored
+    if not stored.startswith("enc:"):
+        return stored
+    try:
+        return _ATLAS_FERNET.decrypt(stored[4:].encode("utf-8")).decode("utf-8")
+    except Exception as e:
+        print(f"[Crypto] decrypt error: {e}")
+        return ""  # Schlüssel weg / Daten korrupt → nicht benutzbar
+
+
+def migrate_hermes_auth_encryption():
+    """Einmalige Migration: Klartext-hermes_auth → verschlüsselt (idempotent)."""
+    try:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT id, hermes_auth FROM users WHERE hermes_auth IS NOT NULL AND hermes_auth != ''"
+        ).fetchall()
+        migrated = 0
+        for row in rows:
+            if not (row["hermes_auth"] or "").startswith("enc:"):
+                enc = encrypt_secret(row["hermes_auth"])
+                conn.execute("UPDATE users SET hermes_auth = ? WHERE id = ?", (enc, row["id"]))
+                migrated += 1
+        conn.commit()
+        conn.close()
+        if migrated:
+            print(f"[Crypto] Migration: {migrated} Zugangsdatensätze verschlüsselt")
+    except Exception as e:
+        print(f"[Crypto] Migration fehlgeschlagen: {e}")
+
 
 # Upload-Verzeichnis nur erstellen, wenn es noch nicht existiert (verhindert PermissionErrors bei nicht-root)
 try:
@@ -117,7 +198,7 @@ def user_has_2fa(user: dict) -> bool:
 
 def create_user(username, password, is_admin, hermes_url=None, hermes_user=None, hermes_pass=None, allow_registration=None):
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    hermes_auth = f"{hermes_user}:{hermes_pass}" if hermes_user else None
+    hermes_auth = encrypt_secret(f"{hermes_user}:{hermes_pass}") if hermes_user else None
     conn = get_db()
     try:
         conn.execute(
@@ -154,7 +235,7 @@ def get_user_by_id(user_id):
 def user_hermes_info(user: dict) -> dict:
     """Hermes-Status eines Benutzers (URL getrennt von Auth, damit das Frontend
     genau sagen kann, was fehlt)."""
-    auth = user.get("hermes_auth") or ""
+    auth = decrypt_secret(user.get("hermes_auth") or "")
     auth_user = auth.partition(":")[0] if auth else ""
     return {
         "hermes_url": user.get("hermes_url") or "",
@@ -265,6 +346,8 @@ async def test_hermes_connection(hermes_url: str, auth: str) -> tuple:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Zugangsdaten-Verschlüsselung: Altbestand automatisch konvertieren
+    migrate_hermes_auth_encryption()
     yield
 
 app = FastAPI(title="Atlas", lifespan=lifespan)
@@ -570,9 +653,10 @@ async def api_profile_save(request: Request,
         return JSONResponse({"status": "error", "message": "Bei Hermes-Passwort muss auch der Benutzer angegeben werden"}, status_code=400)
 
     if hermes_user and hermes_pass:
-        new_auth = f"{hermes_user}:{hermes_pass}"
+        new_auth = f"{hermes_user}:{hermes_pass}"  # Klartext vom User → wird gleich encrypted
     else:
         new_auth = db_user["hermes_auth"] if hermes_url else None
+    new_auth = encrypt_secret(new_auth) if new_auth else None
     if not hermes_url:
         new_auth = None
 
@@ -604,7 +688,7 @@ async def api_profile_save(request: Request,
 
     # Nach dem Speichern: Verbindung sofort testen, damit der Nutzer weiß, ob es klappt
     if hermes_url and new_auth:
-        test, detail = await test_hermes_connection(hermes_url, new_auth)
+        test, detail = await test_hermes_connection(hermes_url, decrypt_secret(new_auth))
     else:
         test, detail = ("missing", "Benutzer und Passwort fehlen")
     return JSONResponse({"status": "ok", "test": test, "test_error": detail})
@@ -810,7 +894,7 @@ async def api_sessions(request: Request):
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
     db_user = get_user_by_id(user["user_id"]) or {}
     hermes_url = db_user.get("hermes_url")
-    hermes_auth = db_user.get("hermes_auth")
+    hermes_auth = decrypt_secret(db_user.get("hermes_auth"))
     if not hermes_url or not hermes_auth:
         return JSONResponse({"status": "ok", "sessions": []})
     profile = db_user.get("hermes_profile") or ""
@@ -940,7 +1024,7 @@ async def proxy_file_download(request: Request):
         raise HTTPException(status_code=401, detail="Nicht angemeldet")
     db_user = get_user_by_id(user["user_id"]) or {}
     hermes_url = db_user.get("hermes_url") or ""
-    hermes_auth = db_user.get("hermes_auth") or ""
+    hermes_auth = decrypt_secret(db_user.get("hermes_auth") or "")
     if not hermes_url or not hermes_auth:
         raise HTTPException(status_code=400, detail="Kein Hermes-Zugang konfiguriert")
     auth_user, _, auth_pass = hermes_auth.partition(":")
@@ -1007,7 +1091,7 @@ async def websocket_proxy(ws: WebSocket):
     # Hermes-Zugang immer frisch aus der DB laden (Profiländerungen wirken sofort)
     db_user = get_user_by_id(session["user_id"]) or {}
     hermes_url = db_user.get("hermes_url")
-    hermes_auth = db_user.get("hermes_auth")
+    hermes_auth = decrypt_secret(db_user.get("hermes_auth"))
     hermes_profile = db_user.get("hermes_profile") or ""
     if not hermes_url or not hermes_auth:
         await ws.close(code=4001, reason="Kein Hermes-Zugang hinterlegt")
