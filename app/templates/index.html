@@ -1104,6 +1104,35 @@
             // Wenn Anhänge hochgeladen wurden, dann an Hermes senden
             if (uploadPromises.length > 0) {
                 Promise.all(uploadPromises).then(() => {
+                    // Vorschau im Chat anzeigen
+                    if (pendingFiles.length > 0) {
+                        // Bestehende Nachricht aktualisieren mit Vorschau
+                        const msgText = text || pendingFiles.map(f => f.name).join(', ');
+                        const attachmentsHtml = pendingFiles.map(pf => {
+                            if (pf.isImage && pf.previewUrl) {
+                                return `<div style="margin-top:6px;">
+                                    <img src="${pf.previewUrl}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;">
+                                    <div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${pf.filename || pf.name}</div>
+                                </div>`;
+                            } else {
+                                return `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;">
+                                    <span style="font-size:20px;">📄</span>
+                                    <span style="font-size:13px;color:var(--text);">${pf.filename || pf.name}</span>
+                                </div>`;
+                            }
+                        }).join('');
+                        
+                        // Erste Zeile (Text) beibehalten, Anhänge anhängen
+                        const msgSpan = userBubble.querySelector('span');
+                        if (msgText) {
+                            msgSpan.textContent = msgText;
+                        }
+                        // Anhänge nach dem Text anhängen
+                        const attachmentsDiv = document.createElement('div');
+                        attachmentsDiv.innerHTML = attachmentsHtml;
+                        userBubble.appendChild(attachmentsDiv);
+                    }
+                    
                     if (text.trim()) {
                         sendRpc('prompt.submit', { session_id: hermesSessionId, text: text, attachments: fileIds });
                     }
