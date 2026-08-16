@@ -1296,8 +1296,10 @@
             const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
             if (!names.length) return;
             
-            // Erstelle Vorschau-HTML für jede Datei
+            // Erstelle Vorschau-HTML für jede Datei (localStorage oder @file:-Pfade)
             let attachmentsHtml = '';
+            
+            // 1) Dateien aus localStorage (bei Uploads im Chat)
             for (const name of names) {
                 const key = 'atlas_attach_' + name;
                 const data = localStorage.getItem(key);
@@ -1307,16 +1309,39 @@
                     } else {
                         attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${name}</span></div>`;
                     }
-                } else {
-                    // Fallback: nur Dateiname als Text
-                    attachmentsHtml += `<div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${name}</div>`;
                 }
+            }
+            
+            // 2) @file:/absolute/path/-Blöcke extrahieren (Agenten-generierte Dateien)
+            const fileMatches = text.matchAll(/@file:\s*([^\s,]+)/g);
+            for (const match of fileMatches) {
+                const filePath = match[1];
+                const fileName = filePath.split('/').pop();
+                // Download-Link über Atlas-Proxy (nutzt User-Cookie, spart 429)
+                attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="downloadAtlasFile('${filePath}')"><span style="font-size:20px;">📥</span><span style="font-size:13px;color:var(--text);text-decoration:underline;">${fileName} (Download)</span></div>`;
+            }
+            
+            if (!attachmentsHtml) {
+                // Fallback: nur Dateiname als Text
+                attachmentsHtml = `<div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${names.join(', ')}</div>`;
             }
             if (attachmentsHtml) {
                 const div = document.createElement('div');
                 div.innerHTML = attachmentsHtml;
                 userBubble.appendChild(div);
             }
+        }
+
+        // Datei über Atlas-Proxy herunterladen (nutzt User-Cookie, spart 429-Rate-Limit)
+        function downloadAtlasFile(filePath) {
+            const url = '/api/files/download?path=' + encodeURIComponent(filePath);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filePath.split('/').pop();
+            a.target = '_blank';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         }
 
         function renderFilePreviews() {

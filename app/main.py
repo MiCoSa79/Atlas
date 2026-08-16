@@ -25,8 +25,8 @@ import pyotp
 import qrcode
 from qrcode.image.svg import SvgPathImage
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
-from fastapi import FastAPI, Form, Request, UploadFile, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, WebSocket
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -891,6 +891,47 @@ async def hermes_login_cookie(hermes_url: str, auth_user: str, auth_pass: str) -
                     await asyncio.sleep(2 * (attempt + 1))
                     continue
         return ""
+
+
+# ---------------------------------------------------------------- File-Download-Proxy
+
+async def file_generator(http, url, headers):
+    """Streamt Bytes von der Hermes-Proxy-URL an den Client."""
+    try:
+        async with http.get(url, headers=headers, timeout=ClientTimeout(total=60)) as resp:
+            async for chunk in resp.content.iter_chunked(8192):
+                yield chunk
+    except Exception as e:
+        print(f"[FileProxy] Download error: {e}")
+
+
+@app.get("/api/files/download")
+async def proxy_file_download(request: Request):
+    """Streamt eine Datei aus dem Hermes-Workspace direkt an den Atlas-Nutzer.
+    Bricht die Datei auf dem Gateway-Host nach `/api/files/download` durch
+    und nutzt den gecachten Login-Cookie (spart 429-Rate-Limit)."""
+    user = session_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Nicht angemeldet")
+    db_user = get_user_by_id(user["user_id"]) or {}
+    hermes_url = db_user.get("hermes_url") or ""
+    hermes_auth = db_user.get("hermes_auth") or ""
+    if not hermes_url or not hermes_auth:
+        raise HTTPException(status_code=400, detail="Kein Hermes-Zugang konfiguriert")
+    auth_user, _, auth_pass = hermes_auth.partition(":")
+    path = request.query_params.get("path", "")
+    if not path:
+        raise HTTPException(status_code=400, detail="Kein Dateipfad angegeben")
+    cookie_header = await hermes_login_cookie(hermes_url, auth_user, auth_pass)
+    if not cookie_header:
+        raise HTTPException(status_code=502, detail="Hermes-Login fehlgeschlagen")
+    hermes_url = hermes_url.rstrip("/")
+    proxy_url = f"{hermes_url}/api/files/download?path={path}"
+    headers = {"Cookie": cookie_header}
+    async with ClientSession() as http:
+        gen = file_generator(http, proxy_url, headers)
+        return StreamingResponse(gen, media_type="application/octet-stream",
+                                headers={"Content-Disposition": f'attachment; filename="{path.split("/")[-1]}"'})
 
 
 @app.websocket("/ws")
