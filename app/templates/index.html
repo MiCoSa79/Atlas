@@ -943,7 +943,10 @@
                                     displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                                 }
                                 const mm = addMsg(m.role, displayText);
-                                if (m.role === 'user') restoreAttachmentPreview(mm, m.text);
+                                // @file:-Pfade für Download-Buttons in BEIDEN Nachrichtentypen parsen
+                                if (m.text && m.text.includes('@file:')) {
+                                    restoreAttachmentPreview(mm, m.text);
+                                }
                             } else if (m.role === 'tool') {
                                 addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
                             }
@@ -966,7 +969,10 @@
                                 displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                             }
                             const mm = addMsg(m.role, displayText);
-                            if (m.role === 'user') restoreAttachmentPreview(mm, m.text);
+                            // @file:-Pfade für Download-Buttons in BEIDEN Nachrichtentypen parsen
+                            if (m.text && m.text.includes('@file:')) {
+                                restoreAttachmentPreview(mm, m.text);
+                            }
                             const t = mm.querySelector('.meta');
                             if (m.timestamp) {
                                 const d = new Date(m.timestamp * 1000);
