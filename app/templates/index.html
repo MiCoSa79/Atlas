@@ -1332,12 +1332,13 @@
             }
         }
 
-        // Datei über Atlas-Proxy herunterladen (nutzt User-Cookie, spart 429-Rate-Limit)
+        // Datei über Atlas-Proxy herunterladen (lokale Dateien)
         function downloadAtlasFile(filePath) {
-            const url = '/api/files/download?path=' + encodeURIComponent(filePath);
+            const fileName = filePath.split('/').pop();
+            const url = '/api/local-files/download?filename=' + encodeURIComponent(fileName);
             const a = document.createElement('a');
             a.href = url;
-            a.download = filePath.split('/').pop();
+            a.download = fileName;
             a.target = '_blank';
             document.body.appendChild(a);
             a.click();
