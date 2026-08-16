@@ -25,6 +25,8 @@ from urllib.parse import quote
 import pyotp
 import qrcode
 from qrcode.image.svg import SvgPathImage
+import json, time
+from pywebpush import webpush
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -34,6 +36,70 @@ from fastapi.templating import Jinja2Templates
 DB_PATH = os.environ.get("ATLAS_DB", "/data/atlas.db")
 UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")
 SESSION_COOKIE = "atlas_session"
+
+# ---------------------------------------------------------------- VAPID für Web Push
+def load_vapid_keys():
+    """Lädt das VAPID-Schlüsselpaar aus /data/.vapid_keys.json."""
+    path = os.path.join(os.path.dirname(DB_PATH) or '.', '.vapid_keys.json')
+    if not os.path.exists(path):
+        print("[VAPID] Keine .vapid_keys.json gefunden — Push ist nicht aktiviert.")
+        return None, None
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return data.get('public_pem'), data.get('private_pem')
+    except Exception as e:
+        print(f"[VAPID] Fehler beim Laden: {e}")
+        return None, None
+
+_VAPID_PUBLIC_PEM, _VAPID_PRIVATE_PEM = load_vapid_keys()
+
+
+async def _send_push_safe(user_id, title, body):
+    """Sende Push asynchron — kein Blockieren des WS-Proxy."""
+    try:
+        await asyncio.wait_for(_do_send_push(user_id, title, body), timeout=5.0)
+    except Exception as e:
+        print(f"[Push] async fehlgeschlagen: {e}")
+
+def _do_send_push(user_id, title, body):
+    """Sende Push an alle aktiven Abos eines Users."""
+    if not _VAPID_PRIVATE_PEM:
+        return
+    try:
+        with get_db() as conn:
+            subs = conn.execute(
+                "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
+                (user_id,)
+            ).fetchall()
+        if not subs:
+            return
+        for sub in subs:
+            try:
+                webpush(
+                    subscription_info={
+                        "endpoint": sub["endpoint"],
+                        "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
+                    },
+                    data=json.dumps({"title": title, "body": body, "url": "/"}).encode("utf-8"),
+                    vapid_private_key=_VAPID_PRIVATE_PEM,
+                    vapid_claims={"sub": "mailto:admin@atlas"},
+                )
+            except Exception as e:
+                # Abos mit abgelaufenen Endpoints löschen
+                if "410" in str(e) or "Gone" in str(e):
+                    print(f"[Push] Abgelaufenes Abo gelöscht: {sub['endpoint'][:50]}")
+                    conn.execute(
+                        "DELETE FROM push_subscriptions WHERE endpoint = ?",
+                        (sub["endpoint"],)
+                    )
+                    conn.commit()
+                else:
+                    print(f"[Push] Send error: {e}")
+    except Exception as e:
+        print(f"[Push] Fehler: {e}")
+
+
 
 # Upload-Verzeichnis nur erstellen, wenn es noch nicht existiert (verhindert PermissionErrors bei nicht-root)
 try:
@@ -84,6 +150,19 @@ def init_db():
         pass
     try:
         conn.execute("ALTER TABLE users ADD COLUMN otp_confirmed INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            endpoint TEXT NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created REAL NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            UNIQUE(user_id, endpoint)
+        )""")
     except Exception:
         pass
     conn.commit()
@@ -772,6 +851,58 @@ async def admin_delete_user(user_id: int, request: Request):
 
 # ---------------------------------------------------------------- Datei-Upload
 
+
+
+# ---------------------------------------------------------------- Web Push Endpunkte
+
+@app.get("/api/push/vapid-public-key")
+async def push_vapid_key():
+    """Gibt den öffentlichen VAPID-Schlüssel für pushManager.subscribe() zurück."""
+    if not _VAPID_PRIVATE_PEM:
+        raise HTTPException(status_code=503, detail="Push nicht konfiguriert")
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from base64 import urlsafe_b64encode
+        ec_key = serialization.load_pem_public_key(_VAPID_PUBLIC_PEM.encode())
+        x962 = ec_key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        key_b64 = urlsafe_b64encode(x962).rstrip(b'=').decode()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"public_key": key_b64}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(request: Request):
+    """Speichert ein Push-Abo für den aktuellen User."""
+    user = session_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Nicht angemeldet")
+    data = await request.json()
+    endpoint = data.get("endpoint", "")
+    p256dh = data.get("p256dh", "")
+    auth = data.get("auth", "")
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(status_code=400, detail="Unvollständige Abo-Daten")
+    with get_db() as conn:
+        conn.execute("""INSERT OR REPLACE INTO push_subscriptions (user_id, endpoint, p256dh, auth, created)
+                        VALUES (?, ?, ?, ?, ?)""",
+                     (user["user_id"], endpoint, p256dh, auth, time.time()))
+    print(f"[Push] Abo gespeichert für user {user['user_id']}")
+    return {"status": "ok"}
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    """Löscht alle Abos des aktuellen Users."""
+    user = session_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Nicht angemeldet")
+    with get_db() as conn:
+        conn.execute("DELETE FROM push_subscriptions WHERE user_id = ?", (user["user_id"],))
+    print(f"[Push] Alle Abos gelöscht für user {user['user_id']}")
+    return {"status": "ok"}
+
 @app.post("/api/upload")
 async def api_upload(request: Request, file: UploadFile):
     """Speichert eine Datei lokal und gibt eine interne ID zurück."""
@@ -1067,6 +1198,26 @@ async def websocket_proxy(ws: WebSocket):
                     try:
                         async for msg in hws:
                             if msg.type == WSMsgType.TEXT:
+                                # Web Push: bei message.complete Benachrichtigung senden
+                                try:
+                                    pd = json.loads(msg.data)
+                                    if pd.get("type") == "message.complete":
+                                        user_id = session.get("user_id")
+                                        if user_id:
+                                            preview = ""
+                                            try:
+                                                payload = pd.get("payload", {})
+                                                preview = (payload.get("text", "")[:150]
+                                                           .replace("\n", " ").strip())
+                                            except Exception:
+                                                pass
+                                            if preview:
+                                                try:
+                                                    _do_send_push(user_id, "Atlas", preview)
+                                                except Exception as e:
+                                                    print(f"[Push] message.complete: {e}")
+                                except (json.JSONDecodeError, KeyError):
+                                    pass
                                 await ws.send_text(msg.data)
                             elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR, WSMsgType.CLOSED):
                                 print(f"[WS-Proxy] gateway closed/error: type={msg.type}")
