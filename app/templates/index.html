@@ -1293,6 +1293,10 @@
             if (!text) return;
             // Dateinamen aus [Name1, Name2]-Block extrahieren (von sendMessage so gesendet)
             const bracketMatch = text.match(/\[([^\]]+)\]/);
+            if (bracketMatch) {
+                // Zeige den [Dateiname]-Block NICHT im Bubble-Text — wird als Vorschau gerendert.
+                userBubble.querySelector('span').textContent = text.replace(bracketMatch[0], '').trim();
+            }
             if (!bracketMatch) return;
             const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
             if (!names.length) return;
