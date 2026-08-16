@@ -934,10 +934,15 @@ async def proxy_file_download(request: Request):
                                 headers={"Content-Disposition": f'attachment; filename="{path.split("/")[-1]}"'})
 
 
-# ---------------------------------------------------------------- Lokale Datei-Download (Atlas-Uploads)
+# ---------------------------------------------------------------- Lokale Datei-Download (Atlas-Uploads + Hermes-Gemeinsamer-Pfad)
 # Ermöglicht Download von generierten Dateien (PDFs, etc.) direkt im Chat.
-# Wenn die Datei lokal nicht existiert, lädt Atlas sie automatisch
-# vom Hermes-Server über den bestehenden /api/files/download-Proxy.
+# Suchreihenfolge:
+# 1. Lokales Atlas-Upload-Verzeichnis (/data/uploads/)
+# 2. Gemeinsamer Hermes-Pfad (/data/hermes/uploads/)
+# 3. Falls nicht gefunden: Lädt Atlas sie vom Hermes-Server über /api/files/download-Proxy
+
+# Neuer gemeinsamer Pfad (über Volume-Mount)
+HERMES_SHARED_DIR = "/data/hermes/uploads"
 
 async def download_from_hermes(hermes_url, auth, filename):
     """Lädt eine Datei vom Hermes-Server und speichert sie lokal."""
@@ -983,9 +988,18 @@ async def local_file_download(request: Request):
         raise HTTPException(status_code=400, detail="Kein Dateiname angegeben")
     # Sicherheitscheck: nur Dateinamen ohne Path-Traversal
     safe_filename = os.path.basename(filename)
+    
+    # 1. Suche zuerst im lokalen Atlas-Upload-Verzeichnis
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     
-    # Wenn Datei nicht lokal existiert, versuche von Hermes zu laden
+    # 2. Wenn nicht gefunden, suche im gemeinsamen Hermes-Pfad
+    if not os.path.exists(file_path):
+        hermes_shared_path = os.path.join(HERMES_SHARED_DIR, safe_filename)
+        if os.path.exists(hermes_shared_path):
+            file_path = hermes_shared_path
+            print(f"[LocalFiles] Gefunden im Hermes-Gemeinsam-Pfad: {file_path}")
+    
+    # 3. Wenn immer noch nicht gefunden, lade vom Hermes-Server über Proxy
     if not os.path.exists(file_path):
         db_user = get_user_by_id(user["user_id"]) or {}
         hermes_url = db_user.get("hermes_url") or ""
