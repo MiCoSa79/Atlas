@@ -937,8 +937,8 @@ async def proxy_file_download(request: Request):
 # ---------------------------------------------------------------- Lokale Datei-Download (Atlas-Uploads + Hermes-Gemeinsamer-Pfad)
 # Ermöglicht Download von generierten Dateien (PDFs, etc.) direkt im Chat.
 # Suchreihenfolge:
-# 1. Lokales Atlas-Upload-Verzeichnis (/data/uploads/)
-# 2. Gemeinsamer Hermes-Pfad (/data/hermes/uploads/) — Volume-Mount von Host
+# 1. Gemeinsamer Hermes-Pfad (/data/hermes/uploads/) — Volume-Mount von Host
+# 2. Lokales Atlas-Upload-Verzeichnis (/data/uploads/)
 # 3. Falls nicht gefunden: Lädt Atlas sie vom Hermes-Server über /api/files/download-Proxy
 
 # Gemeinsamer Pfad (Volume-Mount auf ZimaOS)
