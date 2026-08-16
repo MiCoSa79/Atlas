@@ -799,8 +799,7 @@
             const m = document.createElement('div');
             m.className = 'msg ' + role;
             const t = document.createElement('span');
-            // User-Nachrichten können HTML (Vorschau), andere nur Text
-            t[role === 'user' ? 'innerHTML' : 'textContent'] = text;
+            t.textContent = text;
             m.appendChild(t);
             const meta = document.createElement('span');
             meta.className = 'meta';
@@ -888,7 +887,8 @@
                         messagesDiv.innerHTML = '';
                         frame.result.messages.forEach(m => {
                             if (m.role === 'user' || m.role === 'assistant') {
-                                addMsg(m.role, m.text || '');
+                                const mm = addMsg(m.role, m.text || '');
+                                if (m.role === 'user') restoreAttachmentPreview(mm, m.text);
                             } else if (m.role === 'tool') {
                                 addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
                             }
@@ -905,6 +905,7 @@
                     msgs.forEach(m => {
                         if (m.role === 'user' || m.role === 'assistant') {
                             const mm = addMsg(m.role, m.text || '');
+                            if (m.role === 'user') restoreAttachmentPreview(mm, m.text);
                             const t = mm.querySelector('.meta');
                             if (m.timestamp) {
                                 const d = new Date(m.timestamp * 1000);
@@ -1018,7 +1019,7 @@
                 return;
             }
             
-            // Zuerst Vorschau-HTML vorbereiten (bleibt beim Session-Laden erhalten)
+            // Zuerst Vorschau-HTML vorbereiten (nur für lokalen DOM)
             let attachmentsHtml = '';
             if (pendingFiles.length > 0) {
                 attachmentsHtml = pendingFiles.map(pf => {
@@ -1030,15 +1031,12 @@
                 }).join('');
             }
             
-            // Vorschau in den Text einbetten (wird an Hermes gesendet und bleibt bei Session-Laden erhalten)
-            const displayText = text || (pendingFiles.length > 0 ? pendingFiles.map(f => f.name).join(', ') : '');
-            const fullDisplay = attachmentsHtml + (displayText ? (attachmentsHtml && displayText ? '\n' + displayText : displayText) : '');
-            
-            // Nachricht SOFORT im Chat anzeigen
-            const userBubble = addMsg('user', fullDisplay || displayName);
+            // Nachricht SOFORT im Chat anzeigen (reiner Text → keine HTML-Einbettung)
+            const displayName = text || (pendingFiles.length > 0 ? pendingFiles.map(f => f.name).join(', ') : '');
+            const userBubble = addMsg('user', displayName);
             userBubble.classList.add('upload-bubble');
             
-            // Vorschau in die Nachricht einfügen (nur für den lokalen DOM — wird vom Text übernommen, wenn Session geladen wird)
+            // Vorschau nur hier anhängen (einmalig!)
             if (pendingFiles.length > 0) {
                 const attachmentsDiv = document.createElement('div');
                 attachmentsDiv.innerHTML = attachmentsHtml;
@@ -1072,7 +1070,21 @@
             pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
             pendingFiles = [];
             renderFilePreviews();
+            saveAttachmentPreviews(); // ← Persistenz für Session-Wechsel
             $('input').value = '';
+        }
+
+        // Vorschau-Daten persistent speichern (für Session-Wechsel)
+        function saveAttachmentPreviews() {
+            pendingFiles.forEach(pf => {
+                if (pf.base64Url) {
+                    try {
+                        localStorage.setItem('atlas_attach_' + pf.name, pf.base64Url);
+                    } catch(e) {
+                        console.warn('[Atlas] localStorage voll:', e);
+                    }
+                }
+            });
         }
 
         function flushPendingMessages() {
@@ -1180,6 +1192,39 @@
             // Reset, damit gleiche Datei erneut wählbar ist
             $('fileInput').value = '';
         });
+
+
+        // Vorschau aus localStorage rekonstruieren (für Session-Wechsel / History-Laden)
+        function restoreAttachmentPreview(userBubble, text) {
+            if (!text) return;
+            // Prüfe ob Dateinamen im Text enthalten sind (z.B. "Datei.png" oder "a.jpg, b.png")
+            const match = text.match(/([\w._-]+\.(?:png|jpg|jpeg|gif|webp|pdf|docx?|xlsx?|pptx?|txt|zip|rar))/gi);
+            if (!match) return;
+            
+            // Erstelle Vorschau-HTML für jede Datei
+            let attachmentsHtml = '';
+            for (const name of match) {
+                const key = 'atlas_attach_' + name;
+                const data = localStorage.getItem(key);
+                if (data) {
+                    if (data.startsWith('data:image/')) {
+                        attachmentsHtml += `<div style="margin-top:6px;"><img src="${data}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;"><div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${name}</div></div>`;
+                    } else {
+                        attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${name}</span></div>`;
+                    }
+                    // Bereinige localStorage nach erfolgreichem Restore
+                    localStorage.removeItem(key);
+                } else {
+                    // Fallback: nur Dateiname als Text
+                    attachmentsHtml += `<div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${name}</div>`;
+                }
+            }
+            if (attachmentsHtml) {
+                const div = document.createElement('div');
+                div.innerHTML = attachmentsHtml;
+                userBubble.appendChild(div);
+            }
+        }
 
         function renderFilePreviews() {
             const box = $('filePreview');
