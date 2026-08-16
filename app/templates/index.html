@@ -799,7 +799,8 @@
             const m = document.createElement('div');
             m.className = 'msg ' + role;
             const t = document.createElement('span');
-            t.textContent = text;
+            // User-Nachrichten können HTML (Vorschau), andere nur Text
+            t[role === 'user' ? 'innerHTML' : 'textContent'] = text;
             m.appendChild(t);
             const meta = document.createElement('span');
             meta.className = 'meta';
@@ -1017,26 +1018,28 @@
                 return;
             }
             
-            // Zuerst Nachricht SOFORT im Chat anzeigen (wie bisher)
-            const displayName = text || pendingFiles.map(f => f.name).join(', ');
-            const userBubble = addMsg('user', displayName);
-            userBubble.classList.add('upload-bubble');
-            
-            // Vorschau in die Nachricht einfügen
+            // Zuerst Vorschau-HTML vorbereiten (bleibt beim Session-Laden erhalten)
+            let attachmentsHtml = '';
             if (pendingFiles.length > 0) {
-                const attachmentsHtml = pendingFiles.map(pf => {
+                attachmentsHtml = pendingFiles.map(pf => {
                     if (pf.isImage && pf.previewUrl) {
-                        return `<div style="margin-top:6px;">
-                            <img src="${pf.previewUrl}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;">
-                            <div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${pf.name}</div>
-                        </div>`;
+                        return `<div style="margin-top:6px;"><img src="${pf.previewUrl}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;"><div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${pf.name}</div></div>`;
                     } else {
-                        return `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;">
-                            <span style="font-size:20px;">📄</span>
-                            <span style="font-size:13px;color:var(--text);">${pf.name}</span>
-                        </div>`;
+                        return `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${pf.name}</span></div>`;
                     }
                 }).join('');
+            }
+            
+            // Vorschau in den Text einbetten (wird an Hermes gesendet und bleibt bei Session-Laden erhalten)
+            const displayText = text || (pendingFiles.length > 0 ? pendingFiles.map(f => f.name).join(', ') : '');
+            const fullDisplay = attachmentsHtml + (displayText ? (attachmentsHtml && displayText ? '\n' + displayText : displayText) : '');
+            
+            // Nachricht SOFORT im Chat anzeigen
+            const userBubble = addMsg('user', fullDisplay || displayName);
+            userBubble.classList.add('upload-bubble');
+            
+            // Vorschau in die Nachricht einfügen (nur für den lokalen DOM — wird vom Text übernommen, wenn Session geladen wird)
+            if (pendingFiles.length > 0) {
                 const attachmentsDiv = document.createElement('div');
                 attachmentsDiv.innerHTML = attachmentsHtml;
                 userBubble.appendChild(attachmentsDiv);
