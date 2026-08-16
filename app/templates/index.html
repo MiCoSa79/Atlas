@@ -79,6 +79,9 @@
         .msg.assistant { align-self: flex-start; background: #1d232e; border-bottom-left-radius: 4px; }
         .msg.system { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; padding: 4px 10px; }
         .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; display: block; }
+        .media-downloads { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .media-download-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; background: #2a3547; border: 1px solid var(--border); border-radius: 10px; color: #d7e2f5; font-size: 13px; text-decoration: none; cursor: pointer; }
+        .media-download-btn:hover { background: #33415a; border-color: var(--accent); }
         .msg.thinking { align-self: flex-start; background: transparent; color: var(--muted); font-size: 12.5px; font-style: italic; line-height: 1.5; padding: 2px 10px; white-space: pre-wrap; opacity: .65; }
         .msg.thinking.done { opacity: .45; font-size: 11.5px; }
         .msg.thinking.done::after { content: ' ✓'; }
@@ -801,6 +804,10 @@
             const t = document.createElement('span');
             t.textContent = text;
             m.appendChild(t);
+            // Agenten-Antworten: MEDIA:-Tags als Download-Buttons rendern
+            if (role === 'assistant' && text && text.includes('MEDIA:')) {
+                renderMediaDownloads(m, text);
+            }
             const meta = document.createElement('span');
             meta.className = 'meta';
             m.appendChild(meta);
@@ -877,7 +884,7 @@
                 connectAttempts = 0;  // Zähler zurücksetzen bei Erfolg
                 statusDot.classList.add('online');
                 statusDot.classList.remove('offline');
-                const p = { close_on_disconnect: true, source: 'atlas-app' };
+                const p = { close_on_disconnect: true, source: 'webui' };
                 if (activeSessionId) {
                     p.session_id = activeSessionId;
                     console.log('[Atlas] session.resume(' + activeSessionId + ')');
@@ -943,8 +950,8 @@
                                     displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                                 }
                                 const mm = addMsg(m.role, displayText);
-                                // @file:-Pfade für Download-Buttons in BEIDEN Nachrichtentypen parsen
-                                if (m.text && m.text.includes('@file:')) {
+                                // User-Uploads: [Name]-Block aus localStorage-Vorschau rekonstruieren
+                                if (m.role === 'user' && m.text && /\[[^\]]+\]/.test(m.text)) {
                                     restoreAttachmentPreview(mm, m.text);
                                 }
                             } else if (m.role === 'tool') {
@@ -969,8 +976,8 @@
                                 displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                             }
                             const mm = addMsg(m.role, displayText);
-                            // @file:-Pfade für Download-Buttons in BEIDEN Nachrichtentypen parsen
-                            if (m.text && m.text.includes('@file:')) {
+                            // User-Uploads: [Name]-Block aus localStorage-Vorschau rekonstruieren
+                            if (m.role === 'user' && m.text && /\[[^\]]+\]/.test(m.text)) {
                                 restoreAttachmentPreview(mm, m.text);
                             }
                             const t = mm.querySelector('.meta');
@@ -1049,6 +1056,11 @@
                 if (p.type === 'message.complete') {
                     if (leaseWaitBubble) clearLeaseWait();
                     if (bubble) {
+                        // MEDIA:-Tags der fertigen Antwort in Download-Buttons umwandeln
+                        const finalSpan = bubble.querySelector('span');
+                        if (finalSpan && finalSpan.textContent && finalSpan.textContent.includes('MEDIA:')) {
+                            renderMediaDownloads(bubble, finalSpan.textContent);
+                        }
                         const meta = bubble.querySelector('.meta') || document.createElement('span');
                         meta.className = 'meta';
                         meta.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -1287,68 +1299,111 @@
         });
 
 
+        // ---------------------------------------------------------------- Datei-Downloads im Chat
+        // Generischer Weg (wie Hermes Desktop App): Der Agent schreibt
+        // MEDIA:/absoluter/pfad/datei in seine Antwort → Atlas rendert daraus
+        // einen Download-Button, der die Datei per Atlas-Proxy (/api/files/download)
+        // vom Hermes-Backend holt. KEIN gemeinsames Volume-Mount nötig.
+
+        // MEDIA:-Zeile allein in einer Zeile (wie die Desktop-App):
+        //   MEDIA:/opt/data/uploads/datei.pdf
+        const MEDIA_LINE_RE = /(^|\n)[\t ]*[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?[\t ]*(\n|$)/g;
+        // MEDIA:-Tag inline im Text:
+        //   … hier ist die Datei: MEDIA:/opt/data/uploads/datei.pdf …
+        const MEDIA_TAG_RE = /[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?/g;
+
+        function unquoteMediaPath(value) {
+            const trimmed = String(value || '').trim();
+            const q = trimmed[0];
+            return q && q === trimmed.charAt(trimmed.length - 1) && ['"', "'", '`'].includes(q)
+                ? trimmed.slice(1, -1) : trimmed;
+        }
+
+        // Durchsucht den Text einer Nachricht nach MEDIA:-Tags und hängt für
+        // jeden Pfad einen klickbaren Download-Button an die Bubble an.
+        function renderMediaDownloads(bubble, rawText) {
+            if (!bubble || !rawText || !rawText.includes('MEDIA:')) return;
+            const span = bubble.querySelector('span');
+            if (!span) return;
+
+            const paths = [];
+            // 1) MEDIA:-Zeilen entfernen und Pfade sammeln
+            let text = rawText.replace(MEDIA_LINE_RE, (_m, _lead, value, _trailer) => {
+                const p = unquoteMediaPath(value);
+                if (p) paths.push(p);
+                return '\n';
+            });
+            // 2) Inline-MEDIA:-Tags entfernen und Pfade sammeln
+            text = text.replace(MEDIA_TAG_RE, (_m, value) => {
+                const p = unquoteMediaPath(value);
+                if (p) paths.push(p);
+                return '';
+            });
+
+            // Bereinigten Text setzen (ohne MEDIA:-Ausdrücke)
+            if (text.trim() !== rawText.trim()) {
+                span.textContent = text.replace(/\n{3,}/g, '\n\n').trim();
+            }
+            if (!paths.length) return;
+
+            // Download-Buttons DOM-sicher anhängen (kein innerHTML mit Pfaden)
+            const wrap = document.createElement('div');
+            wrap.className = 'media-downloads';
+            for (const p of paths) {
+                const fileName = p.split('/').pop() || p;
+                const btn = document.createElement('a');
+                btn.href = '#';
+                btn.className = 'media-download-btn';
+                btn.textContent = '📥 ' + fileName + ' (Download)';
+                btn.title = p;
+                btn.addEventListener('click', (ev) => {
+                    ev.preventDefault();
+                    downloadAtlasFile(p);
+                });
+                wrap.appendChild(btn);
+            }
+            bubble.appendChild(wrap);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
         // Vorschau aus localStorage rekonstruieren (für Session-Wechsel / History-Laden)
+        // NUR für User-Uploads (Bilder/Dokumente aus dem Chat) — Agenten-Dateien
+        // kommen ausschließlich über MEDIA:-Tags (renderMediaDownloads).
         function restoreAttachmentPreview(userBubble, text) {
             if (!text) return;
-            // Datei-Namen aus [Name1, Name2]-Block extrahieren (von sendMessage so gesendet)
-            // ODER aus @file:/path/to/file direkt extrahieren
-            let fileName = null;
-            let bracketMatch = text.match(/\[([^\]]+)\]/);
-            if (bracketMatch) {
-                // Zeige den [Dateiname]- und @image:…-Block NICHT im Bubble-Text —
-                // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
-                const cleaned = text.replace(bracketMatch[0], '').replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').trim();
-                userBubble.querySelector('span').textContent = cleaned;
-                fileName = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean)[0];
-            } else {
-                // Direkter @file:-Pfad: nur den Dateinamen am Ende extrahieren
-                const fileMatch = text.match(/@file:\s*([^\s]+\.pdf)/i);
-                if (fileMatch) {
-                    fileName = fileMatch[1].split('/').pop();
-                }
-            }
-            if (!fileName) return;
-            
-            // Erstelle Vorschau-HTML für jede Datei (localStorage oder @file:-Pfade)
+            const bracketMatch = text.match(/\[([^\]]+)\]/);
+            if (!bracketMatch) return;
+            const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+            if (!names.length) return;
+
+            // Zeige den [Dateiname]- und @image:…-Block NICHT im Bubble-Text —
+            // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
+            const cleaned = text.replace(bracketMatch[0], '').replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').trim();
+            userBubble.querySelector('span').textContent = cleaned;
+
+            // Vorschau-HTML für jede Datei (localStorage-Bilder aus dem Upload)
             let attachmentsHtml = '';
-            
-            // 1) Dateien aus localStorage (bei Uploads im Chat)
             for (const name of names) {
                 const key = 'atlas_attach_' + name;
                 const data = localStorage.getItem(key);
-                if (data) {
-                    if (data.startsWith('data:image/')) {
-                        attachmentsHtml += `<div style="margin-top:6px;"><img src="${data}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;"><div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${name}</div></div>`;
-                    } else {
-                        attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${name}</span></div>`;
-                    }
+                if (!data) continue;
+                if (data.startsWith('data:image/')) {
+                    attachmentsHtml += `<div style="margin-top:6px;"><img src="${data}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;"><div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${name}</div></div>`;
+                } else {
+                    attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${name}</span></div>`;
                 }
             }
-            
-            // 2) @file:/absolute/path/-Blöcke extrahieren (Agenten-generierte Dateien)
-            const fileMatches = text.matchAll(/@file:\s*([^\s,]+)/g);
-            for (const match of fileMatches) {
-                const filePath = match[1];
-                const fileName = filePath.split('/').pop();
-                // Download-Link über Atlas-Proxy (nutzt User-Cookie, spart 429)
-                attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="downloadAtlasFile('${filePath}')"><span style="font-size:20px;">📥</span><span style="font-size:13px;color:var(--text);text-decoration:underline;">${fileName} (Download)</span></div>`;
-            }
-            
-            if (!attachmentsHtml) {
-                // Fallback: nur Dateiname als Text
-                attachmentsHtml = `<div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${names.join(', ')}</div>`;
-            }
-            if (attachmentsHtml) {
-                const div = document.createElement('div');
-                div.innerHTML = attachmentsHtml;
-                userBubble.appendChild(div);
-            }
+            if (!attachmentsHtml) return;
+            const div = document.createElement('div');
+            div.innerHTML = attachmentsHtml;
+            userBubble.appendChild(div);
         }
 
-        // Datei über Atlas-Proxy herunterladen (lokale Dateien)
+        // Datei über Atlas-Proxy herunterladen — holt sie vom Hermes-Backend
+        // (gleicher Mechanismus wie die Desktop-App), KEIN Volume-Mount nötig.
         function downloadAtlasFile(filePath) {
-            const fileName = filePath.split('/').pop();
-            const url = '/api/local-files/download?filename=' + encodeURIComponent(fileName);
+            const fileName = filePath.split('/').pop() || 'download';
+            const url = '/api/files/download?path=' + encodeURIComponent(filePath);
             const a = document.createElement('a');
             a.href = url;
             a.download = fileName;

@@ -20,6 +20,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
+from urllib.parse import quote
 
 import pyotp
 import qrcode
@@ -206,7 +207,7 @@ async def hermes_ws_request(hermes_url: str, auth: str, method: str, params: dic
                 profile = profile or ""
                 # session.create mit Profil
                 await hws.send_str(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "session.create",
-                    "params": {"close_on_disconnect": True, "source": "atlas-app", "profile": profile}}))
+                    "params": {"close_on_disconnect": True, "source": "webui", "profile": profile}}))
                 # Gewünschte Methode
                 msg_id = 2
                 await hws.send_str(json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params or {}}))
@@ -896,20 +897,42 @@ async def hermes_login_cookie(hermes_url: str, auth_user: str, auth_pass: str) -
 # ---------------------------------------------------------------- File-Download-Proxy
 
 async def file_generator(http, url, headers):
-    """Streamt Bytes von der Hermes-Proxy-URL an den Client."""
+    """Streamt Bytes von der Hermes-Proxy-URL an den Client.
+
+    Gibt (status, content_type, chunk-generator) zurück — der Status wird
+    geprüft, damit Fehler von Hermes nicht als „erfolgreicher“ 200-Download
+    mit kaputtem Body beim Nutzer ankommen.
+    """
     try:
         async with http.get(url, headers=headers, timeout=ClientTimeout(total=60)) as resp:
-            async for chunk in resp.content.iter_chunked(8192):
-                yield chunk
+            if resp.status != 200:
+                print(f"[FileProxy] Hermes-Status {resp.status} für {url}")
+                return resp.status, "text/plain", _empty_chunks()
+            content_type = resp.headers.get("Content-Type", "application/octet-stream")
+            return resp.status, content_type, _stream_chunks(resp)
     except Exception as e:
         print(f"[FileProxy] Download error: {e}")
+        return 502, "text/plain", _empty_chunks()
+
+
+async def _stream_chunks(resp):
+    async for chunk in resp.content.iter_chunked(8192):
+        yield chunk
+
+
+async def _empty_chunks():
+    yield b""
 
 
 @app.get("/api/files/download")
 async def proxy_file_download(request: Request):
     """Streamt eine Datei aus dem Hermes-Workspace direkt an den Atlas-Nutzer.
-    Bricht die Datei auf dem Gateway-Host nach `/api/files/download` durch
-    und nutzt den gecachten Login-Cookie (spart 429-Rate-Limit)."""
+
+    Generischer Weg OHNE gemeinsames Volume-Mount: Atlas fragt die Datei per
+    HTTP beim Hermes-Backend an (gleicher Mechanismus wie die Hermes-Desktop-App:
+    das Frontend sendet ``MEDIA:/absoluter/pfad``-Tags, Atlas reicht den Pfad
+    an ``{hermes_url}/api/files/download?path=...`` weiter).
+    """
     user = session_from_request(request)
     if not user:
         raise HTTPException(status_code=401, detail="Nicht angemeldet")
@@ -926,62 +949,26 @@ async def proxy_file_download(request: Request):
     if not cookie_header:
         raise HTTPException(status_code=502, detail="Hermes-Login fehlgeschlagen")
     hermes_url = hermes_url.rstrip("/")
-    proxy_url = f"{hermes_url}/api/files/download?path={path}"
+    proxy_url = f"{hermes_url}/api/files/download?path={quote(path, safe='/')}"
     headers = {"Cookie": cookie_header}
     async with ClientSession() as http:
-        gen = file_generator(http, proxy_url, headers)
-        return StreamingResponse(gen, media_type="application/octet-stream",
-                                headers={"Content-Disposition": f'attachment; filename="{path.split("/")[-1]}"'})
+        status, content_type, gen = await file_generator(http, proxy_url, headers)
+        if status != 200:
+            raise HTTPException(status_code=status, detail="Hermes-Download fehlgeschlagen")
+        return StreamingResponse(
+            gen,
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{path.split("/")[-1]}"'},
+        )
 
 
-# ---------------------------------------------------------------- Lokale Datei-Download (Atlas-Uploads + Hermes-Gemeinsamer-Pfad)
-# Ermöglicht Download von generierten Dateien (PDFs, etc.) direkt im Chat.
-# Suchreihenfolge:
-# 1. Gemeinsamer Hermes-Pfad (/data/hermes/uploads/) — Volume-Mount von Host
-# 2. Lokales Atlas-Upload-Verzeichnis (/data/uploads/)
-# 3. Falls nicht gefunden: Lädt Atlas sie vom Hermes-Server über /api/files/download-Proxy
-
-# Gemeinsamer Pfad (Volume-Mount auf ZimaOS)
-HERMES_SHARED_DIR = "/data/hermes/uploads"
-
-async def download_from_hermes(hermes_url, auth, filename):
-    """Lädt eine Datei vom Hermes-Server und speichert sie lokal."""
-    user, _, password = auth.partition(":")
-    cookie_header = await hermes_login_cookie(hermes_url, user, password)
-    if not cookie_header:
-        return None
-    
-    # Datei-Pfad vom Hermes-Server ermitteln (normalerweise /opt/data/images/, /opt/data/uploads/ oder /opt/data/)
-    hermes_path = f"/opt/data/images/{filename}"
-    if not os.path.exists(hermes_path):
-        hermes_path = f"/opt/data/uploads/{filename}"
-    if not os.path.exists(hermes_path):
-        hermes_path = f"/opt/data/{filename}"
-    
-    proxy_url = f"{hermes_url.rstrip('/')}/api/files/download?path={hermes_path}"
-    headers = {"Cookie": cookie_header}
-    
-    async with ClientSession() as http:
-        try:
-            async with http.get(proxy_url, headers=headers, timeout=ClientTimeout(total=30)) as resp:
-                if resp.status == 200:
-                    content = await resp.read()
-                    # Datei lokal speichern
-                    save_path = os.path.join(UPLOAD_DIR, filename)
-                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                    with open(save_path, 'wb') as f:
-                        f.write(content)
-                    return save_path
-        except Exception as e:
-            print(f"[LocalFiles] Download von Hermes fehlgeschlagen: {e}")
-    return None
-
+# ---------------------------------------------------------------- Lokale Datei-Download (nur Atlas-eigene Uploads)
+# Generierte Agenten-Dateien (PDFs etc.) liefert ausschließlich /api/files/download
+# per Hermes-Proxy — KEIN gemeinsames Volume-Mount (generisch, öffentlich-tauglich).
 
 @app.get("/api/local-files/download")
 async def local_file_download(request: Request):
-    """Streamt eine lokale Datei aus dem Atlas-Upload-Verzeichnis.
-    Wenn Datei nicht lokal existiert, lädt Atlas sie automatisch
-    vom Hermes-Server über /api/files/download-Proxy und cached sie."""
+    """Streamt eine lokal im Atlas-Upload-Verzeichnis gespeicherte Datei."""
     user = session_from_request(request)
     if not user:
         raise HTTPException(status_code=401, detail="Nicht angemeldet")
@@ -990,32 +977,10 @@ async def local_file_download(request: Request):
         raise HTTPException(status_code=400, detail="Kein Dateiname angegeben")
     # Sicherheitscheck: nur Dateinamen ohne Path-Traversal
     safe_filename = os.path.basename(filename)
-    
-    # 1. Suche zuerst im gemeinsamen Hermes-Upload-Verzeichnis (Volume-Mount)
-    #    Damit Atlas generierte Dateien (PDFs, etc.) sofort aus dem Hermes-Ordner nutzt.
-    hermes_shared_path = os.path.join(HERMES_SHARED_DIR, safe_filename)
-    if os.path.exists(hermes_shared_path):
-        file_path = hermes_shared_path
-        print(f"[LocalFiles] Gefunden im gemeinsamen Hermes-Pfad: {file_path}")
-    else:
-        # 2. Fallback: Suche im lokalen Atlas-Upload-Verzeichnis (Cache)
-        file_path = os.path.join(UPLOAD_DIR, safe_filename)
-    
-    # 3. Wenn immer noch nicht gefunden, lade vom Hermes-Server über Proxy
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
     if not os.path.exists(file_path):
-        db_user = get_user_by_id(user["user_id"]) or {}
-        hermes_url = db_user.get("hermes_url") or ""
-        hermes_auth = db_user.get("hermes_auth") or ""
-        if hermes_url and hermes_auth:
-            print(f"[LocalFiles] Datei {safe_filename} nicht lokal, lade von Hermes...")
-            local_path = await download_from_hermes(hermes_url, hermes_auth, safe_filename)
-            if local_path:
-                file_path = local_path
-            else:
-                raise HTTPException(status_code=404, detail="Datei nicht gefunden")
-        else:
-            raise HTTPException(status_code=404, detail="Datei nicht gefunden")
-    
+        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+
     # MIME-Type ermitteln
     import mimetypes
     mime_type, _ = mimetypes.guess_type(file_path)
