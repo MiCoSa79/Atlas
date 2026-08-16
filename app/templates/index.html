@@ -1005,7 +1005,7 @@
             };
         }
 
-        function sendMessage(text) {
+        async function sendMessage(text) {
             if (!text.trim() && pendingFiles.length === 0) return;
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 addMsg('system', 'Fehler: Nicht verbunden');
@@ -1059,29 +1059,17 @@
                         );
                     }
                 }
-                // Warten bis alle Attachments bei Hermes ankommen
-                Promise.all(attachPromises).then(() => {
-                    // Jetzt erst prompt.submit senden
-                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
-                    // Nach Senden aufräumen
-                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
-                    pendingFiles = [];
-                    renderFilePreviews();
-                    $('input').value = '';
-                }).catch(err => {
-                    console.error('[Atlas] Attach-Fehler:', err);
-                    // Auch bei Fehler die Nachricht senden
-                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
-                    pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
-                    pendingFiles = [];
-                    renderFilePreviews();
-                    $('input').value = '';
-                });
-            } else {
-                // Nur Text, keine Anhänge -> direkt senden
-                sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
-                $('input').value = '';
+                // WARTEN bis alle Attachments bei Hermes angekommen sind!
+                await Promise.all(attachPromises);
             }
+            
+            // JETZT erst prompt.submit senden (nachdem Attachments verarbeitet wurden)
+            sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+            // Nach Senden aufräumen
+            pendingFiles.forEach(pf => URL.revokeObjectURL(pf.previewUrl));
+            pendingFiles = [];
+            renderFilePreviews();
+            $('input').value = '';
         }
 
         function flushPendingMessages() {
