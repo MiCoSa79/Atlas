@@ -319,6 +319,21 @@
         const app = $('app');
         const statusDot = $('statusDot');
         const messagesDiv = $('messages');
+        // ---- Smart-Scroll (v0.0.75): Sticky-Bottom wie WhatsApp/Telegram ----
+        // stickToBottom = true → neue Inhalte scrollen nach. Der scroll-Listener
+        // aktualisiert das Flag: scrollt der Nutzer hoch → false (kein Rücksprung),
+        // scrollt er zurück ans Ende → true (folgt wieder).
+        // WICHTIG: Das Flag wird beim Scrollen gepflegt und NACH einer Mutation
+        // abgefragt — es spiegelt damit den Zustand VOR der Mutation wider
+        // (das alte "nach der Mutation messen" schlug fehl, weil die neue Zeile
+        // + Abstand die 50-Px-Schwelle sofort überstieg).
+        let stickToBottom = true;
+        messagesDiv.addEventListener('scroll', () => {
+            stickToBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 120;
+        }, { passive: true });
+        function followSticky() {
+            if (stickToBottom) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
         const banner = $('setupBanner');
         let ws = null;
         let pendingAttachResponses = {};
@@ -830,9 +845,8 @@
             meta.className = 'meta';
             m.appendChild(meta);
             messagesDiv.appendChild(m);
-            // Smart-Scroll: nur nach unten folgen, wenn der Nutzer unten ist (v0.0.70)
-            const nearBottomAdd = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
-            if (nearBottomAdd) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            // followSticky() prüft das sticky-bottom-Flag (über den scroll-Listener)
+            followSticky();
             return m;
         }
 
@@ -857,9 +871,8 @@
                 // Hermes wiederholt alle paar Sekunden "Still waiting…" → Text aktualisieren
                 const span = leaseWaitBubble.querySelector('span');
                 if (span) span.textContent = text;
+                followSticky();
             }
-            const nearBottomLease = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
-            if (nearBottomLease) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
         // Beendet die Lease-Bubble: finalText gesetzt = Text ersetzen + Button entfernen,
@@ -1052,16 +1065,14 @@
                         thinkingBubble.classList.add('done');
                         thinkingBubble = null;
                     }
-                    const nearBottomStart = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
-                    if (nearBottomStart) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    followSticky();
                     return;
                 }
                 // Statuszeilen ("warte auf Modell…") — kleine zentrierte Zeile
                 if (p.type === 'thinking.delta' && p.payload && p.payload.text && showStatus) {
                     if (!statusBubble) statusBubble = addMsg('status', p.payload.text);
                     else statusBubble.querySelector('span').textContent = p.payload.text;
-const isNearBottom3 = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
-                    if (isNearBottom3) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    followSticky();
                     return;
                 }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
@@ -1078,8 +1089,7 @@ const isNearBottom3 = messagesDiv.scrollHeight - messagesDiv.scrollTop - message
                     }
                     if (!bubble) bubble = addMsg('assistant', '');
                     bubble.querySelector('span').textContent += p.payload.text;
-                    const isNearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
-                    if (isNearBottom) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    followSticky();
                 }
                 if (p.type === 'message.complete') {
                     if (leaseWaitBubble) clearLeaseWait();
@@ -1164,16 +1174,16 @@ const isNearBottom3 = messagesDiv.scrollHeight - messagesDiv.scrollTop - message
             const userBubble = addMsg('user', displayName);
             userBubble.classList.add('upload-bubble');
             
-            // Beim Senden IMMER ans Ende springen (aktives Aktion — User will
-            // seine Nachricht + die Antwort sehen). (v0.0.71)
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            // Beim Senden: sicher ans Ende (aktive Aktion). (v0.0.75: sticky-bottom)
+            stickToBottom = true;
+            followSticky();
             
             // Vorschau NUR hier anhängen (einmalig!)
             if (pendingFiles.length > 0) {
                 const attachmentsDiv = document.createElement('div');
                 attachmentsDiv.innerHTML = attachmentsHtml;
                 userBubble.appendChild(attachmentsDiv);
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                followSticky();
             }
             
             // Anhänge an Hermes attachen (WS-RPC)
@@ -1419,8 +1429,7 @@ const isNearBottom3 = messagesDiv.scrollHeight - messagesDiv.scrollTop - message
                 wrap.appendChild(btn);
             }
             bubble.appendChild(wrap);
-            const isNearBottom2 = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 50;
-            if (isNearBottom2) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            followSticky();
         }
 
         // Vorschau aus localStorage rekonstruieren (für Session-Wechsel / History-Laden)
