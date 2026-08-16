@@ -328,6 +328,8 @@
             authPage.style.display = 'none';
             app.classList.add('active');
             if (user && user.username) $('userTag').textContent = user.username;
+            // Anzeige-Einstellungen (Denken/Statuszeilen) frisch aus der DB laden
+            loadDisplaySettings();
             // Profil merken (für session.create und Modal)
             selectedProfile = user.hermes_profile || '';
             isAdminUser = !!user.is_admin;
@@ -471,6 +473,21 @@
         let pending2faToken = null;  // Token aus 2FA-Stufe 1 (Login) bis zur Code-Bestätigung
         let showReasoning = true;     // pro Benutzer einstellbar
         let showStatus = true;        // pro Benutzer einstellbar
+
+        // Anzeige-Einstellungen (Denken/Statuszeilen) frisch aus der DB laden
+        function loadDisplaySettings() {
+            fetch('/api/profile')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.status === 'ok') {
+                        showReasoning = (d.show_reasoning !== undefined) ? !!d.show_reasoning : true;
+                        showStatus = (d.show_status !== undefined) ? !!d.show_status : true;
+                        if ($('p_show_reasoning')) $('p_show_reasoning').checked = showReasoning;
+                        if ($('p_show_status')) $('p_show_status').checked = showStatus;
+                    }
+                })
+                .catch(() => {});
+        }
         function openSettings() {
             $('profileStatus').textContent = '';
             $('profileError').textContent = '';
@@ -731,8 +748,12 @@
             btn.disabled = true;
             const d = new URLSearchParams();
             d.set('hermes_url', $('p_url').value.trim());
-            d.set('hermes_user', $('p_user').value.trim());
-            d.set('hermes_pass', $('p_pass').value);
+            // Benutzer/Passwort NUR senden, wenn ein Passwort eingegeben wurde
+            // (sonst: Zugangsdaten unangetastet lassen, nur restliche Felder speichern)
+            if ($('p_pass').value) {
+                d.set('hermes_user', $('p_user').value.trim());
+                d.set('hermes_pass', $('p_pass').value);
+            }
             d.set('hermes_profile', $('p_profile').value);
             d.set('show_reasoning', $('p_show_reasoning').checked ? '1' : '0');
             d.set('show_status', $('p_show_status').checked ? '1' : '0');
@@ -743,6 +764,9 @@
                     $('profileError').textContent = j.message || 'Speichern fehlgeschlagen';
                     return;
                 }
+                // Anzeige-Einstellungen sofort übernehmen (Denken/Statuszeilen)
+                showReasoning = $('p_show_reasoning').checked;
+                showStatus = $('p_show_status').checked;
                 if (j.test === 'connected') {
                     $('profileStatus').textContent = '✓ Verbunden mit Hermes!';
                     $('settingsModal').classList.remove('active');
@@ -1126,6 +1150,8 @@
             hermesSessionId = null;
             messagesDiv.innerHTML = '';
             bubble = null;
+            // Anzeige-Einstellungen (Denken/Statuszeilen) frisch laden — gilt auch nach Session-Wechsel
+            loadDisplaySettings();
             connectWS();
         }
 
