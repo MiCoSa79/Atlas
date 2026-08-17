@@ -333,6 +333,7 @@
                 </div>
                 <button id="saveAdminSettings" style="width:auto;padding:8px 16px;font-size:13px;margin:0 8px 8px 0;">Speichern</button>
                 <button id="showAdminUsers" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted);cursor:pointer;">Benutzerverwaltung</button>
+                <button id="usageResetBtn" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid #e5534b;border-radius:10px;color:#e5534b;cursor:pointer;margin-top:8px;">Token-Verbrauch heute zurücksetzen</button>
             </div>
         </div>
     </div>
@@ -765,6 +766,22 @@
             $('createUserError').textContent = '';
             $('adminUsersModal').classList.add('active');
             loadUsersTable();
+        });
+        // Admin: Token-Verbrauch heute + Delta-Baselines zurücksetzen (v0.0.88)
+        $('usageResetBtn').addEventListener('click', async () => {
+            if (!confirm('Heutigen Token-Verbrauch UND alle Delta-Baselines wirklich zurücksetzen?')) return;
+            try {
+                const r = await fetch('/api/usage/reset', { method: 'POST' });
+                const j = await r.json().catch(() => ({}));
+                if (r.ok) {
+                    updateTokenWidget();
+                    showToast('Usage zurückgesetzt ✓');
+                } else {
+                    showToast(j.message || 'Reset fehlgeschlagen');
+                }
+            } catch (err) {
+                showToast('Verbindungsfehler');
+            }
         });
         $('closeAdminUsers').addEventListener('click', () => $('adminUsersModal').classList.remove('active'));
         $('adminUsersModal').addEventListener('click', e => {
@@ -1665,54 +1682,6 @@
             restartWS();
         });
     
-        // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76)
-        function updateTokenWidget() {
-            const w = document.getElementById('statusBar');
-            if (!w) return;
-            // API direkt ansprechen
-            fetch('/api/usage/today')
-                .then(r => {
-                    // Nicht 200? → Status anzeigen
-                    if (!r.ok) {
-                        if (r.status === 401) {
-                            return {status: 'unauthenticated'};
-                        }
-                        if (r.status === 404) {
-                            return {status: 'not_found'};
-                        }
-                        return {status: 'error', code: r.status};
-                    }
-                    return r.json();
-                })
-                .then(data => {
-                    if (!w) return;
-                    if (!data || data.status !== 'ok') {
-                        const msg = data?.status === 'unauthenticated' ? 'Login erforderlich' :
-                                    data?.status === 'not_found' ? 'API nicht verfügbar' :
-                                    data?.status === 'error' ? 'Serverfehler (' + (data.code||'?') + ')' :
-                                    'Keine Daten';
-                        w.innerHTML = '<span class="tokens">' + msg + '</span>';
-                        return;
-                    }
-                    const t = data.total_tokens || 0;
-                    const c = data.cost || 0;
-                    const costStr = c > 0 ? c.toFixed(4) + '€' : '0.0000€';
-                    w.innerHTML = '<span class="tokens">' + t.toLocaleString('de-DE') + '</span> <span class="sep">·</span> <span class="cost">' + costStr + '</span>';
-                })
-                .catch(e => {
-                    const w = document.getElementById('statusBar');
-                    if (w) w.innerHTML = '<span class="tokens">Netzwerkfehler</span>';
-                });
-        }
-        // Token-Widget beim Laden aktualisieren, dann alle 5 Minuten
-        document.addEventListener('DOMContentLoaded', () => {
-            // Kurz warten damit statusBar fertig gerendert ist
-            setTimeout(updateTokenWidget, 200);
-            setInterval(updateTokenWidget, 5 * 60 * 1000);
-        });
-        // Auch nach WebSocket-Verbindung aktualisieren (wenn Tokens kommen)
-        // (wird beim WS-Connect automatisch durch updateTokenWidget() abgedeckt)
-
         // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76)
         function updateTokenWidget() {
             const w = document.getElementById('statusBar');
