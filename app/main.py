@@ -8,7 +8,7 @@ Eigenständiger FastAPI-Container:
 Läuft im Container unter /app, Datenbank in /data/atlas.db (Volume).
 """
 import asyncio
-import datetime
+from datetime import datetime
 import base64
 import aiohttp
 import bcrypt
@@ -357,80 +357,13 @@ async def test_hermes_connection(hermes_url: str, auth: str) -> tuple:
 # ---------------------------------------------------------------- App-Setup
 
 @asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    # Zugangsdaten-Verschlüsselung: Altbestand automatisch konvertieren
+    migrate_hermes_auth_encryption()
+    yield
 
-
-# ---------------------------------------------------------------- Usage-Tracking (v0.0.76)
-def _parse_usage_from_hermes(data):
-    '''Extrahiert Token-Nutzung aus Hermes-WS-Payload.'''
-    if not isinstance(data, dict):
-        return None
-    if data.get('type') == 'session.usage':
-        return {
-            'input_tokens': data.get('input_tokens', 0) or 0,
-            'output_tokens': data.get('output_tokens', 0) or 0,
-            'total_tokens': data.get('total_tokens', 0) or 0,
-            'cost': data.get('cost') or 0,
-            'model': data.get('model', '') or '',
-        }
-    if data.get('type') == 'message.complete':
-        usage = data.get('usage') or {}
-        if usage:
-            return {
-                'input_tokens': usage.get('input_tokens', usage.get('prompt_tokens', 0)) or 0,
-                'output_tokens': usage.get('output_tokens', usage.get('completion_tokens', 0)) or 0,
-                'total_tokens': usage.get('total_tokens', 0) or 0,
-                'cost': usage.get('cost', 0) or 0,
-                'model': data.get('model', '') or (usage.get('model', '') or ''),
-            }
-    return None
-
-def _store_usage(db_conn, user_id, session_id, usage):
-    '''Speichert Usage-Daten pro User/Session.'''
-    if not usage or usage.get('total_tokens', 0) == 0:
-        return
-    db_conn.execute(
-        '''INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost)
-           VALUES (?, ?, ?, ?, ?, ?, ?)''',
-        (user_id, session_id, usage.get('model', ''),
-         usage.get('input_tokens', 0),
-         usage.get('output_tokens', 0),
-         usage.get('total_tokens', 0),
-         usage.get('cost', 0))
-    )
-
-    user = session_from_request(request)
-    if not user:
-        return JSONResponse({'status': 'error'}, status_code=401)
-    db_conn = get_db()
-    today = datetime.now().strftime('%Y-%m-%d')
-    row = db_conn.execute(
-        'SELECT SUM(input_tokens), SUM(output_tokens), SUM(total_tokens), SUM(cost) FROM usage_records WHERE user_id = ? AND date(recorded_at) = ?',
-        (user['user_id'], today)
-    ).fetchone()
-    db_conn.close()
-    return JSONResponse({
-        'status': 'ok',
-        'input_tokens': row[0] or 0,
-        'output_tokens': row[1] or 0,
-        'total_tokens': row[2] or 0,
-        'cost': (row[3] if row else 0) or 0,
-        'date': today,
-    })
-
-    user = session_from_request(request)
-    if not user:
-        return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
-    db_user = get_user_by_id(user['user_id'])
-    if not db_user or not db_user['is_admin']:
-        return JSONResponse({'status': 'error', 'message': 'Nicht autorisiert'}, status_code=403)
-    conn = get_db()
-    conn.execute(
-        "DELETE FROM usage_records WHERE date(recorded_at) = date('now', 'localtime')")
-    conn.commit()
-    conn.close()
-    return JSONResponse({'status': 'ok'})
-
-
+app = FastAPI(title="Atlas", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------- Usage-Tracking (v0.0.76)
@@ -471,48 +404,25 @@ def _store_usage(db_conn, user_id, session_id, usage):
          usage.get('total_tokens', 0),
          usage.get('cost', 0))
     )
+    db_conn.commit()
 
 
-    user = session_from_request(request)
-    if not user:
-        return JSONResponse({'status': 'error'}, status_code=401)
-    db_conn = get_db()
+def get_today_usage(user_id):
+    """Summierte Token-Werte des heutigen Tages für einen User."""
     today = datetime.now().strftime('%Y-%m-%d')
+    db_conn = get_db()
     row = db_conn.execute(
         'SELECT SUM(input_tokens), SUM(output_tokens), SUM(total_tokens), SUM(cost) FROM usage_records WHERE user_id = ? AND date(recorded_at) = ?',
-        (user['user_id'], today)
+        (user_id, today)
     ).fetchone()
     db_conn.close()
-    return JSONResponse({
-        'status': 'ok',
+    return {
         'input_tokens': row[0] or 0,
         'output_tokens': row[1] or 0,
         'total_tokens': row[2] or 0,
         'cost': (row[3] if row else 0) or 0,
         'date': today,
-    })
-
-
-    user = session_from_request(request)
-    if not user:
-        return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
-    db_user = get_user_by_id(user['user_id'])
-    if not db_user or not db_user['is_admin']:
-        return JSONResponse({'status': 'error', 'message': 'Nicht autorisiert'}, status_code=403)
-    conn = get_db()
-    conn.execute(
-        "DELETE FROM usage_records WHERE date(recorded_at) = date('now', 'localtime')")
-    conn.commit()
-    conn.close()
-    return JSONResponse({'status': 'ok'})
-
-async def lifespan(app: FastAPI):
-    init_db()
-    # Zugangsdaten-Verschlüsselung: Altbestand automatisch konvertieren
-    migrate_hermes_auth_encryption()
-    yield
-
-app = FastAPI(title="Atlas", lifespan=lifespan)
+    }
 
 
 # ---------------------------------------------------------------- Usage-Tracking API (v0.0.77)
@@ -1309,6 +1219,35 @@ async def local_file_download(request: Request):
     return FileResponse(file_path, filename=safe_filename, media_type=mime_type)
 
 
+def _save_usage_snapshot(db_conn, user_id, session_id, model, usage_resp, last_usage):
+    """Speichert session.usage-Delta in usage_records (nach v0.0.83 Pattern).
+    usage_resp kommt vom Hermes session.usage RPC-Call: {model, input, output, total, ...}"""
+    if not usage_resp:
+        return
+    total = int(usage_resp.get('total', 0) or 0)
+    inp = int(usage_resp.get('input', 0) or 0)
+    out = int(usage_resp.get('output', 0) or 0)
+    if total <= 0:
+        return
+    # Delta zum letzten gemeldeten Stand dieser Session
+    last = last_usage.get(session_id)
+    if last:
+        delta_total = max(0, total - last[0])
+        delta_in = max(0, inp - last[1])
+        delta_out = max(0, out - last[2])
+    else:
+        # Erste Meldung: kompletter Verbrauch zählt
+        delta_total, delta_in, delta_out = total, inp, out
+    if delta_total > 0:
+        db_conn.execute(
+            'INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, 0)',
+            (user_id, session_id, model or '', delta_in, delta_out, delta_total)
+        )
+        db_conn.commit()
+    # Letzten Stand für Delta-Berechnung speichern
+    last_usage[session_id] = (total, inp, out)
+
+
 @app.websocket("/ws")
 async def websocket_proxy(ws: WebSocket):
     await ws.accept()
@@ -1379,10 +1318,35 @@ async def websocket_proxy(ws: WebSocket):
             ) as hws:
 
                 async def fwd_hermes_to_client():
+                    """Forward Hermes-Events + Usage-Delta nach message.complete speichern."""
+                    last_usage = {}  # session_id -> (total, input, output) für Delta
                     try:
                         async for msg in hws:
                             if msg.type == WSMsgType.TEXT:
-                                await ws.send_text(msg.data)
+                                data = msg.data
+                                # 1) Event immer an Client forwarden
+                                await ws.send_text(data)
+                                # 2) message.complete -> usage aus payload speichern
+                                #    Struktur: {method: "event", params: {type: "message.complete",
+                                #               session_id: ..., payload: {usage: {...}}}}
+                                try:
+                                    d = json.loads(data)
+                                    if d.get('method') == 'event':
+                                        params = d.get('params') or {}
+                                        if params.get('type') == 'message.complete':
+                                            sid = params.get('session_id', '')
+                                            usage = (params.get('payload') or {}).get('usage') or {}
+                                            if sid and usage:
+                                                model = usage.get('model', '') or ''
+                                                _save_usage_snapshot(
+                                                    get_db(), session['user_id'],
+                                                    sid, model, usage, last_usage
+                                                )
+                                                print(f"[WS-Proxy] usage saved: {sid[:12]}... = {usage.get('total', 0)} tokens (model: {model})")
+                                except json.JSONDecodeError:
+                                    pass
+                                except Exception as e:
+                                    print(f"[WS-Proxy] usage parse error: {e}")
                             elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR, WSMsgType.CLOSED):
                                 print(f"[WS-Proxy] gateway closed/error: type={msg.type}")
                                 break
