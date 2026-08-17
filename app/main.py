@@ -526,6 +526,48 @@ async def api_usage_today(request: Request):
     return JSONResponse({'status': 'ok', **usage})
 
 
+@app.post('/api/usage/record')
+async def api_usage_record(request: Request):
+    """Client meldet session.usage-Snapshot (kumulierte Session-Werte).
+    Backend berechnet den Delta-Verbrauch zum letzten gemeldeten Stand
+    und speichert ihn als eigene Zeile → /api/usage/today zeigt echten
+    Tagesverbrauch statt kumulierter Session-Zahlen."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error'}, status_code=401)
+    body = await request.json()
+    session_id = body.get('session_id', 'unknown') or 'unknown'
+    total = int(body.get('total', 0) or 0)
+    inp = int(body.get('input', 0) or 0)
+    out = int(body.get('output', 0) or 0)
+    model = body.get('model', '') or ''
+    if total <= 0:
+        return JSONResponse({'status': 'ok', 'delta': 0})
+    db_conn = get_db()
+    # Letzten gemeldeten Stand für diese Session holen (nicht der User! Session läuft über Profile)
+    last = db_conn.execute(
+        'SELECT total_tokens, input_tokens, output_tokens FROM usage_records WHERE session_id = ? ORDER BY id DESC LIMIT 1',
+        (session_id,)
+    ).fetchone()
+    if last:
+        delta_total = max(0, total - (last[0] or 0))
+        delta_in = max(0, inp - (last[1] or 0))
+        delta_out = max(0, out - (last[2] or 0))
+    else:
+        # Erste Meldung dieser Session: kompletter Verbrauch zählt (Session wurde
+        # in diesem Atlas-Verlauf gestartet; Session-Resume über Tage wird so
+        # nur beim ersten Kontakt einmalig erfasst).
+        delta_total, delta_in, delta_out = total, inp, out
+    if delta_total > 0:
+        db_conn.execute(
+            'INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, 0)',
+            (user['user_id'], session_id, model, delta_in, delta_out, delta_total)
+        )
+        db_conn.commit()
+    db_conn.close()
+    return JSONResponse({'status': 'ok', 'delta': delta_total})
+
+
 @app.post('/api/usage/reset')
 async def api_usage_reset(request: Request):
     """Setzt Usage-Counter zurück (nur Admin)."""
@@ -1340,16 +1382,6 @@ async def websocket_proxy(ws: WebSocket):
                     try:
                         async for msg in hws:
                             if msg.type == WSMsgType.TEXT:
-                                try:
-                                    data = json.loads(msg.data)
-                                    if isinstance(data, dict) and data.get('method') == 'session.usage':
-                                        usage = _parse_usage_from_hermes(data.get('params') or data)
-                                        if usage:
-                                            with get_db() as db_conn:
-                                                session_id = data.get('params', {}).get('session_id', 'unknown')
-                                                _store_usage(db_conn, session["user_id"], session_id, usage)
-                                except Exception:
-                                    pass
                                 await ws.send_text(msg.data)
                             elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR, WSMsgType.CLOSED):
                                 print(f"[WS-Proxy] gateway closed/error: type={msg.type}")
