@@ -1686,11 +1686,22 @@
             restartWS();
         });
     
-        // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76)
+        // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76, v0.0.90 modellgetrennt)
+        let currentModel = '';  // aktuellstes Modell (aus current-model API)
+        let modelCache = {};    // Modell -> {input, output, total, cost} Caching für Reflow-Schutz
+        let modelCacheTime = 0;
+        const MODEL_CACHE_MS = 1500;  // 1.5s Cache, damit updateTokenWidget() in message.complete nicht 2x fliegt
+
         function updateTokenWidget() {
             const w = document.getElementById('statusBar');
             if (!w) { setTimeout(updateTokenWidget, 500); return; }
-            fetch('/api/usage/today')
+            // Cache nutzen (Refetch nur wenn älter als 1.5s)
+            const now = Date.now();
+            if (now - modelCacheTime < MODEL_CACHE_MS && Object.keys(modelCache).length > 0) {
+                renderTokenWidget(w, modelCache);
+                return;
+            }
+            fetch('/api/usage/today/all')
                 .then(r => {
                     if (r.status !== 200) {
                         return r.text().then(t => { w.innerHTML = '<span class="tokens">Token: ' + r.status + '</span>'; return null; });
@@ -1702,28 +1713,54 @@
                         w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
                         return;
                     }
-                    const inp = data.input_tokens || 0;
-                    const out = data.output_tokens || 0;
-                    const total = data.total_tokens || 0;
-                    const c = data.cost || 0;
-                    if (c <= 0 && total === 0) {
-                        w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
-                    } else {
-                        const costStr = c > 0 ? c.toFixed(4) + ' ' : '';
-                        w.innerHTML =
-                            '<span class="tokens inp">⬇ ' + inp.toLocaleString('de-DE') + '</span>' +
-                            ' <span class="sep">·</span> ' +
-                            '<span class="tokens out">⬆ ' + out.toLocaleString('de-DE') + '</span>' +
-                            ' <span class="sep">·</span> ' +
-                            '<span class="tokens total">⬇+⬆ ' + total.toLocaleString('de-DE') + '</span>' +
-                            ' <span class="sep">·</span> ' +
-                            '<span class="cost">' + costStr + '€</span>';
-                    }
+                    // Modell abrufen
+                    fetch('/api/usage/current-model').then(r => {
+                        r.json().then(md => {
+                            if (md.status === 'ok' && md.model) {
+                                currentModel = md.model.split('/').slice(-1)[0];
+                                modelCache = data;
+                                modelCacheTime = Date.now();
+                                renderTokenWidget(w, data);
+                            }
+                        }).catch(() => { modelCache = data; modelCacheTime = Date.now(); renderTokenWidget(w, data); });
+                    }).catch(() => { modelCache = data; modelCacheTime = Date.now(); renderTokenWidget(w, data); });
                 })
                 .catch(e => {
                     const w = document.getElementById('statusBar');
                     if (w) w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
                 });
+        }
+
+        function renderTokenWidget(w, data) {
+            if (!w) return;
+            const models = data.models || [];
+            if (data.total_tokens === 0) {
+                w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
+                return;
+            }
+            let parts = [];
+            // Modell-Anzeige (links)
+            if (currentModel) {
+                parts.push('<span class="model-label" title="' + data.models.map(m => m.model_short + ': ' + m.total_tokens.toLocaleString('de-DE')).join(', ') + '">' + currentModel + '</span>');
+            }
+            // Pro-Modell-Zeilen
+            for (const m of models) {
+                parts.push(
+                    '<span class="tokens inp" title="' + m.model + '">⬇ ' + m.input_tokens.toLocaleString('de-DE') + '</span>' +
+                    ' <span class="sep">·</span> ' +
+                    '<span class="tokens out">⬆ ' + m.output_tokens.toLocaleString('de-DE') + '</span>' +
+                    ' <span class="sep">·</span> ' +
+                    '<span class="tokens total">⬇+⬆ ' + m.total_tokens.toLocaleString('de-DE') + '</span>'
+                );
+                if (m.cost > 0) {
+                    parts.push(' <span class="sep">·</span> <span class="cost">' + m.cost.toFixed(4) + '€</span>');
+                }
+            }
+            // Gesamtlinie wenn mehrere Modelle
+            if (models.length > 1) {
+                parts.push(' <span class="sep">·</span> <span class="tokens total">= ' + data.total_tokens.toLocaleString('de-DE') + '</span>');
+            }
+            w.innerHTML = parts.join(' ');
         }
         // Token-Widget beim Laden aktualisieren, dann alle 5 Minuten
         document.addEventListener('DOMContentLoaded', () => {
