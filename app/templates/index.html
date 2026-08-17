@@ -1194,6 +1194,10 @@
                         statusBubble.remove();
                         statusBubble = null;
                     }
+                    // Token-Anzeige nach jeder fertigen Antwort sofort aktualisieren
+                    // (v0.0.89: der session.usage-Trigger aus v0.0.83 wurde in v0.0.87
+                    // entfernt, das Widget pollt nur noch alle 5 Min -> wirkte veraltet)
+                    updateTokenWidget();
                 }
                 if (p.type === 'status.update' && p.payload && p.payload.text) {
                     const t = p.payload.text;
