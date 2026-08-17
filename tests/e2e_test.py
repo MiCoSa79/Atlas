@@ -691,7 +691,6 @@ def main():
     try:
         db_path = os.environ.get("ATLAS_DB") or "/tmp/atlas_e2e.db"
         if os.path.exists(db_path):
-            import sqlite3
             con = sqlite3.connect(db_path)
             row = con.execute("SELECT hermes_auth FROM users WHERE username = ?", (ADMIN_USER,)).fetchone()
             con.close()

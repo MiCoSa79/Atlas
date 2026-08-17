@@ -959,8 +959,6 @@
             }
         }
 
-        let usageRpcId = null;  // session.usage-Abfrage (Token-Tracking)
-
         function sendRpc(method, params) {
             rpcId += 1;
             ws.send(JSON.stringify({ jsonrpc: "2.0", id: rpcId, method: method, params: params || {} }));
@@ -1019,22 +1017,6 @@
                 console.log('[Atlas] ← WS msg:', logData);
                 console.log('[Atlas] ← WS message:', JSON.stringify(frame).substring(0, 200));
 
-                // session.usage-Antwort: Token-Verbrauch an Atlas-Backend melden
-            if (usageRpcId !== null && frame.id === usageRpcId && frame.result) {
-                const u = frame.result;
-                fetch('/api/usage/record', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: hermesSessionId,
-                        total: u.total || 0,
-                        input: u.input || 0,
-                        output: u.output || 0,
-                        model: u.model || ''
-                    })
-                }).then(() => { updateTokenWidget(); });
-                usageRpcId = null;
-            }
             if (createRpcId !== null && frame.id === createRpcId && frame.result && frame.result.session_id) {
                     // session.create (Neue Unterhaltung)
                     hermesSessionId = frame.result.session_id;
@@ -1186,9 +1168,6 @@
                         meta.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
                         bubble.appendChild(meta);
                         bubble = null;
-                        // Token-Verbrauch abfragen: session.usage ist eine RPC-Methode
-                        // (kein Push-Event!) → nach jeder fertigen Antwort aktiv aufrufen
-                        usageRpcId = sendRpc('session.usage', { session_id: hermesSessionId });
                     }
                     if (thinkingBubble) {
                         thinkingBubble.classList.add('done');

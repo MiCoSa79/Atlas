@@ -376,47 +376,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Atlas", lifespan=lifespan)
 
 
-# ---------------------------------------------------------------- Usage-Tracking (v0.0.76)
-def _parse_usage_from_hermes(data):
-    """Extrahiert Token-Nutzung aus Hermes-WS-Payload."""
-    if not isinstance(data, dict):
-        return None
-    if data.get('type') == 'session.usage':
-        return {
-            'input_tokens': data.get('input_tokens', 0) or 0,
-            'output_tokens': data.get('output_tokens', 0) or 0,
-            'total_tokens': data.get('total_tokens', 0) or 0,
-            'cost': data.get('cost') or 0,
-            'model': data.get('model', '') or '',
-        }
-    if data.get('type') == 'message.complete':
-        usage = data.get('usage') or {}
-        if usage:
-            return {
-                'input_tokens': usage.get('input_tokens', usage.get('prompt_tokens', 0)) or 0,
-                'output_tokens': usage.get('output_tokens', usage.get('completion_tokens', 0)) or 0,
-                'total_tokens': usage.get('total_tokens', 0) or 0,
-                'cost': usage.get('cost', 0) or 0,
-                'model': data.get('model', '') or (usage.get('model', '') or ''),
-            }
-    return None
-
-
-def _store_usage(db_conn, user_id, session_id, usage):
-    """Speichert Usage-Daten pro User/Session."""
-    if not usage or usage.get('total_tokens', 0) == 0:
-        return
-    db_conn.execute(
-        'INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        (user_id, session_id, usage.get('model', ''),
-         usage.get('input_tokens', 0),
-         usage.get('output_tokens', 0),
-         usage.get('total_tokens', 0),
-         usage.get('cost', 0))
-    )
-    db_conn.commit()
-
-
 def get_today_usage(user_id):
     """Summierte Token-Werte des heutigen Tages für einen User."""
     today = datetime.now().strftime('%Y-%m-%d')
@@ -446,51 +405,15 @@ async def api_usage_today(request: Request):
     return JSONResponse({'status': 'ok', **usage})
 
 
-@app.post('/api/usage/record')
-async def api_usage_record(request: Request):
-    """Client meldet session.usage-Snapshot (kumulierte Session-Werte).
-    Backend berechnet den Delta-Verbrauch zum letzten gemeldeten Stand
-    und speichert ihn als eigene Zeile → /api/usage/today zeigt echten
-    Tagesverbrauch statt kumulierter Session-Zahlen."""
-    user = session_from_request(request)
-    if not user:
-        return JSONResponse({'status': 'error'}, status_code=401)
-    body = await request.json()
-    session_id = body.get('session_id', 'unknown') or 'unknown'
-    total = int(body.get('total', 0) or 0)
-    inp = int(body.get('input', 0) or 0)
-    out = int(body.get('output', 0) or 0)
-    model = body.get('model', '') or ''
-    if total <= 0:
-        return JSONResponse({'status': 'ok', 'delta': 0})
-    db_conn = get_db()
-    # Letzten gemeldeten Stand für diese Session holen (nicht der User! Session läuft über Profile)
-    last = db_conn.execute(
-        'SELECT total_tokens, input_tokens, output_tokens FROM usage_records WHERE session_id = ? ORDER BY id DESC LIMIT 1',
-        (session_id,)
-    ).fetchone()
-    if last:
-        delta_total = max(0, total - (last[0] or 0))
-        delta_in = max(0, inp - (last[1] or 0))
-        delta_out = max(0, out - (last[2] or 0))
-    else:
-        # Erste Meldung dieser Session: kompletter Verbrauch zählt (Session wurde
-        # in diesem Atlas-Verlauf gestartet; Session-Resume über Tage wird so
-        # nur beim ersten Kontakt einmalig erfasst).
-        delta_total, delta_in, delta_out = total, inp, out
-    if delta_total > 0:
-        db_conn.execute(
-            'INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, 0)',
-            (user['user_id'], session_id, model, delta_in, delta_out, delta_total)
-        )
-        db_conn.commit()
-    db_conn.close()
-    return JSONResponse({'status': 'ok', 'delta': delta_total})
-
-
 @app.post('/api/usage/reset')
 async def api_usage_reset(request: Request):
-    """Setzt Usage-Counter zurück (nur Admin)."""
+    """Setzt Usage-Counter zurück (nur Admin).
+
+    Löscht die heutigen usage_records UND sämtliche usage_last-Baselines.
+    Nach einem Update mit geänderter Delta-Semantik (z. B. v0.0.87:
+    prompt/completion statt input/output) müssen die Baselines weg,
+    sonst werden falsche Deltas gegen Altwerte gerechnet.
+    """
     user = session_from_request(request)
     if not user:
         return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
@@ -499,6 +422,7 @@ async def api_usage_reset(request: Request):
         return JSONResponse({'status': 'error', 'message': 'Nicht autorisiert'}, status_code=403)
     conn = get_db()
     conn.execute("DELETE FROM usage_records WHERE date(recorded_at) = date('now', 'localtime')")
+    conn.execute("DELETE FROM usage_last")
     conn.commit()
     conn.close()
     return JSONResponse({'status': 'ok'})
@@ -1230,11 +1154,15 @@ async def local_file_download(request: Request):
 
 
 def _save_usage_snapshot(db_conn, user_id, session_id, model, usage_resp):
-    """Speichert session.usage-Delta in usage_records.
+    """Speichert message.complete-Delta in usage_records (Einzelpfad v0.0.87).
 
-    usage_resp kommt aus message.complete.payload.usage — KUMULATIVER
-    Session-Wert (prompt=input, prompt+completion=total).
-    Delta-Basis: usage_last-Spalte der Session (nicht RAM).
+    usage_resp kommt aus message.complete.payload.usage. WICHTIG: total, prompt
+    und completion sind KUMULATIV über die Session-Lebensdauer; total =
+    prompt + completion. Die Felder input/output sind dagegen TURN-Werte
+    (nur der neue Anteil des letzten Turns) — sie dürfen NICHT als
+    Delta-Basis verwendet werden, sonst gilt total != input + output.
+
+    Delta-Basis: usage_last-Tabelle der Session (überlebt Neustarts).
     Falls kein Eintrag in usage_last existiert → kein Phantom-Delta,
     nur Baseline setzen (ansonsten würde ein Neustart mit alter Session
     den kumulierten Altstand als Verbrauch verbuchen).
@@ -1242,10 +1170,12 @@ def _save_usage_snapshot(db_conn, user_id, session_id, model, usage_resp):
     if not usage_resp:
         return
     total = int(usage_resp.get('total', 0) or 0)
-    inp = int(usage_resp.get('input', 0) or 0)
-    out = int(usage_resp.get('output', 0) or 0)
     if total <= 0:
         return
+    out = int(usage_resp.get('completion', 0) or 0)
+    inp = int(usage_resp.get('prompt', 0) or 0)
+    if inp <= 0:
+        inp = max(0, total - out)
 
     # Letzten gemeldeten Stand aus usage_last holen
     row = db_conn.execute(
