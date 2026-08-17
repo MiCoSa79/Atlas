@@ -426,6 +426,84 @@ async def api_usage_reset(request: Request):
     conn.commit()
     conn.close()
     return JSONResponse({'status': 'ok'})
+
+
+def get_today_usage_by_model(user_id):
+    """Summierte Token-Werte pro Modell des heutigen Tages für einen User."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    db_conn = get_db()
+    rows = db_conn.execute(
+        'SELECT model, '
+        '       SUM(input_tokens), SUM(output_tokens), SUM(total_tokens), SUM(cost) '
+        'FROM usage_records '
+        'WHERE user_id = ? AND date(recorded_at) = ? '
+        'GROUP BY model '
+        'ORDER BY SUM(total_tokens) DESC',
+        (user_id, today)
+    ).fetchall()
+    db_conn.close()
+    models = []
+    for row in rows:
+        model = row[0] or 'unbekannt'
+        models.append({
+            'model': model,
+            'model_short': model.split('/')[-1] if '/' in model else model,
+            'input_tokens': row[1] or 0,
+            'output_tokens': row[2] or 0,
+            'total_tokens': row[3] or 0,
+            'cost': (row[4] if row[4] else 0) or 0,
+        })
+    # Gesamtsumme
+    totals = db_conn.execute(
+        'SELECT SUM(input_tokens), SUM(output_tokens), SUM(total_tokens), SUM(cost) '
+        'FROM usage_records WHERE user_id = ? AND date(recorded_at) = ?',
+        (user_id, today)
+    ).fetchone()
+    return {
+        'models': models,
+        'total_tokens': totals[2] or 0,
+        'total_input': totals[0] or 0,
+        'total_output': totals[1] or 0,
+        'total_cost': (totals[3] if totals[3] else 0) or 0,
+        'date': today,
+    }
+
+
+def get_last_model(user_id):
+    """Aktuellstes Modell des heutigen Tages."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    db_conn = get_db()
+    row = db_conn.execute(
+        'SELECT model FROM usage_records '
+        'WHERE user_id = ? AND date(recorded_at) = ? '
+        'ORDER BY id DESC LIMIT 1',
+        (user_id, today)
+    ).fetchone()
+    db_conn.close()
+    return (row[0] or '') if row else ''
+
+
+# ---------------------------------------------------------------- Model-aware usage API (v0.0.90)
+@app.get('/api/usage/today/all')
+async def api_usage_today_all(request: Request):
+    """Modellgetrennte Token-Anzeige des heutigen Tages."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error'}, status_code=401)
+    data = get_today_usage_by_model(user['user_id'])
+    return JSONResponse({'status': 'ok', **data})
+
+
+@app.get('/api/usage/current-model')
+async def api_usage_current_model(request: Request):
+    """Aktuellstes Modell des heutigen Tages."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error'}, status_code=401)
+    model = get_last_model(user['user_id'])
+    return JSONResponse({'status': 'ok', 'model': model})
+
+
 templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
