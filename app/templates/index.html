@@ -182,16 +182,30 @@
             user-select: none;
             min-height: 28px;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 10px;
-            flex-wrap: wrap;
+            gap: 4px;
         }
         .statusbar .tokens { font-weight: 600; color: var(--text); }
         .statusbar .cost { color: var(--accent); font-weight: 700; }
         .statusbar .sep { opacity: .4; }
         .statusbar .loading { opacity: .5; }
         .statusbar .offline { color: #e05555; font-weight: 600; }
+        /* Je Modell eine Zeile: Block untereinander, Werte innerhalb nebeneinander */
+        .statusbar .tok-block {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .statusbar .model-label {
+            font-weight: 700;
+            color: var(--accent);
+            font-size: 14px;
+        }
+        .statusbar .tok-total { opacity: .85; }
 
 </style>
 </head>
@@ -1686,8 +1700,7 @@
             restartWS();
         });
     
-        // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76, v0.0.90 modellgetrennt)
-        let currentModel = '';  // aktuellstes Modell (aus current-model API)
+        // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76, v0.0.90 modellgetrennt, v0.0.92 Zeilen-Layout)
         let modelCache = {};    // Modell -> {input, output, total, cost} Caching für Reflow-Schutz
         let modelCacheTime = 0;
         const MODEL_CACHE_MS = 1500;  // 1.5s Cache, damit updateTokenWidget() in message.complete nicht 2x fliegt
@@ -1713,17 +1726,9 @@
                         w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
                         return;
                     }
-                    // Modell abrufen
-                    fetch('/api/usage/current-model').then(r => {
-                        r.json().then(md => {
-                            if (md.status === 'ok' && md.model) {
-                                currentModel = md.model.split('/').slice(-1)[0];
-                                modelCache = data;
-                                modelCacheTime = Date.now();
-                                renderTokenWidget(w, data);
-                            }
-                        }).catch(() => { modelCache = data; modelCacheTime = Date.now(); renderTokenWidget(w, data); });
-                    }).catch(() => { modelCache = data; modelCacheTime = Date.now(); renderTokenWidget(w, data); });
+                    modelCache = data;
+                    modelCacheTime = Date.now();
+                    renderTokenWidget(w, data);
                 })
                 .catch(e => {
                     const w = document.getElementById('statusBar');
@@ -1739,26 +1744,23 @@
                 return;
             }
             let parts = [];
-            // Modell-Anzeige (links)
-            if (currentModel) {
-                parts.push('<span class="model-label" title="' + data.models.map(m => m.model_short + ': ' + m.total_tokens.toLocaleString('de-DE')).join(', ') + '">' + currentModel + '</span>');
-            }
-            // Pro-Modell-Zeilen
+            // Pro Modell eine Zeile: Modellname links, dann ⬇ input ⬆ output ⬇+⬆ total · €
             for (const m of models) {
                 parts.push(
-                    '<span class="tokens inp" title="' + m.model + '">⬇ ' + m.input_tokens.toLocaleString('de-DE') + '</span>' +
-                    ' <span class="sep">·</span> ' +
+                    '<span class="tok-block">' +
+                    '<span class="model-label" title="' + m.model + '">' + m.model_short + '</span>' +
+                    '<span class="tokens inp">⬇ ' + m.input_tokens.toLocaleString('de-DE') + '</span>' +
+                    '<span class="sep">·</span>' +
                     '<span class="tokens out">⬆ ' + m.output_tokens.toLocaleString('de-DE') + '</span>' +
-                    ' <span class="sep">·</span> ' +
-                    '<span class="tokens total">⬇+⬆ ' + m.total_tokens.toLocaleString('de-DE') + '</span>'
+                    '<span class="sep">·</span>' +
+                    '<span class="tokens total">⬇+⬆ ' + m.total_tokens.toLocaleString('de-DE') + '</span>' +
+                    (m.cost > 0 ? ' <span class="sep">·</span> <span class="cost">' + m.cost.toFixed(4) + '€</span>' : '') +
+                    '</span>'
                 );
-                if (m.cost > 0) {
-                    parts.push(' <span class="sep">·</span> <span class="cost">' + m.cost.toFixed(4) + '€</span>');
-                }
             }
             // Gesamtlinie wenn mehrere Modelle
             if (models.length > 1) {
-                parts.push(' <span class="sep">·</span> <span class="tokens total">= ' + data.total_tokens.toLocaleString('de-DE') + '</span>');
+                parts.push('<span class="tok-block tok-total">= ' + data.total_tokens.toLocaleString('de-DE') + '</span>');
             }
             w.innerHTML = parts.join(' ');
         }
