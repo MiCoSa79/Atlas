@@ -835,7 +835,7 @@ async def api_profiles(request: Request):
     if not user:
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
     db_user = get_user_by_id(user["user_id"]) or {}
-    hermes_auth = db_user.get("hermes_auth")
+    hermes_auth = decrypt_secret(db_user.get("hermes_auth") or "")
     hermes_url = db_user.get("hermes_url") or ""
     if not hermes_url or not hermes_auth:
         return JSONResponse({"status": "ok", "profiles": []})
