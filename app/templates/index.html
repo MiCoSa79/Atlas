@@ -1750,13 +1750,22 @@
                         w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
                         return;
                     }
-                    const t = data.total_tokens || 0;
+                    const inp = data.input_tokens || 0;
+                    const out = data.output_tokens || 0;
+                    const total = data.total_tokens || 0;
                     const c = data.cost || 0;
-                    if (c <= 0 && t === 0) {
+                    if (c <= 0 && total === 0) {
                         w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
                     } else {
                         const costStr = c > 0 ? c.toFixed(4) + ' ' : '';
-                        w.innerHTML = '<span class="tokens">' + t.toLocaleString('de-DE') + ' Tokens</span> <span class="sep">·</span> <span class="cost">' + costStr + '€</span>';
+                        w.innerHTML =
+                            '<span class="tokens inp">⬇ ' + inp.toLocaleString('de-DE') + '</span>' +
+                            ' <span class="sep">·</span> ' +
+                            '<span class="tokens out">⬆ ' + out.toLocaleString('de-DE') + '</span>' +
+                            ' <span class="sep">·</span> ' +
+                            '<span class="tokens total">⬇+⬆ ' + total.toLocaleString('de-DE') + '</span>' +
+                            ' <span class="sep">·</span> ' +
+                            '<span class="cost">' + costStr + '€</span>';
                     }
                 })
                 .catch(e => {
