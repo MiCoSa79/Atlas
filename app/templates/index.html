@@ -267,13 +267,13 @@
                 <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
             </div>
         </div>
-    </div>
+    </div>        <!-- Token-Kosten-Statuszeile -->
+        <div id="statusBar" class="statusbar">
+            <span class="loading">Token-Infos werden geladen…</span>
+        </div>
+
 
     
-    <!-- Token-Kosten-Statuszeile -->
-    <div id="statusBar" class="statusbar">
-        <span class="loading">Token-Infos werden geladen…</span>
-    </div>
 <!-- Einstellungen-Modal -->
     <div id="settingsModal" class="modal">
         <div class="modal-card">
@@ -1667,29 +1667,47 @@
     
         // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76)
         function updateTokenWidget() {
+            const w = document.getElementById('statusBar');
+            if (!w) return;
+            // API direkt ansprechen
             fetch('/api/usage/today')
-                .then(r => r.json())
+                .then(r => {
+                    // Nicht 200? → Status anzeigen
+                    if (!r.ok) {
+                        if (r.status === 401) {
+                            return {status: 'unauthenticated'};
+                        }
+                        if (r.status === 404) {
+                            return {status: 'not_found'};
+                        }
+                        return {status: 'error', code: r.status};
+                    }
+                    return r.json();
+                })
                 .then(data => {
-                    if (data.status !== 'ok') return;
-                    const w = document.getElementById('statusBar');
                     if (!w) return;
+                    if (!data || data.status !== 'ok') {
+                        const msg = data?.status === 'unauthenticated' ? 'Login erforderlich' :
+                                    data?.status === 'not_found' ? 'API nicht verfügbar' :
+                                    data?.status === 'error' ? 'Serverfehler (' + (data.code||'?') + ')' :
+                                    'Keine Daten';
+                        w.innerHTML = '<span class="tokens">' + msg + '</span>';
+                        return;
+                    }
                     const t = data.total_tokens || 0;
                     const c = data.cost || 0;
-                    if (c <= 0 && t === 0) {
-                        w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
-                    } else {
-                        const costStr = c > 0 ? c.toFixed(4) + ' ' : '';
-                        w.innerHTML = '<span class="tokens">' + t.toLocaleString('de-DE') + ' Tokens</span> <span class="sep">·</span> <span class="cost">' + costStr + '€</span>';
-                    }
+                    const costStr = c > 0 ? c.toFixed(4) + '€' : '0.0000€';
+                    w.innerHTML = '<span class="tokens">' + t.toLocaleString('de-DE') + '</span> <span class="sep">·</span> <span class="cost">' + costStr + '</span>';
                 })
-                .catch(() => {
+                .catch(e => {
                     const w = document.getElementById('statusBar');
-                    if (w) w.innerHTML = '<span class="offline">Token-Infos nicht verfügbar</span>';
+                    if (w) w.innerHTML = '<span class="tokens">Netzwerkfehler</span>';
                 });
         }
         // Token-Widget beim Laden aktualisieren, dann alle 5 Minuten
         document.addEventListener('DOMContentLoaded', () => {
-            updateTokenWidget();
+            // Kurz warten damit statusBar fertig gerendert ist
+            setTimeout(updateTokenWidget, 200);
             setInterval(updateTokenWidget, 5 * 60 * 1000);
         });
         // Auch nach WebSocket-Verbindung aktualisieren (wenn Tokens kommen)
@@ -1697,12 +1715,20 @@
 
         // ---------------------------------------------------------------- Token-Kosten-Anzeige (v0.0.76)
         function updateTokenWidget() {
+            const w = document.getElementById('statusBar');
+            if (!w) { setTimeout(updateTokenWidget, 500); return; }
             fetch('/api/usage/today')
-                .then(r => r.json())
+                .then(r => {
+                    if (r.status !== 200) {
+                        return r.text().then(t => { w.innerHTML = '<span class="tokens">Token: ' + r.status + '</span>'; return null; });
+                    }
+                    return r.json();
+                })
                 .then(data => {
-                    if (data.status !== 'ok') return;
-                    const w = document.getElementById('statusBar');
-                    if (!w) return;
+                    if (!data || data.status !== 'ok') {
+                        w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
+                        return;
+                    }
                     const t = data.total_tokens || 0;
                     const c = data.cost || 0;
                     if (c <= 0 && t === 0) {
@@ -1712,14 +1738,15 @@
                         w.innerHTML = '<span class="tokens">' + t.toLocaleString('de-DE') + ' Tokens</span> <span class="sep">·</span> <span class="cost">' + costStr + '€</span>';
                     }
                 })
-                .catch(() => {
+                .catch(e => {
                     const w = document.getElementById('statusBar');
-                    if (w) w.innerHTML = '<span class="offline">Token-Infos nicht verfügbar</span>';
+                    if (w) w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
                 });
         }
         // Token-Widget beim Laden aktualisieren, dann alle 5 Minuten
         document.addEventListener('DOMContentLoaded', () => {
-            updateTokenWidget();
+            // Kurz warten damit statusBar fertig gerendert ist
+            setTimeout(updateTokenWidget, 200);
             setInterval(updateTokenWidget, 5 * 60 * 1000);
         });
 </script>
