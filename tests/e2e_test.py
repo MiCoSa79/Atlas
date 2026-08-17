@@ -216,6 +216,33 @@ def main():
     if not ok:
         failures.append("usage_db_structure")
 
+    # 8c) Regression v0.0.91: /api/usage/today/all + /api/usage/current-model.
+    #     Bug v0.0.90: db_conn.close() vor der totals-Query -> 500 auf today/all,
+    #     Token-Anzeige zeigte 0. Test legt einen usage_record an und prüft die API.
+    e2e_db = os.environ.get("ATLAS_DB", "/tmp/atlas_e2e.db")
+    conn_c = sqlite3.connect(e2e_db)
+    admin_id = conn_c.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()[0]
+    conn_c.execute("DELETE FROM usage_records WHERE model = 'e2e/test-model'")
+    conn_c.execute(
+        "INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost) "
+        "VALUES (?, 'e2e', 'e2e/test-model', 11, 22, 33, 0.5)",
+        (admin_id,))
+    conn_c.commit()
+    conn_c.close()
+    st_all, uj = get_json("/api/usage/today/all", jar)
+    ok = st_all == 200 and uj.get("status") == "ok" and "models" in uj and uj.get("total_tokens") == 33
+    print("8c) GET /api/usage/today/all (modellgetrennt):", "OK" if ok else f"FEHLER -> {st_all} {uj}")
+    if not ok:
+        failures.append("usage_today_all")
+    st_md, mj = get_json("/api/usage/current-model", jar)
+    ok = st_md == 200 and mj.get("status") == "ok" and mj.get("model") == "e2e/test-model"
+    print("8c) GET /api/usage/current-model:", "OK" if ok else f"FEHLER -> {st_md} {mj}")
+    if not ok:
+        failures.append("usage_current_model")
+    conn_c = sqlite3.connect(e2e_db)
+    conn_c.execute("DELETE FROM usage_records WHERE model = 'e2e/test-model'")
+    conn_c.commit()
+    conn_c.close()
 
     # 9) Logout
     st, j = post_form("/api/logout", {}, jar)

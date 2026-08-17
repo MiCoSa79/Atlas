@@ -441,7 +441,6 @@ def get_today_usage_by_model(user_id):
         'ORDER BY SUM(total_tokens) DESC',
         (user_id, today)
     ).fetchall()
-    db_conn.close()
     models = []
     for row in rows:
         model = row[0] or 'unbekannt'
@@ -459,6 +458,7 @@ def get_today_usage_by_model(user_id):
         'FROM usage_records WHERE user_id = ? AND date(recorded_at) = ?',
         (user_id, today)
     ).fetchone()
+    db_conn.close()
     return {
         'models': models,
         'total_tokens': totals[2] or 0,
