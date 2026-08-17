@@ -10,6 +10,7 @@ Simuliert den kompletten Nutzerfluss gegen die LOKALE App:
 """
 import asyncio
 import http.cookiejar
+import json
 import os
 import sys
 import urllib.error
@@ -102,8 +103,22 @@ def main():
         print("4) POST /api/profile mit Profil:", st, j.get("status"), "| Test:", j.get("test"), j.get("test_error") or "")
         if not ok:
             failures.append("profile")
-    # else:
+    else:
         print("4) Kein Profil-Test (ATLAS_TEST_HERMES_PROFILE leer)")
+
+    # 4b) /api/profiles -> Profil-Dropdown der Einstellungen. Regression: hermes_auth
+    #     ist seit v0.0.73 Fernet-verschlüsselt (enc:) und muss hier entschlüsselt werden,
+    #     sonst bleibt das Dropdown bei "Standard (default)" (Hermes-Login schlägt fehl).
+    try:
+        st, j = get_json("/api/profiles", jar)
+        names = sorted(p.get("name") or "" for p in (j.get("profiles") or []))
+        ok = st == 200 and j.get("status") == "ok" and len(names) >= 1 and "default" in names
+        print(f"4b) GET /api/profiles: {'OK' if ok else 'FEHLER (erwartet die Hermes-Profile)'} -> {names}")
+        if not ok:
+            failures.append("profiles")
+    except Exception as e:
+        print("4b) GET /api/profiles FEHLER:", e)
+        failures.append("profiles")
 
     # 5) /api/session -> eingeloggt + Hermes konfiguriert
     try:
@@ -184,7 +199,7 @@ def main():
             failures.append("session_title")
         if not first.get("id"):
             failures.append("session_id")
-    # else:
+    else:
         print("8) Session-Liste FEHLER:", sj)
         failures.append("sessions")
 
@@ -205,6 +220,7 @@ def main():
     print("7b) Admin wieder eingeloggt:", lj)
 
     # 8) Neuer User registrieren (falls erlaubt)
+    reg_status = None
     reg_cfg = json.loads(urllib.request.urlopen(f"{BASE}/api/config").read())
     print("8) GET /api/config:", reg_cfg)
     if reg_cfg.get("allow_registration"):
@@ -227,13 +243,13 @@ def main():
                 print("8b) Session als neu User (is_admin=False):", "OK" if ok else f"FEHLER -> {s_j2}")
                 if not ok:
                     failures.append("reg_session")
-            # else:
+            else:
                 print("8a) Registration fehlgeschlagen:", reg_j)
                 failures.append("register")
         except Exception as e:
             print("8) Registrierung FEHLER:", e)
             failures.append("register")
-    # else:
+    else:
         print("8) Registrierung übersprungen (nicht erlaubt)")
 
     # 9) Admin: settings speichern und lesen
@@ -245,7 +261,7 @@ def main():
         print("9) Admin settings lesen:", j2)
         if j2.get("allow_registration") is not True:
             failures.append("admin_settings")
-    # else:
+    else:
         failures.append("admin_settings")
 
     # 10) Admin: Benutzer-Liste (sollte 2 User enthalten)
@@ -254,7 +270,7 @@ def main():
     print("10) Admin users:", st, len(j.get("users", [])) if st == 200 else j)
     if st == 200 and len(j.get("users", [])) >= 2:
         print("10) 2+ User in DB ✓")
-    # else:
+    else:
         failures.append("admin_users")
 
     # 11b) Admin: Neuen Benutzer manuell anlegen
@@ -268,7 +284,7 @@ def main():
         print("11b) Admin create user:", cr.status, cj)
         if cr.status != 200:
             failures.append("admin_create_user")
-        # else:
+        else:
             # Nachlegen: User sollte jetzt in der Liste sein (3 User)
             st2, j2 = get_json("/api/admin/users", jar)
             print("11b) User nach Anlegen:", st2, len(j2.get("users", [])) if st2 == 200 else j2)
@@ -305,13 +321,13 @@ def main():
                 except urllib.error.HTTPError as e:
                     if e.code == 403:
                         print("12) Login als deaktivierter User: 403 ✓")
-                    # else:
+                    else:
                         print("12) Login als deaktivierter User: unerwarteter Status", e.code)
                         failures.append("deactivated_login")
             except Exception as e:
                 print("12) Toggle FEHLER:", e)
                 failures.append("admin_toggle")
-        # else:
+        else:
             print("12) testuser1 nicht in DB gefunden, skip")
 
     # 13) Admin: neuer User löschen
@@ -334,7 +350,7 @@ def main():
             except Exception as e:
                 print("13) DELETE FEHLER:", e)
                 failures.append("delete_user")
-        # else:
+        else:
             print("13) testuser1 nicht gefunden, skip")
 
     # ---------------------------------------------------------------- 2FA (TOTP)
@@ -656,38 +672,32 @@ def main():
     print("20) Anzeige-Einstellungen abgeschlossen ✓")
 
     
-    # ---------------------------------------------------------------- Crypto-Tests (v0.0.73) [DEAKTIVIERT: Setup-Problem]
-    print("21) Crypto-Tests: Zugangsdaten-Verschlüsselung")
-    # Prüfen ob hermes_auth in DB verschlüsselt ist
-    st, data = get_json("/api/profile", jar)
-    print(f"21a) Profil: hermes_auth_set={data.get('hermes_auth_set')}, hermes_configured={data.get('hermes_configured')}")
-    
-    # DB direkt prüfen: hermes_auth sollte mit enc: beginnen
-    import sqlite3, json
-    if row and row[0]:
-        auth_is_encrypted = row[0].startswith("enc:")
-        print(f"21b) hermes_auth encrypt: {auth_is_encrypted} ({row[0][:20]}...)")
-        if not auth_is_encrypted:
-            print("   WARNUNG: hermes_auth ist NICHT verschlüsselt!")
-    # else:
-        print("21b) Kein hermes_auth in DB (Setup ohne Hermes-Konfig)")
-    
-    print("21) Crypto-Tests abgeschlossen ✓")
+    # ---------------------------------------------------------------- Crypto-Check (v0.0.73+)
+    print("21) Crypto: hermes_auth muss verschlüsselt (enc:) in der DB liegen")
+    try:
+        db_path = os.environ.get("ATLAS_DB") or "/tmp/atlas_e2e.db"
+        if os.path.exists(db_path):
+            import sqlite3
+            con = sqlite3.connect(db_path)
+            row = con.execute("SELECT hermes_auth FROM users WHERE username = ?", (ADMIN_USER,)).fetchone()
+            con.close()
+            if row and row[0]:
+                auth_is_encrypted = row[0].startswith("enc:")
+                print(f"21a) hermes_auth encrypt: {auth_is_encrypted} ({row[0][:24]}...)")
+                if not auth_is_encrypted:
+                    failures.append("crypto_encrypt")
+            else:
+                print("21a) kein hermes_auth in DB (übersprungen)")
+        else:
+            print("21a) DB nicht gefunden (übersprungen)")
+    except Exception as e:
+        print("21a) DB-Check FEHLER:", e)
+        failures.append("crypto_db")
+
     print("-" * 50)
     if failures:
         print("ERGEBNIS: FEHLGESCHLAGEN ->", ", ".join(failures))
         sys.exit(1)
-    
-    # 21) Crypto: hermes_auth verschlüsselt in DB?
-    print("21) Crypto: DEAKTIVIERT (Setup-Problem)")
-    pass
-    # if auth and auth.startswith("enc:"):
-        # print(f"21a) hermes_auth verschlüsselt ✓ (Start mit enc:)")
-    # elif auth:
-        # print(f"21a) hermes_auth = Klartext ✗ (START MIT: {auth[:10]}...)")
-    # else:
-        # print("21a) hermes_auth = None (kein Hermes-User in E2E-DB) ✓")
-    print("21) Crypto-Tests abgeschlossen ✓")
     print("ERGEBNIS: ALLE TESTS BESTANDEN")
 
 if __name__ == "__main__":
