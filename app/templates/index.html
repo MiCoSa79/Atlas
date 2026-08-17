@@ -1766,7 +1766,7 @@
                     '<span class="tokens inp">⬇ ' + m.input_tokens.toLocaleString('de-DE') + '</span>' +
                     '<span class="tokens out">⬆ ' + m.output_tokens.toLocaleString('de-DE') + '</span>' +
                     '<span class="tokens total">⬇+⬆ ' + m.total_tokens.toLocaleString('de-DE') + '</span>' +
-                    (m.cost > 0 ? '<span class="cost">' + m.cost.toFixed(4) + '€</span>' : '') +
+                    (m.cost > 0 ? '<span class="cost">' + m.cost.toFixed(4) + '€</span>' : '<span class="cost"></span>') +
                     '</span>'
                 );
             }
@@ -1778,7 +1778,7 @@
                     '<span class="tokens inp">⬇ ' + data.total_input.toLocaleString('de-DE') + '</span>' +
                     '<span class="tokens out">⬆ ' + data.total_output.toLocaleString('de-DE') + '</span>' +
                     '<span class="tokens total">⬇+⬆ ' + data.total_tokens.toLocaleString('de-DE') + '</span>' +
-                    (data.total_cost > 0 ? '<span class="cost">' + data.total_cost.toFixed(4) + '€</span>' : '') +
+                    (data.total_cost > 0 ? '<span class="cost">' + data.total_cost.toFixed(4) + '€</span>' : '<span class="cost"></span>') +
                     '</span>'
                 );
             }
