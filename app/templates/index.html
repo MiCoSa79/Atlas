@@ -54,14 +54,15 @@
         .token-widget {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 6px 12px;
+            gap: 6px;
+            padding: 5px 10px;
             background: var(--panel);
             border: 1px solid var(--border);
             border-radius: 8px;
-            font-size: 12px;
+            font-size: 13px;
             color: var(--muted);
             cursor: default;
+            white-space: nowrap;
             transition: all 0.2s;
         }
         .token-widget:hover {
@@ -71,14 +72,19 @@
         .token-widget .tokens {
             font-weight: 600;
             color: var(--text);
+            font-size: 14px;
         }
         .token-widget .cost {
             color: var(--accent);
-            font-weight: 600;
+            font-weight: 700;
+            font-size: 14px;
         }
         .token-widget .loading {
-            opacity: 0.5;
-            font-size: 11px;
+            opacity: 0.7;
+            font-size: 12px;
+        }
+        @media (max-width: 768px) {
+            .token-widget { display: none; }
         }
         /* Setup & Login */
         .auth-page { display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
@@ -237,8 +243,7 @@
                 <input id="input" type="text" placeholder="Nachricht an Atlas..." autocomplete="off" enterkeyhint="send" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:15px; padding:10px 14px; outline:none;">
                 <input id="fileInput" type="file" hidden multiple>
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
-                <div id="tokenWidget" class="token-widget"><span class="loading">...</span></div>
-<button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
+                <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
             </div>
         </div>
     </div>
