@@ -397,8 +397,6 @@ def _store_usage(db_conn, user_id, session_id, usage):
          usage.get('cost', 0))
     )
 
-@app.get('/api/usage/today')
-async def api_usage_today(request: Request):
     user = session_from_request(request)
     if not user:
         return JSONResponse({'status': 'error'}, status_code=401)
@@ -418,8 +416,6 @@ async def api_usage_today(request: Request):
         'date': today,
     })
 
-@app.post('/api/usage/reset')
-async def api_usage_reset(request: Request):
     user = session_from_request(request)
     if not user:
         return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
@@ -476,8 +472,6 @@ def _store_usage(db_conn, user_id, session_id, usage):
     )
 
 
-@app.get('/api/usage/today')
-async def api_usage_today(request: Request):
     user = session_from_request(request)
     if not user:
         return JSONResponse({'status': 'error'}, status_code=401)
@@ -498,8 +492,6 @@ async def api_usage_today(request: Request):
     })
 
 
-@app.post('/api/usage/reset')
-async def api_usage_reset(request: Request):
     user = session_from_request(request)
     if not user:
         return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
@@ -520,6 +512,33 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="Atlas", lifespan=lifespan)
+
+
+# ---------------------------------------------------------------- Usage-Tracking API (v0.0.77)
+@app.get('/api/usage/today')
+async def api_usage_today(request: Request):
+    """Kumulierte Token-Kosten der letzten 24h."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error'}, status_code=401)
+    usage = get_today_usage(user['user_id'])
+    return JSONResponse({'status': 'ok', **usage})
+
+
+@app.post('/api/usage/reset')
+async def api_usage_reset(request: Request):
+    """Setzt Usage-Counter zurück (nur Admin)."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({'status': 'error', 'message': 'Nicht angemeldet'}, status_code=401)
+    db_user = get_user_by_id(user['user_id'])
+    if not db_user or not db_user['is_admin']:
+        return JSONResponse({'status': 'error', 'message': 'Nicht autorisiert'}, status_code=403)
+    conn = get_db()
+    conn.execute("DELETE FROM usage_records WHERE date(recorded_at) = date('now', 'localtime')")
+    conn.commit()
+    conn.close()
+    return JSONResponse({'status': 'ok'})
 templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
