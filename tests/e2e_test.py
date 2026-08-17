@@ -203,6 +203,15 @@ def main():
         print("8) Session-Liste FEHLER:", sj)
         failures.append("sessions")
 
+    # 8b) Usage-Tracking: WS-Proxy muss nach dem Chat message.complete->usage in die
+    #     usage_records geschrieben haben (/api/usage/today darf NICHT 0 sein).
+    st, uj = get_json("/api/usage/today", jar)
+    ok = st == 200 and uj.get("status") == "ok" and (uj.get("total_tokens") or 0) > 0
+    print("8b) GET /api/usage/today (nach Chat):", st, uj.get("total_tokens"), "Tokens")
+    if not ok:
+        failures.append("usage_tracking")
+
+
     # 9) Logout
     st, j = post_form("/api/logout", {}, jar)
     st, j = get_json("/api/session", jar)
