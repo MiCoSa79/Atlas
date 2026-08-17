@@ -200,12 +200,25 @@
             gap: 8px;
             flex-wrap: wrap;
         }
+        /* Tabellarisch ab 641px: Spalten exakt untereinander (Pfeile fluchten) */
+        @media (min-width: 641px) {
+            .statusbar {
+                display: grid;
+                grid-template-columns: max-content max-content max-content max-content max-content;
+                justify-content: center;
+                column-gap: 14px;
+                row-gap: 4px;
+            }
+            .statusbar .tok-block { display: contents; }
+        }
         .statusbar .model-label {
             font-weight: 700;
             color: var(--accent);
             font-size: 14px;
         }
         .statusbar .tok-total { opacity: .85; }
+        /* Einzelwert-Zustände (0 Tokens, Fehler, Laden): volle Zeile, zentriert */
+        .statusbar .single { grid-column: 1 / -1; text-align: center; }
 
 </style>
 </head>
@@ -282,7 +295,7 @@
             </div>
             <!-- Token-Kosten-Statuszeile -->
             <div id="statusBar" class="statusbar">
-                <span class="loading">Token-Infos werden geladen…</span>
+                <span class="single loading">Token-Infos werden geladen…</span>
             </div>
         </div>
     </div>
@@ -1717,13 +1730,13 @@
             fetch('/api/usage/today/all')
                 .then(r => {
                     if (r.status !== 200) {
-                        return r.text().then(t => { w.innerHTML = '<span class="tokens">Token: ' + r.status + '</span>'; return null; });
+                        return r.text().then(t => { w.innerHTML = '<span class="single">Token: ' + r.status + '</span>'; return null; });
                     }
                     return r.json();
                 })
                 .then(data => {
                     if (!data || data.status !== 'ok') {
-                        w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
+                        w.innerHTML = '<span class="single">0 Tokens · —</span>';
                         return;
                     }
                     modelCache = data;
@@ -1732,7 +1745,7 @@
                 })
                 .catch(e => {
                     const w = document.getElementById('statusBar');
-                    if (w) w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
+                    if (w) w.innerHTML = '<span class="single">0 Tokens · —</span>';
                 });
         }
 
@@ -1740,27 +1753,34 @@
             if (!w) return;
             const models = data.models || [];
             if (data.total_tokens === 0) {
-                w.innerHTML = '<span class="tokens">0 Tokens</span> <span class="sep">·</span> <span class="cost">—</span>';
+                w.innerHTML = '<span class="single">0 Tokens · —</span>';
                 return;
             }
             let parts = [];
-            // Pro Modell eine Zeile: Modellname links, dann ⬇ input ⬆ output ⬇+⬆ total · €
+            // Pro Modell eine Zeile: Modellname, ⬇ input, ⬆ output, ⬇+⬆ total, €
+            // (ohne Sep-Punkte — Abstände übernimmt das Grid/flex)
             for (const m of models) {
                 parts.push(
                     '<span class="tok-block">' +
                     '<span class="model-label" title="' + m.model + '">' + m.model_short + '</span>' +
                     '<span class="tokens inp">⬇ ' + m.input_tokens.toLocaleString('de-DE') + '</span>' +
-                    '<span class="sep">·</span>' +
                     '<span class="tokens out">⬆ ' + m.output_tokens.toLocaleString('de-DE') + '</span>' +
-                    '<span class="sep">·</span>' +
                     '<span class="tokens total">⬇+⬆ ' + m.total_tokens.toLocaleString('de-DE') + '</span>' +
-                    (m.cost > 0 ? ' <span class="sep">·</span> <span class="cost">' + m.cost.toFixed(4) + '€</span>' : '') +
+                    (m.cost > 0 ? '<span class="cost">' + m.cost.toFixed(4) + '€</span>' : '') +
                     '</span>'
                 );
             }
-            // Gesamtlinie wenn mehrere Modelle
+            // Total-Zeile (nur bei mehreren Modellen): Total + alle Summen
             if (models.length > 1) {
-                parts.push('<span class="tok-block tok-total">= ' + data.total_tokens.toLocaleString('de-DE') + '</span>');
+                parts.push(
+                    '<span class="tok-block tok-total">' +
+                    '<span class="model-label">Total</span>' +
+                    '<span class="tokens inp">⬇ ' + data.total_input.toLocaleString('de-DE') + '</span>' +
+                    '<span class="tokens out">⬆ ' + data.total_output.toLocaleString('de-DE') + '</span>' +
+                    '<span class="tokens total">⬇+⬆ ' + data.total_tokens.toLocaleString('de-DE') + '</span>' +
+                    (data.total_cost > 0 ? '<span class="cost">' + data.total_cost.toFixed(4) + '€</span>' : '') +
+                    '</span>'
+                );
             }
             w.innerHTML = parts.join(' ');
         }
