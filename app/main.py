@@ -155,6 +155,16 @@ def init_db():
         cost REAL DEFAULT 0.0,
         recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
+    # Letzter bekannter Usage-Stand pro Session (Delta-Basis, überlebt Neustarts).
+    # total/input/output sind KUMULATIV über die Session-Lebensdauer — nur der
+    # Unterschied zum letzten Stand ist echter Verbrauch.
+    conn.execute("""CREATE TABLE IF NOT EXISTS usage_last (
+        session_id TEXT PRIMARY KEY,
+        total INTEGER DEFAULT 0,
+        input INTEGER DEFAULT 0,
+        output INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
     # Alte DBs: fehlende Spalten nachträglich hinzufügen (ignoriert Fehler, wenn schon da)
     try:
         conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
@@ -1219,9 +1229,16 @@ async def local_file_download(request: Request):
     return FileResponse(file_path, filename=safe_filename, media_type=mime_type)
 
 
-def _save_usage_snapshot(db_conn, user_id, session_id, model, usage_resp, last_usage):
-    """Speichert session.usage-Delta in usage_records (nach v0.0.83 Pattern).
-    usage_resp kommt vom Hermes session.usage RPC-Call: {model, input, output, total, ...}"""
+def _save_usage_snapshot(db_conn, user_id, session_id, model, usage_resp):
+    """Speichert session.usage-Delta in usage_records.
+
+    usage_resp kommt aus message.complete.payload.usage — KUMULATIVER
+    Session-Wert (prompt=input, prompt+completion=total).
+    Delta-Basis: usage_last-Spalte der Session (nicht RAM).
+    Falls kein Eintrag in usage_last existiert → kein Phantom-Delta,
+    nur Baseline setzen (ansonsten würde ein Neustart mit alter Session
+    den kumulierten Altstand als Verbrauch verbuchen).
+    """
     if not usage_resp:
         return
     total = int(usage_resp.get('total', 0) or 0)
@@ -1229,23 +1246,36 @@ def _save_usage_snapshot(db_conn, user_id, session_id, model, usage_resp, last_u
     out = int(usage_resp.get('output', 0) or 0)
     if total <= 0:
         return
-    # Delta zum letzten gemeldeten Stand dieser Session
-    last = last_usage.get(session_id)
-    if last:
-        delta_total = max(0, total - last[0])
-        delta_in = max(0, inp - last[1])
-        delta_out = max(0, out - last[2])
+
+    # Letzten gemeldeten Stand aus usage_last holen
+    row = db_conn.execute(
+        'SELECT total, input, output FROM usage_last WHERE session_id = ?',
+        (session_id,)
+    ).fetchone()
+    if row:
+        last_total, last_inp, last_out = row
+        delta_total = max(0, total - last_total)
+        delta_in = max(0, inp - last_inp)
+        delta_out = max(0, out - last_out)
     else:
-        # Erste Meldung: kompletter Verbrauch zählt
-        delta_total, delta_in, delta_out = total, inp, out
+        # Erster Eintrag: nur Baseline setzen, kein Verbrauch buchen
+        # (alte Session mit vielen Turns vor dem Update würde sonst
+        # 100+ Mio Tokens als "Tagesverbrauch" verbuchen)
+        delta_total = delta_in = delta_out = 0
+
     if delta_total > 0:
         db_conn.execute(
             'INSERT INTO usage_records (user_id, session_id, model, input_tokens, output_tokens, total_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, 0)',
             (user_id, session_id, model or '', delta_in, delta_out, delta_total)
         )
         db_conn.commit()
-    # Letzten Stand für Delta-Berechnung speichern
-    last_usage[session_id] = (total, inp, out)
+
+    # Baseline aktualisieren (wird vom nächsten Turn als Delta-Basis verwendet)
+    db_conn.execute(
+        'INSERT OR REPLACE INTO usage_last (session_id, total, input, output) VALUES (?, ?, ?, ?)',
+        (session_id, total, inp, out)
+    )
+    db_conn.commit()
 
 
 @app.websocket("/ws")
@@ -1318,8 +1348,9 @@ async def websocket_proxy(ws: WebSocket):
             ) as hws:
 
                 async def fwd_hermes_to_client():
-                    """Forward Hermes-Events + Usage-Delta nach message.complete speichern."""
-                    last_usage = {}  # session_id -> (total, input, output) für Delta
+                    """Forward Hermes-Events + Usage-Delta nach message.complete speichern.
+                    Delta-Basis ist die DB (letzte Buchung der Session), NICHT RAM —
+                    nach Neustart/Reconnect zählt kein kumulierter Altbestand doppelt."""
                     try:
                         async for msg in hws:
                             if msg.type == WSMsgType.TEXT:
@@ -1340,9 +1371,9 @@ async def websocket_proxy(ws: WebSocket):
                                                 model = usage.get('model', '') or ''
                                                 _save_usage_snapshot(
                                                     get_db(), session['user_id'],
-                                                    sid, model, usage, last_usage
+                                                    sid, model, usage
                                                 )
-                                                print(f"[WS-Proxy] usage saved: {sid[:12]}... = {usage.get('total', 0)} tokens (model: {model})")
+                                                print(f"[WS-Proxy] usage saved: {sid[:12]}... delta-total laut DB (model: {model})")
                                 except json.JSONDecodeError:
                                     pass
                                 except Exception as e:
