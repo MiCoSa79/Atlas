@@ -8,6 +8,7 @@ Eigenständiger FastAPI-Container:
 Läuft im Container unter /app, Datenbank in /data/atlas.db (Volume).
 """
 import asyncio
+import datetime
 import base64
 import aiohttp
 import bcrypt
@@ -412,7 +413,7 @@ def _store_usage(db_conn, user_id, session_id, usage):
         'input_tokens': row[0] or 0,
         'output_tokens': row[1] or 0,
         'total_tokens': row[2] or 0,
-        'cost': row[3] or 0,
+        'cost': (row[3] if row else 0) or 0,
         'date': today,
     })
 
@@ -487,7 +488,7 @@ def _store_usage(db_conn, user_id, session_id, usage):
         'input_tokens': row[0] or 0,
         'output_tokens': row[1] or 0,
         'total_tokens': row[2] or 0,
-        'cost': row[3] or 0,
+        'cost': (row[3] if row else 0) or 0,
         'date': today,
     })
 
