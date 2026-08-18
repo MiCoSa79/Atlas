@@ -442,7 +442,7 @@
         let statusBubble = null;        // laufende Statuszeile (thinking.delta)
         let rpcId = 0;
         let hermesSessionId = null;
-        let activeSessionId = null;      // gewählte alte Session (null = neue Unterhaltung)
+        let activeSessionId = localStorage.getItem('atlas_last_session') || null;   // gewählte alte Session (null = neue Unterhaltung); persistiert für Hintergrund-Turns
         let createRpcId = null;          // ID der letzten session.create-Anfrage
         let resumeRpcId = null;          // ID der letzten session.resume-Anfrage
         let historyRpcId = null;         // ID der letzten session.history-Anfrage
@@ -1034,7 +1034,10 @@
                 connectAttempts = 0;  // Zähler zurücksetzen bei Erfolg
                 statusDot.classList.add('online');
                 statusDot.classList.remove('offline');
-                const p = { close_on_disconnect: true, source: 'webui' };
+                // close_on_disconnect:false = Session überlebt Tab-Close → laufende
+                // Turns (und delegierte Hintergrund-Aufgaben) laufen serverseitig weiter;
+                // beim Wiederkommen holt session.resume Verlauf + Ergebnis zurück.
+                const p = { close_on_disconnect: false, source: 'webui' };
                 if (activeSessionId) {
                     p.session_id = activeSessionId;
                     console.log('[Atlas] session.resume(' + activeSessionId + ')');
@@ -1075,8 +1078,23 @@
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     messagesDiv.innerHTML = '';
                     activeSessionId = null;
+                    // Neue Session als "letzte" merken (Persistenz über Tab-Close,
+                    // damit Hintergrund-Ergebnisse in dieser Session landen).
+                    const storedNew = frame.result.stored_session_id || frame.result.session_id;
+                    localStorage.setItem('atlas_last_session', storedNew);
                     $('currentSessionLabel').classList.add('hidden');
                     addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
+                    return;
+                }
+                // Wenn resume fehlschlägt (Session existiert nicht mehr),
+                // automatisch fallback auf session.create statt stecken zu bleiben.
+                if (resumeRpcId !== null && frame.id === resumeRpcId && frame.error) {
+                    console.log('[Atlas] session.resume fehlgeschlagen (' + frame.error.message + '), fallback auf session.create');
+                    resumeRpcId = null;
+                    localStorage.removeItem('atlas_last_session');
+                    const p = { close_on_disconnect: false, source: 'webui' };
+                    if (selectedProfile) p.profile = selectedProfile;
+                    createRpcId = sendRpc('session.create', p);
                     return;
                 }
                 if (resumeRpcId !== null && frame.id === resumeRpcId && frame.result && frame.result.session_id) {
@@ -1086,6 +1104,8 @@
                     console.log('[Atlas] resume antwortet, Live-Session-ID = ' + frame.result.session_id);
                     hermesSessionId = frame.result.session_id;
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
+                    // Fortgesetzte Session als "letzte" merken.
+                    localStorage.setItem('atlas_last_session', activeSessionId || frame.result.session_id);
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
                     historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
                     // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
@@ -1703,6 +1723,7 @@
                 box.innerHTML = items;
                 box.querySelectorAll('.session-item').forEach(b => b.addEventListener('click', () => {
                     activeSessionId = b.dataset.id;
+                    localStorage.setItem('atlas_last_session', b.dataset.id);
                     $('currentSessionLabel').textContent = b.dataset.id + '…';
                     $('currentSessionLabel').classList.remove('hidden');
                     $('sessionsModal').classList.remove('active');
@@ -1716,6 +1737,7 @@
         // Neue Unterhaltung starten
         $('newSessionBtn').addEventListener('click', () => {
             activeSessionId = null;
+            localStorage.removeItem('atlas_last_session');
             $('currentSessionLabel').classList.add('hidden');
             $('sessionsModal').classList.remove('active');
             restartWS();
