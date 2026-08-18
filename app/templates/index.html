@@ -966,6 +966,13 @@
             return m;
         }
 
+        // Interne/synthetische Nachrichten (async-delegation-Completions, Watch-Notifications —
+        // von Hermes mit display_kind="internal_notification" markiert, #82888) als
+        // Assistant-/Timeline-Notice links rendern statt als User-Bubble rechts.
+        function isInternalNotice(m) {
+            return !!m && m.display_kind === 'internal_notification';
+        }
+
         // ---- "Session von anderem Prozess benutzt" (Turn-Lease) ----
         let leaseWaitBubble = null;   // dauerhafte System-Bubble statt Toast
         let leaseWaitStart = 0;       // Startzeit in ms
@@ -1114,14 +1121,16 @@
                         frame.result.messages.forEach(m => {
                             if (m.role === 'user' || m.role === 'assistant') {
                                 let displayText = m.text || '';
+                                const internal = isInternalNotice(m);
                                 // User-Nachrichten: @image:… und [Dateiname] aus dem sichtbaren Text entfernen,
                                 // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
-                                if (m.role === 'user') {
+                                // (Interne Timeline-Notices wie Delegations-Ergebnisse ausgenommen.)
+                                if (m.role === 'user' && !internal) {
                                     displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                                 }
-                                const mm = addMsg(m.role, displayText);
+                                const mm = addMsg(internal ? 'assistant' : m.role, displayText);
                                 // User-Uploads: [Name]-Block aus localStorage-Vorschau rekonstruieren
-                                if (m.role === 'user' && m.text && /\[[^\]]+\]/.test(m.text)) {
+                                if (m.role === 'user' && !internal && m.text && /\[[^\]]+\]/.test(m.text)) {
                                     restoreAttachmentPreview(mm, m.text);
                                 }
                             } else if (m.role === 'tool') {
@@ -1142,14 +1151,16 @@
                     msgs.forEach(m => {
                         if (m.role === 'user' || m.role === 'assistant') {
                             let displayText = m.text || '';
+                            const internal = isInternalNotice(m);
                             // User-Nachrichten: @image:… und [Dateiname] aus dem sichtbaren Text entfernen,
                             // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
-                            if (m.role === 'user') {
+                            // (Interne Timeline-Notices wie Delegations-Ergebnisse ausgenommen.)
+                            if (m.role === 'user' && !internal) {
                                 displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                             }
-                            const mm = addMsg(m.role, displayText);
+                            const mm = addMsg(internal ? 'assistant' : m.role, displayText);
                             // User-Uploads: [Name]-Block aus localStorage-Vorschau rekonstruieren
-                            if (m.role === 'user' && m.text && /\[[^\]]+\]/.test(m.text)) {
+                            if (m.role === 'user' && !internal && m.text && /\[[^\]]+\]/.test(m.text)) {
                                 restoreAttachmentPreview(mm, m.text);
                             }
                             const t = mm.querySelector('.meta');
