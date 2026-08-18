@@ -129,6 +129,11 @@
         .banner a { color: #e8dc8a; font-weight: 600; cursor: pointer; text-decoration: underline; }
 
         #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+        /* Scrollbar-Styling: passt sich dem Dark-Theme an, schmal und dezent */
+        #messages::-webkit-scrollbar, #input::-webkit-scrollbar { width: 6px; }
+        #messages::-webkit-scrollbar-track, #input::-webkit-scrollbar-track { background: transparent; }
+        #messages::-webkit-scrollbar-thumb, #input::-webkit-scrollbar-thumb { background: var(--muted, rgba(255,255,255,0.2)); border-radius: 3px; }
+        #messages::-webkit-scrollbar-thumb:hover, #input::-webkit-scrollbar-thumb:hover { background: var(--muted, rgba(255,255,255,0.35)); }
         .msg { max-width: 84%; padding: 9px 13px; border-radius: var(--radius); font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
         .msg.user { align-self: flex-end; background: #20437f; border-bottom-right-radius: 4px; }
         .msg.assistant { align-self: flex-start; background: #1d232e; border-bottom-left-radius: 4px; }
@@ -296,7 +301,7 @@
             <!-- Datei-Vorschau -->
             <div id="filePreview" style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;"></div>
             <div style="display:flex; gap:8px; align-items:center;">
-                <textarea id="input" rows="1" placeholder="Nachricht an Atlas..." autocomplete="off" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:15px; font-family:inherit; line-height:20px; padding:10px 14px; outline:none; resize:none; overflow-y:auto; max-height:150px; box-sizing:border-box; white-space:pre-wrap;"></textarea>
+                <textarea id="input" rows="1" placeholder="Nachricht an Atlas..." autocomplete="off" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:15px; font-family:inherit; line-height:20px; padding:10px 14px; outline:none; resize:none; overflow-y:auto; max-height:250px; box-sizing:border-box; white-space:pre-wrap;"></textarea>
                 <input id="fileInput" type="file" hidden multiple>
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
                 <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
@@ -1679,16 +1684,27 @@
         }
 
         // ---------------------------------------------------------------- Chat
-        // v0.0.100: Mehrzeiliges Eingabefeld — Auto-Grow + Enter-Logik
+        // v0.0.101: Mehrzeiliges Eingabefeld — Auto-Grow + Enter-Logik
         const inputEl = $('input');
         const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches;
         inputEl.enterkeyhint = IS_TOUCH ? 'newline' : 'send';
 
-        // Höhe an Inhalt anpassen (Auto-Grow), max. 150px, ab dann interne Scrollbar
+        // Höhenberechnung:
+        //   initial = padding-top(10) + line-height(20) + padding-bottom(10) + border(1+1) = 42px = Button-Höhe
+        //   scrollHeight = content-height inkl. overflow (ohne Border)
+        //   CSS height (border-box) = scrollHeight + border(2)
+        // +2 auf scrollHeight korrigiert: scrollHeight zählt ohne Border,
+        // height: border-box muss Border mit einrechnen.
+        const INITIAL_HEIGHT = 42;   // 10 + 20 + 10 + 2 (border)
+        const MAX_HEIGHT = 250;
+
+        // Höhe an Inhalt anpassen (Auto-Grow), max. 250px, ab dann interne Scrollbar
         function autoGrowInput() {
+            // Erst auf auto setzen, damit scrollHeight der tatsächliche Inhalt ist
             inputEl.style.height = 'auto';
-            // +2 für die 1px-Ränder: scrollHeight zählt ohne Border, height (border-box) inklusive
-            inputEl.style.height = Math.min(inputEl.scrollHeight + 2, 150) + 'px';
+            // scrollHeight ist der benötigte Inhalt (ohne Border); +2 für 2px Border
+            const newHeight = Math.max(INITIAL_HEIGHT, Math.min(inputEl.scrollHeight + 2, MAX_HEIGHT));
+            inputEl.style.height = newHeight + 'px';
         }
         inputEl.addEventListener('input', autoGrowInput);
         autoGrowInput();
