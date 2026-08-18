@@ -233,11 +233,13 @@
         .statusbar .single { grid-column: 1 / -1; text-align: center; }
         /* Mobil: kompaktere Schrift, damit alles in einer Zeile bleibt */
         @media (max-width: 640px) {
-            .statusbar { font-size: 9px; padding: 5px 10px; }
+            .statusbar { font-size: 9px; padding: 5px 10px; align-items: stretch; }
             .statusbar .tokens,
             .statusbar .cost,
             .statusbar .model-label { font-size: 9px; }
-            .statusbar .tok-block { gap: 5px; }
+            /* Zeilen linksbündig statt zentriert: kein Leerraum links, rechte Seite
+               bleibt Reserve für wachsende Zahlen (kein Zeilenumbruch) */
+            .statusbar .tok-block { justify-content: flex-start; gap: 5px; }
         }
 
 </style>
