@@ -296,7 +296,7 @@
             <!-- Datei-Vorschau -->
             <div id="filePreview" style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;"></div>
             <div style="display:flex; gap:8px; align-items:center;">
-                <input id="input" type="text" placeholder="Nachricht an Atlas..." autocomplete="off" enterkeyhint="send" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:15px; padding:10px 14px; outline:none;">
+                <textarea id="input" rows="1" placeholder="Nachricht an Atlas..." autocomplete="off" style="flex:1; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:15px; font-family:inherit; line-height:20px; padding:10px 14px; outline:none; resize:none; overflow-y:auto; max-height:150px; box-sizing:border-box; white-space:pre-wrap;"></textarea>
                 <input id="fileInput" type="file" hidden multiple>
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
                 <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
@@ -1679,12 +1679,35 @@
         }
 
         // ---------------------------------------------------------------- Chat
-        $('input').addEventListener('keydown', e => {
-            if (e.key === 'Enter') { sendMessage($('input').value); $('input').value = ''; }
+        // v0.0.100: Mehrzeiliges Eingabefeld — Auto-Grow + Enter-Logik
+        const inputEl = $('input');
+        const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches;
+        inputEl.enterkeyhint = IS_TOUCH ? 'newline' : 'send';
+
+        // Höhe an Inhalt anpassen (Auto-Grow), max. 150px, ab dann interne Scrollbar
+        function autoGrowInput() {
+            inputEl.style.height = 'auto';
+            // +2 für die 1px-Ränder: scrollHeight zählt ohne Border, height (border-box) inklusive
+            inputEl.style.height = Math.min(inputEl.scrollHeight + 2, 150) + 'px';
+        }
+        inputEl.addEventListener('input', autoGrowInput);
+        autoGrowInput();
+
+        inputEl.addEventListener('keydown', e => {
+            if (e.key !== 'Enter') return;
+            if (e.isComposing) return;   // IME-Komposition: Enter nicht senden
+            if (IS_TOUCH) return;        // Touch: Enter = Zeilenumbruch (Default der textarea)
+            if (e.shiftKey) return;      // PC: Shift+Enter = Zeilenumbruch (Default)
+            // PC: Enter ohne Shift sendet die Nachricht
+            e.preventDefault();
+            sendMessage(inputEl.value);
+            inputEl.value = '';
+            autoGrowInput();
         });
         document.querySelector('[data-action="send"]').addEventListener('click', () => {
-            sendMessage($('input').value);
-            $('input').value = '';
+            sendMessage(inputEl.value);
+            inputEl.value = '';
+            autoGrowInput();
         });
 
         // ---------------------------------------------------------------- Sessions
