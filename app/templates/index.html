@@ -46,6 +46,18 @@
             }
             #messages::-webkit-scrollbar-thumb:hover { background: var(--muted); }
             #messages::-webkit-scrollbar-thumb:active { background: var(--accent); }
+            /* Eingabefeld: exakt dasselbe Design wie Chat-Fenster */
+            #input { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+            #input::-webkit-scrollbar { width: 8px; display: block; }
+            #input::-webkit-scrollbar-track { background: transparent; }
+            #input::-webkit-scrollbar-thumb {
+                background: var(--border);
+                border-radius: 4px;
+                border: 2px solid transparent;
+                background-clip: padding-box;
+            }
+            #input::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+            #input::-webkit-scrollbar-thumb:active { background: var(--accent); }
         }
         .auth-card::-webkit-scrollbar { display: none; }
 
@@ -129,11 +141,6 @@
         .banner a { color: #e8dc8a; font-weight: 600; cursor: pointer; text-decoration: underline; }
 
         #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-        /* Scrollbar-Styling: passt sich dem Dark-Theme an, schmal und dezent */
-        #messages::-webkit-scrollbar, #input::-webkit-scrollbar { width: 6px; }
-        #messages::-webkit-scrollbar-track, #input::-webkit-scrollbar-track { background: transparent; }
-        #messages::-webkit-scrollbar-thumb, #input::-webkit-scrollbar-thumb { background: var(--muted, rgba(255,255,255,0.2)); border-radius: 3px; }
-        #messages::-webkit-scrollbar-thumb:hover, #input::-webkit-scrollbar-thumb:hover { background: var(--muted, rgba(255,255,255,0.35)); }
         .msg { max-width: 84%; padding: 9px 13px; border-radius: var(--radius); font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
         .msg.user { align-self: flex-end; background: #20437f; border-bottom-right-radius: 4px; }
         .msg.assistant { align-self: flex-start; background: #1d232e; border-bottom-left-radius: 4px; }
