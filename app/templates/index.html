@@ -966,11 +966,20 @@
             return m;
         }
 
-        // Interne/synthetische Nachrichten (async-delegation-Completions, Watch-Notifications —
-        // von Hermes mit display_kind="internal_notification" markiert, #82888) als
-        // Assistant-/Timeline-Notice links rendern statt als User-Bubble rechts.
+        // Interne/synthetische Nachrichten als Assistant-/Timeline-Notice links
+        // rendern statt als User-Bubble rechts. Hermes markiert solche Nachrichten
+        // mit display_kind (DB-History): async_delegation_complete (Delegations-
+        // Ergebnisse, tui_gateway/server.py), internal_notification (Watch-/
+        // Background-Notices, gateway/run.py), model_switch, auto_continue.
+        // role bleibt dabei user — nur die DARSTELLUNG wird umgebogen.
+        const TIMELINE_DISPLAY_KINDS = new Set([
+            'async_delegation_complete',
+            'internal_notification',
+            'model_switch',
+            'auto_continue',
+        ]);
         function isInternalNotice(m) {
-            return !!m && m.display_kind === 'internal_notification';
+            return !!m && TIMELINE_DISPLAY_KINDS.has(m.display_kind);
         }
 
         // ---- "Session von anderem Prozess benutzt" (Turn-Lease) ----
