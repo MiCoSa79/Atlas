@@ -219,6 +219,14 @@
         .statusbar .tok-total { opacity: .85; }
         /* Einzelwert-Zustände (0 Tokens, Fehler, Laden): volle Zeile, zentriert */
         .statusbar .single { grid-column: 1 / -1; text-align: center; }
+        /* Mobil: kompaktere Schrift, damit alles in einer Zeile bleibt */
+        @media (max-width: 640px) {
+            .statusbar { font-size: 10px; padding: 6px 12px; }
+            .statusbar .tokens,
+            .statusbar .cost,
+            .statusbar .model-label { font-size: 10px; }
+            .statusbar .tok-block { gap: 6px; }
+        }
 
 </style>
 </head>
