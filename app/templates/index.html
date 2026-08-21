@@ -1431,6 +1431,8 @@
         }
         
 // Datei an Hermes attachen (WS-RPC)
+        // Alle Dateien gehen über file.attach (kein pdf.attach mehr — pdftoppm oft nicht installiert).
+        // Nur Bilder nutzen image.attach_bytes (für die Vision-Pipeline).
         async function attachFileToHermes(pf) {
             addMsg('system', '📎 Hänge Datei an Hermes an: ' + pf.name);
             if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -1438,18 +1440,11 @@
                 return false;
             }
             const isImage = pf.type.startsWith('image/');
-            const isPdf = pf.name.toLowerCase().endsWith('.pdf');
-            const method = isImage ? 'image.attach_bytes' : (isPdf ? 'pdf.attach' : 'file.attach');
+            const method = isImage ? 'image.attach_bytes' : 'file.attach';
             const params = {
                 session_id: hermesSessionId,
-                content_base64: pf.base64Url.replace(/^data:[^;]+;base64,/, ''),
-                filename: pf.name,
+                data_url: pf.base64Url,
             };
-            if (!isPdf && !isImage && !pf.type) {
-                // Generische Dateien brauchen data_url statt content_base64
-                params.data_url = pf.base64Url;
-                delete params.content_base64;
-            }
             console.log('[Atlas] Hermes attach:', method, pf.name);
             addMsg('system', '📤 Übertrage ' + pf.name + ' an Hermes (' + method + ') …');
             return new Promise((resolve) => {
