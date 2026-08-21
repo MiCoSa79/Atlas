@@ -1441,10 +1441,13 @@
             }
             const isImage = pf.type.startsWith('image/');
             const method = isImage ? 'image.attach_bytes' : 'file.attach';
-            const params = {
-                session_id: hermesSessionId,
-                data_url: pf.base64Url,
-            };
+            // WICHTIG (Bug v0.0.106: Bilder kamen nicht an): image.attach_bytes
+            // erwartet content_base64, file.attach erwartet data_url — ein
+            // einheitliches data_url ließ Hermes mit "content_base64 required"
+            // abstürzen. Siehe Hermes tui_gateway/methods_prompt.py.
+            const params = isImage
+                ? { session_id: hermesSessionId, content_base64: pf.base64Url }
+                : { session_id: hermesSessionId, data_url: pf.base64Url };
             console.log('[Atlas] Hermes attach:', method, pf.name);
             addMsg('system', '📤 Übertrage ' + pf.name + ' an Hermes (' + method + ') …');
             return new Promise((resolve) => {
