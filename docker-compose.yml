@@ -26,4 +26,7 @@ services:
       # ATLAS_DB: Pfad zur SQLite-Datenbank im Volume.
       ATLAS_DB: "/data/atlas.db"
     volumes:
-      - ./config.json:/app/config.json
+      - atlas-data:/data
+
+volumes:
+  atlas-data:
