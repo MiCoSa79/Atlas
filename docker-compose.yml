@@ -1,13 +1,29 @@
 version: '3'
+
 services:
   atlas:
+    image: micosa79/atlas:latest
     build: .
     restart: always
     network_mode: host
     environment:
-      - HERMES_URL=http://10.0.25.60:9119
-      - HERMES_USER=axel@meiser.cool
-      - HERMES_PASS=DEIN_PASSWORT
-      - ADMIN_SETUP_TOKEN=GEHEIM_123
+      # ── Atlas-Konfiguration ─────────────────────────────────
+      # ⚠️ BEISPIELWERTE — vor dem ersten Start ersetzen!
+      #
+      # HERMES_URL: Gateway-URL zum Hermes-Server.
+      #   Ersetze durch die tatsächliche URL (z.B. http://hermes.local:9119).
+      HERMES_URL: "http://hermes.example.com:9119"
+      #
+      # HERMES_USER / HERMES_PASS: Zugangsdaten für den Hermes-Login.
+      #   Wird in der Datenbank verschlüsselt gespeichert (AES via Fernet).
+      HERMES_USER: "benutzer@example.com"
+      HERMES_PASS: "BeispielPasswort123!"
+      #
+      # ADMIN_SETUP_TOKEN: Token zum Erstellen des ersten Admin-Accounts.
+      #   Wird nur beim ersten Start (leere DB) verwendet.
+      ADMIN_SETUP_TOKEN: "SetzeHierDeinGeheimesToken"
+      #
+      # ATLAS_DB: Pfad zur SQLite-Datenbank im Volume.
+      ATLAS_DB: "/data/atlas.db"
     volumes:
       - ./config.json:/app/config.json
