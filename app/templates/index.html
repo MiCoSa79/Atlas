@@ -1131,14 +1131,16 @@
             ws.onmessage = ev => {
                 let frame;
                 try { frame = JSON.parse(ev.data); } catch (_) { return; }
-                // Debug-Log: Alle eingehenden WS-Nachrichten
+                // v0.0.124: Debug-Log: Alle eingehenden WS-Nachrichten
                 const logData = frame.id !== undefined ?
                     'id=' + frame.id + (frame.method ? ' method=' + frame.method : ' result.type=' + (frame.result && frame.result.type)) :
                     (frame.method || '?');
                 console.log('[Atlas] ← WS msg:', logData);
                 console.log('[Atlas] ← WS message:', JSON.stringify(frame).substring(0, 200));
 
-            if (createRpcId !== null && frame.id === createRpcId && frame.result && frame.result.session_id) {
+                // v0.0.124: Jeder Handler in try/catch — Exception darf Generic-Handler NICHT blockieren
+                try {
+                    if (createRpcId !== null && frame.id === createRpcId && frame.result && frame.result.session_id) {
                     // session.create (Neue Unterhaltung)
                     hermesSessionId = frame.result.session_id;
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
@@ -1270,6 +1272,7 @@
                     historyRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     return;
                 }
+                } catch (err) { console.error('[Atlas] onmessage handler exception:', err.message, err.stack); }
                 // Generic RPC response handler (v0.0.113 migration) — MUSS vor pendingAttachResponses
                 // weil session.history / session.create auch {id:X, result:{...}} ohne method haben.
                 if (frame.id && pendingRpcCallbacks[frame.id]) {
@@ -2161,7 +2164,7 @@
         function fetchRpc(method, params, timeoutMs = FETCH_RPC_TIMEOUT_MS) {
             return new Promise((resolve, reject) => {
                 if (!ws || ws.readyState !== WebSocket.OPEN) { reject(new Error('WS nicht offen')); return; }
-                const id = ++fetchRpcSeq;   // Integer-ID, kein Date.now()+Random (kollisionsfrei)
+                const id = '' + (++fetchRpcSeq);   // v0.0.124: STRING-ID — Gateway+Proxy konvertieren Zahlen oft zu Strings, ==-Match sonst fehlgeschlagen
                 const timer = setTimeout(() => {
                     delete pendingRpcCallbacks[id];
                     delete pendingRpcTimers[id];
@@ -2169,7 +2172,8 @@
                 }, timeoutMs);
                 pendingRpcTimers[id] = timer;
                 const wrapper = (frame) => {
-                    if (frame.id !== id) return;
+                    // v0.0.124: String-Vergleich (id ist String, frame.id kann Zahl oder String sein)
+                    if ('' + frame.id !== id) return;
                     delete pendingRpcCallbacks[id];
                     if (pendingRpcTimers[id]) { clearTimeout(pendingRpcTimers[id]); delete pendingRpcTimers[id]; }
                     if (frame.error) reject(new Error(frame.error.message || 'RPC error'));
@@ -2182,14 +2186,17 @@
         }
         // v0.0.120: Alle offenen fetchRpc-Promises bei Verbindungsende auflösen,
         // statt sie ewig hängen zu lassen (sonst Migration/Anzeige blockiert).
+        // v0.0.124: rejectAllPendingRpc uebergibt jetzt {error, id} — der wrapper
+        // (frame.id !== id) hatte sonst frame.id=undefined und wurde ignoriert,
+        // Timer wurden gecleart, Promise wurde NIEMALS rejected — endlos hängend.
         function rejectAllPendingRpc(reason) {
             const callbacks = pendingRpcCallbacks;
             pendingRpcCallbacks = {};
             Object.keys(callbacks).forEach(k => {
-                try { callbacks[k]({ error: { message: reason } }); } catch (_) {}
+                try { callbacks[k]({ error: { message: reason }, id: k }); } catch (_) {}
             });
             Object.keys(pendingRpcTimers).forEach(k => { clearTimeout(pendingRpcTimers[k]); delete pendingRpcTimers[k]; });
-        }   // v0.0.121: KEIN pendingRpcTimers = {} — const-Deklaration, TypeError werfen würde den
+        }
 </script>
 </body>
 </html>
