@@ -161,9 +161,12 @@
         #composer input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 20px; color: var(--text); font-size: 15px; padding: 10px 14px; outline: none; }
         #composer input:focus { border-color: var(--accent); }
         #composer button { width: 42px; height: 42px; border: none; border-radius: 50%; background: var(--accent); color: #fff; font-size: 17px; cursor: pointer; flex-shrink: 0; }
-        /* Kontext-Warnung: Session sehr groß → neue Unterhaltung empfehlen (v0.0.112) */
-        .ctx-warn { display:flex; align-items:center; gap:8px; margin:0 0 8px; padding:8px 12px; background:rgba(233,69,96,.12); border:1px solid rgba(233,69,96,.4); border-radius:10px; color:#ff8f9e; font-size:13px; line-height:1.35; }
+        /* Kontext-Warnung: Banner + Button (v0.0.112, Migrate v0.0.113) */
+        .ctx-warn { display:flex; align-items:flex-start; gap:8px; margin:0 0 8px; padding:8px 12px; background:rgba(233,69,96,.12); border:1px solid rgba(233,69,96,.4); border-radius:10px; color:#ff8f9e; font-size:13px; line-height:1.35; }
         .ctx-warn.hidden { display:none; }
+        .ctx-warn .ctx-warn-btn { padding:4px 12px; background:rgba(233,69,96,.25); border:1px solid rgba(233,69,96,.5); border-radius:6px; color:#ff8f9e; cursor:pointer; font-size:12px; margin-left:auto; white-space:nowrap; flex-shrink:0; }
+        .ctx-warn .ctx-warn-btn:hover { background:rgba(233,69,96,.4); }
+        .ctx-warn .ctx-warn-btn:disabled { opacity:.4; cursor:default; }
 
         /* 2FA-Pflicht-Overlay (nicht schließbar, nur per 2FA-Einrichtung) */
         .otp-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 25; align-items: center; justify-content: center; padding: 20px; }
@@ -459,6 +462,7 @@
         const banner = $('setupBanner');
         let ws = null;
         let pendingAttachResponses = {};
+        let pendingRpcCallbacks = {};       // Generic RPC response wrapper (v0.0.113 migration)
         let bubble = null;
         let thinkingBubble = null;      // laufende "Denken"-Box (reasoning.delta)
         let statusBubble = null;        // laufende Statuszeile (thinking.delta)
@@ -1217,6 +1221,15 @@
                     messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     return;
                 }
+                // Generic RPC response handler (v0.0.113 migration) — MUSS vor pendingAttachResponses
+                // weil session.history / session.create auch {id:X, result:{...}} ohne method haben.
+                if (frame.id && pendingRpcCallbacks[frame.id]) {
+                    const cb = pendingRpcCallbacks[frame.id];
+                    delete pendingRpcCallbacks[frame.id];
+                    if (frame.error) cb({ error: frame.error });
+                    else cb(frame.result);
+                    return;
+                }
                 // RPC-Antworten (keine Events): Attach-Responses speichern,
                                 // OHNE sie an der 'event'-Hürde scheitern zu lassen.
                                 // WICHTIG: image.attach_bytes/pdf.attach/file.attach antworten
@@ -1910,19 +1923,105 @@
             setInterval(updateTokenWidget, 5 * 60 * 1000);
         });
 
-        // Kontext-Warnung: Session sehr groß → neue Unterhaltung empfehlen (v0.0.112)
+        // Kontext-Warnung: Session sehr groß → Banner mit "Session weiterführen"-Button (v0.0.112, Migrate v0.0.113)
+        let migratePending = null;             // aktive Migration: { oldId, historyMessages, summary }
+        let migrateBtnRpcId = null;            // RPC-ID des "Weiterführen"-Buttons (für Disable-Tracking)
         function updateCtxWarning() {
             const el = document.getElementById('ctxWarn');
             if (!el) return;
             if (sessionCtxPct >= CTX_WARN_PCT) {
-                el.textContent = '⚠️ Session-Kontext ~' + sessionCtxPct + '% voll — neue Unterhaltung starten, falls Antworten träge werden.';
+                // Banner mit Button: "⚠️ Session-Kontext ~72% voll — Weiterführen?"
+                el.innerHTML = '⚠️ Session-Kontext ~' + sessionCtxPct + '% voll — neue Unterhaltung starten, falls Antworten träge werden. <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button>';
                 el.classList.remove('hidden');
             } else if (sessionMsgCount >= CTX_WARN_MSGS) {
-                el.textContent = '⚠️ Session sehr groß (' + sessionMsgCount + ' Nachrichten) — neue Unterhaltung starten, falls Antworten träge werden.';
+                el.innerHTML = '⚠️ Session sehr groß (' + sessionMsgCount + ' Nachrichten) — neue Unterhaltung starten, falls Antworten träge werden. <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button>';
                 el.classList.remove('hidden');
             } else {
+                el.innerHTML = '';
                 el.classList.add('hidden');
+                migratePending = null;
             }
+        }
+
+        // Button-Handler: alte Session-History holen → Zusammenfassung → neue Session + Migrationstext (v0.0.113)
+        async function onMigrateClick() {
+            if (migratePending || migrateBtnRpcId !== null) return;  // nur 1 Klick
+            const el = document.getElementById('ctxWarn');
+            if (!el) return;
+            // Button: "⏳ Migration läuft…" + disable
+            el.innerHTML = '⏳ Migration läuft… (History holen, Zusammenfassung, neue Session)';
+            migrateBtnRpcId = 'migrating';
+            try {
+                // 1) History holen
+                const hist = await fetchRpc('session.history', { session_id: activeSessionId || hermesSessionId });
+                if (!hist || !hist.messages || !hist.messages.length) {
+                    throw new Error('Keine Nachrichten in History');
+                }
+                const msgs = hist.messages;
+
+                // 2) Zusammenfassung aus letzten ~30 Nachrichten generieren (Client-seitig)
+                const last30 = msgs.slice(-30);
+                const summaryParts = [];
+                for (let i = last30.length - 1; i >= 0; i--) {
+                    const m = last30[i];
+                    const text = (m.text || '').trim();
+                    if (text && (m.role === 'user' || m.role === 'assistant')) {
+                        const role = m.role === 'user' ? 'Du' : 'Atlas';
+                        summaryParts.push(role + ': ' + text.slice(0, 200));
+                    }
+                }
+                const summary = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Keine Inhalt-Zusammenfassung verfügbar.';
+
+                // 3) Neue Session erstellen
+                migratePending = { oldId: activeSessionId || hermesSessionId, summary };
+                const createResult = await fetchRpc('session.create', { close_on_disconnect: false, source: 'webui' });
+                if (!createResult || !createResult.session_id) {
+                    throw new Error('session.create fehlgeschlagen');
+                }
+
+                // 4) Neue Session aktivieren (wie session.create-Handler, aber mit Migrationstext)
+                hermesSessionId = createResult.session_id;
+                activeSessionId = null;
+                localStorage.setItem('atlas_last_session', createResult.stored_session_id || createResult.session_id);
+                messagesDiv.innerHTML = '';
+                sessionCtxPct = 0; sessionMsgCount = 0;
+                el.innerHTML = '';
+                el.classList.add('hidden');
+
+                // Migrationstext als erste Nachricht
+                addMsg('system', '📋 Von alter Session übernommen (' + msgs.length + ' Nachrichten, Kontext: ' + (hist.messages.length > 350 ? hist.messages.length : '') + ')\nLetzte Themen:\n' + summary.slice(0, 500));
+
+                // Session-Label aktualisieren
+                const label = document.getElementById('currentSessionLabel');
+                if (label) { label.textContent = ''; label.classList.add('hidden'); }
+
+                // Neue WS-Verbindung herstellen (connectWS macht resume/create automatisch)
+                restartWS();
+            } catch (err) {
+                // Fehler → Banner mit Hinweis
+                el.innerHTML = '⚠️ Migration fehlgeschlagen: ' + err.message + '. <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
+                migratePending = null;
+            } finally {
+                migrateBtnRpcId = null;
+            }
+        }
+
+        // Hilfsfunktion: RPC mit Promise-Wrapping (ersetzt den internen sendRpc,
+        // weil sendRpc asynchron per onmessage kommt — hier brauchen wir ein synchrones Promise)
+        function fetchRpc(method, params) {
+            return new Promise((resolve, reject) => {
+                if (!ws || ws.readyState !== WebSocket.OPEN) { reject(new Error('WS nicht offen')); return; }
+                const id = Date.now() + Math.random();
+                const wrapper = (frame) => {
+                    if (frame.id !== id) return;
+                    delete pendingRpcCallbacks[id];
+                    if (frame.error) reject(new Error(frame.error.message || 'RPC error'));
+                    else resolve(frame.result);
+                };
+                pendingRpcCallbacks[id] = wrapper;
+                try { ws.send(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params })); }
+                catch (e) { delete pendingRpcCallbacks[id]; reject(e); }
+            });
         }
 </script>
 </body>
