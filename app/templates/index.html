@@ -2098,7 +2098,7 @@
             const el = document.getElementById('ctxWarn');
             if (!el) return;
             // Button: "⏳ Migration läuft…" + disable
-            el.innerHTML = '⏳ Migration läuft… (History holen, Zusammenfassung, neue Session)';
+            el.innerHTML = '⏳ Migration läuft… (kann bei großen Sessions bis zu 90 s dauern)';
             migrateBtnRpcId = 'migrating';
             try {
                 // 1) History holen — WICHTIG: LIVE-id (hermesSessionId) verwenden, NICHT die
@@ -2109,7 +2109,14 @@
                 //    sondern auf die bereits gerenderten Nachrichten zurückfallen.
                 let hist = null;
                 try {
-                    hist = await fetchRpc('session.history', { session_id: hermesSessionId || activeSessionId });
+                    // v0.0.127: profile aus selectedProfile mitsenden — sonst erzeugt session.create
+                    // die Session im FALSCHEN Profil (default statt axel) und sie ist in der
+                    // Atlas-Session-Liste unsichtbar (live per Proxy-Test reproduziert).
+                    const migProfile = selectedProfile || undefined;
+                    hist = await fetchRpc('session.history', {
+                        session_id: hermesSessionId || activeSessionId,
+                        ...(migProfile ? { profile: migProfile } : {})
+                    });
                 } catch (err) {
                     console.warn('[Atlas] Migration: session.history nicht verfügbar (' + err.message + ') — Fallback auf gerenderten Verlauf');
                 }
@@ -2146,9 +2153,13 @@
                 }
                 const summary = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Keine Inhalt-Zusammenfassung verfügbar.';
 
-                // 3) Neue Session erstellen
+                // 3) Neue Session erstellen (v0.0.127: MIT profile — sonst default-Profil!)
                 migratePending = { oldId: activeSessionId || hermesSessionId, summary };
-                const createResult = await fetchRpc('session.create', { close_on_disconnect: false, source: 'webui' });
+                const createResult = await fetchRpc('session.create', {
+                    close_on_disconnect: false,
+                    source: 'webui',
+                    ...(selectedProfile ? { profile: selectedProfile } : {})
+                });
                 if (!createResult || !createResult.session_id) {
                     throw new Error('session.create fehlgeschlagen');
                 }
@@ -2189,7 +2200,7 @@
         // v0.0.122: fetchRpc-IDs ab 1M — kollidieren NIE mit sendRpc-IDs (rpcId startet bei 0):
         // historyRpcId/resumeRpcId-Handler (die nach Erfolg NICHT genullt werden) würden sonst
         // die fetchRpc-Antwort verschlucken → 20s-Timeout (Root Cause v0.0.121-Test).
-        let fetchRpcSeq = 1000000; const FETCH_RPC_TIMEOUT_MS = 20000;
+        let fetchRpcSeq = 1000000; const FETCH_RPC_TIMEOUT_MS = 90000;  // v0.0.127: 20s war zu knapp (Antworten kamen nach >20s an)
         const pendingRpcTimers = {};   // id -> setTimeout-Handle (v0.0.120)
         function fetchRpc(method, params, timeoutMs = FETCH_RPC_TIMEOUT_MS) {
             return new Promise((resolve, reject) => {
