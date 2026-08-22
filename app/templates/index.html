@@ -1174,6 +1174,14 @@
                     // Fortgesetzte Session als "letzte" merken.
                     localStorage.setItem('atlas_last_session', activeSessionId || frame.result.session_id);
                     sessionCtxPct = 0; sessionCtxMax = 0;
+                    // v0.0.117: Kontext-% SOFORT aus session.resume.info.usage übernehmen —
+                    // Hermes 0.20.2 liefert context_percent/context_max bereits beim Resume
+                    // (vorher nur aus message.complete → Prozentanzeige fehlte nach Neuanmeldung).
+                    const ru = (frame.result.info && frame.result.info.usage) || {};
+                    if (ru.context_percent != null) {
+                        sessionCtxPct = ru.context_percent;
+                        if (ru.context_max) sessionCtxMax = ru.context_max;
+                    }
                     sessionMsgCount = frame.result.message_count || (frame.result.messages || []).length;
                     updateCtxWarning();
                     updateTokenWidget();   // Session-Wechsel: Anzeige SOFORT aktualisieren (v0.0.115)
@@ -1948,7 +1956,8 @@
 
         // Session-Größen-Anzeige (v0.0.114/115): "📨 426 · 🧠 Kontext 72%" — grün/gelb/rot je Auslastung.
         // Nachrichtenzahl kommt sofort aus sessionMsgCount (Resume message_count),
-        // Kontext-% aus sessionCtxPct (message.complete) — KEIN eigener RPC nötig.
+        // Kontext-% aus sessionCtxPct — beim Resume aus info.usage (v0.0.117),
+        // danach live aus message.complete. KEIN eigener RPC nötig.
         function ctxFillHtml() {
             let parts = [];
             if (sessionMsgCount > 0) {
