@@ -212,11 +212,19 @@
         }
         .statusbar .tokens { font-weight: 600; color: var(--text); font-size: 12px; }
         .statusbar .cost { color: var(--accent); font-weight: 700; font-size: 12px; }
-        /* Kontext-Füllstand (v0.0.114): grün = ok, gelb = Warnbereich ≥60 %, rot = kritisch ≥80 % */
-        .statusbar .ctx-fill { font-weight: 700; color: #4ec97a; font-size: 12px; white-space: nowrap; }
+        /* Kontext-Füllstand + Nachrichtenzahl: gemeinsame Zeile über der Token-Tabelle (v0.0.114/116) */
+        .statusbar .ctx-line {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        /* Farben innerhalb der Zeile: grün = ok, gelb = Warnbereich ≥60 %, rot = kritisch ≥80 % */
+        .statusbar .ctx-fill { font-weight: 700; color: #4ec97a; font-size: 12px; }
         .statusbar .ctx-fill.warn { color: #e8b54a; }
         .statusbar .ctx-fill.crit { color: #e05555; }
-        .statusbar .ctx-count { color: var(--text); opacity: .75; font-weight: 600; font-size: 12px; white-space: nowrap; }
+        .statusbar .ctx-count { color: var(--text); opacity: .75; font-weight: 600; font-size: 12px; }
         .statusbar .sep { opacity: .4; }
         .statusbar .loading { opacity: .5; }
         .statusbar .offline { color: #e05555; font-weight: 600; }
@@ -238,8 +246,8 @@
                 row-gap: 4px;
             }
             .statusbar .tok-block { display: contents; }
-            /* Kontext-Füllstand: eigene volle Zeile über der Token-Tabelle (v0.0.114) */
-            .statusbar .ctx-fill { grid-column: 1 / -1; }
+            /* Kontext-Füllstand + Nachrichtenzahl: eigene volle Zeile über der Token-Tabelle (v0.0.114/116) */
+            .statusbar .ctx-line { grid-column: 1 / -1; }
         }
         .statusbar .model-label {
             font-weight: 700;
@@ -258,6 +266,7 @@
             /* Zeilen linksbündig statt zentriert: kein Leerraum links, rechte Seite
                bleibt Reserve für wachsende Zahlen (kein Zeilenumbruch) */
             .statusbar .tok-block { justify-content: flex-start; gap: 5px; }
+            .statusbar .ctx-line { justify-content: flex-start; }
         }
 
 </style>
@@ -1956,7 +1965,9 @@
                            '% von ' + (sessionCtxMax ? sessionCtxMax.toLocaleString('de-DE') : '?') +
                            ' Tokens">🧠 Kontext ' + sessionCtxPct + '%' + maxTxt + '</span>');
             }
-            return parts.join(' ');
+            if (!parts.length) return '';
+            // Gemeinsame Zeile über der Token-Tabelle: beide Werte nebeneinander (v0.0.116)
+            return '<span class="ctx-line">' + parts.join('<span class="sep">·</span>') + '</span>';
         }
         // Token-Widget beim Laden aktualisieren, dann alle 5 Minuten
         document.addEventListener('DOMContentLoaded', () => {
