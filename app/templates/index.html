@@ -1194,15 +1194,17 @@
                         ctxCacheSave();
                     }
                     sessionMsgCount = frame.result.message_count || (frame.result.messages || []).length;
-                    updateCtxWarning();
-                    // v0.0.122: Letzten bekannten Kontext-Stand anzeigen, wenn Hermes keinen
+                    // v0.0.125: Ersten bekannten Kontext-Stand anzeigen, wenn Hermes keinen
                     // echten Wert liefert (kalte Session, noch kein Turn gelaufen):
                     // Hermes liefert context_percent nur nach einem Turn (server.py:
-                    // „leave it unknown otherwise“). Ohne Cache bliebe die Anzeige leer.
+                    // „leave it unknown otherwise“). Reihenfolge WICHTIG: Cache VOR
+                    // updateCtxWarning/updateTokenWidget laden, sonst feuert die
+                    // Session-weiterführen-Warnung nie (sessionCtxPct noch 0).
                     if (sessionCtxPct === 0) {
                         const cc = ctxCacheLoad();
                         if (cc) { sessionCtxPct = cc.pct; if (cc.max) sessionCtxMax = cc.max; }
                     }
+                    updateCtxWarning();
                     updateTokenWidget();   // Session-Wechsel: Anzeige SOFORT aktualisieren (v0.0.115)
                     refreshUsageGauge();   // v0.0.119: Kontext-% auch bei idle Session nachladen
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
@@ -2114,7 +2116,8 @@
                 let msgs = (hist && hist.messages) ? hist.messages : [];
                 if (!msgs.length) {
                     const seen = {}; msgs = [];
-                    document.querySelectorAll('#messagesDiv .msg').forEach(el => {
+                    // ACHTUNG: Container ist <div id="messages"> — NICHT #messagesDiv (v0.0.126)
+                    document.querySelectorAll('#messages .msg').forEach(el => {
                         const isUser = el.classList.contains('user');
                         const isAsst = el.classList.contains('assistant');
                         if (!isUser && !isAsst) return;
