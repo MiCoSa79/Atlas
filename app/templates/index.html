@@ -1998,6 +1998,12 @@
         const MODEL_CACHE_MS = 1500;  // 1.5s Cache, damit updateTokenWidget() in message.complete nicht 2x fliegt
 
         function updateTokenWidget() {
+            // v0.0.133: Kein Usage-Fetch auf der Login-Seite — das 5-min-Polling
+            // (setInterval, Z. 2097) lief auch ohne Session-Cookie und erzeugte
+            // bei jedem Login-Seiten-Aufenthalt einen 401 in der Browserkonsole
+            // (GET /api/usage/today/all 401 Unauthorized). #app hat 'active' nur
+            // im eingeloggten Zustand (showAuth entfernt sie).
+            if (!app.classList.contains('active')) return;
             const w = document.getElementById('statusBar');
             if (!w) { setTimeout(updateTokenWidget, 500); return; }
             // Cache nutzen (Refetch nur wenn älter als 1.5s)
