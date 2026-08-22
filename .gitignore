@@ -1,0 +1,20 @@
+# Persönliche Upload-Artefakte — gehören NIEMALS ins Repo (2026-08-22 Datenleck-Fix)
+# Die App schreibt Uploads nach UPLOAD_DIR = neben DB_PATH (/data/.../uploads im Container),
+# NICHT in den Projektbaum. Diese Ordner sind nur versehentlich committet worden.
+app/uploads/
+uploads/
+hermes/uploads/
+/data/uploads/
+
+# Laufzeit / lokal
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+node_modules/
+config.json

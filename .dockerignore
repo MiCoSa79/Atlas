@@ -1,0 +1,16 @@
+# Docker-Build-Kontext: persönliche Upload-Artefakte ausschließen (2026-08-22)
+# COPY app/ ./app würde sonst app/uploads mitziehen — PDFs mit persönlichen Daten!
+app/uploads/
+uploads/
+hermes/uploads/
+.data/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.git/
+.gitignore
+*.db
+*.md
+tests/
+scripts/
