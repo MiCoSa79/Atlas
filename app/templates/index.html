@@ -210,6 +210,10 @@
         }
         .statusbar .tokens { font-weight: 600; color: var(--text); font-size: 12px; }
         .statusbar .cost { color: var(--accent); font-weight: 700; font-size: 12px; }
+        /* Kontext-Füllstand (v0.0.114): grün = ok, gelb = Warnbereich ≥60 %, rot = kritisch ≥80 % */
+        .statusbar .ctx-fill { font-weight: 700; color: #4ec97a; font-size: 12px; white-space: nowrap; }
+        .statusbar .ctx-fill.warn { color: #e8b54a; }
+        .statusbar .ctx-fill.crit { color: #e05555; }
         .statusbar .sep { opacity: .4; }
         .statusbar .loading { opacity: .5; }
         .statusbar .offline { color: #e05555; font-weight: 600; }
@@ -231,6 +235,8 @@
                 row-gap: 4px;
             }
             .statusbar .tok-block { display: contents; }
+            /* Kontext-Füllstand: eigene volle Zeile über der Token-Tabelle (v0.0.114) */
+            .statusbar .ctx-fill { grid-column: 1 / -1; }
         }
         .statusbar .model-label {
             font-weight: 700;
@@ -473,6 +479,7 @@
         let resumeRpcId = null;          // ID der letzten session.resume-Anfrage
         let historyRpcId = null;         // ID der letzten session.history-Anfrage
         let sessionCtxPct = 0;           // letzte Kontext-Auslastung in % (aus message.complete, v0.0.112)
+        let sessionCtxMax = 0;           // Kontext-Limit in Tokens (context_max, v0.0.114)
         let sessionMsgCount = 0;         // Nachrichtenanzahl beim Resume (Schätzwert, v0.0.112)
         const CTX_WARN_PCT = 60;         // Warnung ab 60 % Kontextauslastung — Hermes komprimiert sonst erst zu spät
         const CTX_WARN_MSGS = 350;       // Warnung ab 350 Nachrichten (Resume ohne Token-Wert)
@@ -1124,7 +1131,7 @@
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     messagesDiv.innerHTML = '';
                     activeSessionId = null;
-                    sessionCtxPct = 0; sessionMsgCount = 0; updateCtxWarning();
+                    sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0; updateCtxWarning();
                     // Neue Session als "letzte" merken (Persistenz über Tab-Close,
                     // damit Hintergrund-Ergebnisse in dieser Session landen).
                     const storedNew = frame.result.stored_session_id || frame.result.session_id;
@@ -1153,7 +1160,7 @@
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     // Fortgesetzte Session als "letzte" merken.
                     localStorage.setItem('atlas_last_session', activeSessionId || frame.result.session_id);
-                    sessionCtxPct = 0;
+                    sessionCtxPct = 0; sessionCtxMax = 0;
                     sessionMsgCount = (frame.result.messages || []).length;
                     updateCtxWarning();
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
@@ -1312,17 +1319,15 @@
                         statusBubble.remove();
                         statusBubble = null;
                     }
-                    // Token-Anzeige nach jeder fertigen Antwort sofort aktualisieren
-                    // (v0.0.89: der session.usage-Trigger aus v0.0.83 wurde in v0.0.87
-                    // entfernt, das Widget pollt nur noch alle 5 Min -> wirkte veraltet)
-                    updateTokenWidget();
-                    // Session-Kontext-Warnung (v0.0.112): usage.context_percent direkt aus dem Event
                     const u = (p.payload && p.payload.usage) || {};
                     if (u.context_percent != null) {
                         sessionCtxPct = u.context_percent;
+                        sessionCtxMax = u.context_max || sessionCtxMax;
                         sessionMsgCount = 0;
                         updateCtxWarning();
                     }
+                    // Token-Anzeige nach jeder fertigen Antwort sofort aktualisieren
+                    updateTokenWidget();
                 }
                 if (p.type === 'status.update' && p.payload && p.payload.text) {
                     const t = p.payload.text;
@@ -1884,8 +1889,10 @@
         function renderTokenWidget(w, data) {
             if (!w) return;
             const models = data.models || [];
+            // Kontext-Füllstand (v0.0.114): immer zuerst anzeigen, wenn bekannt
+            const ctxHtml = ctxFillHtml();
             if (data.total_tokens === 0) {
-                w.innerHTML = '<span class="single">0 Tokens · —</span>';
+                w.innerHTML = ctxHtml + '<span class="single">0 Tokens · —</span>';
                 return;
             }
             let parts = [];
@@ -1914,7 +1921,21 @@
                     '</span>'
                 );
             }
-            w.innerHTML = parts.join(' ');
+            w.innerHTML = ctxHtml + parts.join(' ');
+        }
+
+        // Kontext-Füllstandsanzeige (v0.0.114): "Kontext 72%" — grün/gelb/rot je Auslastung.
+        // Aktualisiert sich über sessionCtxPct (message.complete) — KEIN eigener RPC nötig.
+        function ctxFillHtml() {
+            if (!sessionCtxPct) return '';
+            let cls = 'ctx-fill';
+            if (sessionCtxPct >= 80) cls += ' crit';
+            else if (sessionCtxPct >= CTX_WARN_PCT) cls += ' warn';
+            let maxTxt = '';
+            if (sessionCtxMax) maxTxt = ' / ' + Math.round(sessionCtxMax / 1000) + 'k';
+            return '<span class="' + cls + '" title="Session-Kontext: ' + sessionCtxPct +
+                   '% von ' + (sessionCtxMax ? sessionCtxMax.toLocaleString('de-DE') : '?') +
+                   ' Tokens">🧠 Kontext ' + sessionCtxPct + '%' + maxTxt + '</span>';
         }
         // Token-Widget beim Laden aktualisieren, dann alle 5 Minuten
         document.addEventListener('DOMContentLoaded', () => {
@@ -1984,7 +2005,7 @@
                 activeSessionId = null;
                 localStorage.setItem('atlas_last_session', createResult.stored_session_id || createResult.session_id);
                 messagesDiv.innerHTML = '';
-                sessionCtxPct = 0; sessionMsgCount = 0;
+                sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0;
                 el.innerHTML = '';
                 el.classList.add('hidden');
 
