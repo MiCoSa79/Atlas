@@ -2200,8 +2200,17 @@
                 el.innerHTML = '';
                 el.classList.add('hidden');
 
-                // Migrationstext als erste Nachricht
-                addMsg('system', '📋 Von alter Session übernommen (' + msgs.length + ' Nachrichten' + (hist && hist.messages && hist.messages.length > 350 ? ', Kontext: ' + hist.messages.length : '') + ')\nLetzte Themen:\n' + summary.slice(0, 500));
+                // Migrationstext als erste Nachricht — anzeigen UND an die neue Session
+                // senden (v0.0.130): Vorher wurde die Summary NUR im Browser gerendert
+                // (addMsg), nie an Hermes geschickt — die neue Session startete mit
+                // leerem Kontext (message_count: 0), Hermes wusste nichts von der alten
+                // Session. Transport: pendingMessages → flushPendingMessages() im
+                // onopen-Create-Pfad der NEUEN WS (restartWS → session.create, aktive
+                // Session 0c44fde1-artig) → prompt.submit mit der Summary als erste
+                // echte Nachricht der neuen Session.
+                const migrationText = '📋 Von alter Session übernommen (' + msgs.length + ' Nachrichten' + (hist && hist.messages && hist.messages.length > 350 ? ', Kontext: ' + hist.messages.length : '') + ')\nLetzte Themen:\n' + summary.slice(0, 500);
+                addMsg('system', migrationText);
+                pendingMessages.push(migrationText);
 
                 // Session-Label aktualisieren
                 const label = document.getElementById('currentSessionLabel');
