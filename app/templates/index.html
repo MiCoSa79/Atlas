@@ -1138,6 +1138,26 @@
                 console.log('[Atlas] ← WS msg:', logData);
                 console.log('[Atlas] ← WS message:', JSON.stringify(frame).substring(0, 200));
 
+                // v0.0.128: Generic RPC response handler ZUERST (VOR den speziellen
+                // create/resume/history-Handlern). Die migrate-fetchRpc-Antworten
+                // (history/create) tragen id => '1000004' (String ab 1M) — sobald ein
+                // spezieller Handler (z.B. history: frame.id===historyRpcId, oder create:
+                // frame.result.session_id) die Antwort STILL verschluckt (return ohne
+                // Log), findet der Generic-Handler sie nie → 90s-Timeout trotz
+                // eingetroffener Antwort (Nutzer-Befund v0.0.127).
+                if (frame.id !== undefined && !frame.method && pendingRpcCallbacks[frame.id]) {
+                    const cb = pendingRpcCallbacks[frame.id];
+                    delete pendingRpcCallbacks[frame.id];
+                    if (frame.error) cb({ error: frame.error });
+                    else cb(frame.result);
+                    return;
+                }
+                // v0.0.128: RPC-Antwort OHNE Callback — beim nächsten Test sofort sichtbar,
+                // welche Antworten kein Ziel finden (Diagnose statt stillem Verlust).
+                if (frame.id !== undefined && !frame.method && frame.result && Object.keys(pendingRpcCallbacks).length > 0) {
+                    console.warn('[Atlas] RPC response ohne Callback: id=' + frame.id + ' (pending=' + Object.keys(pendingRpcCallbacks).length + ')');
+                }
+
                 // v0.0.124: Jeder Handler in try/catch — Exception darf Generic-Handler NICHT blockieren
                 try {
                     if (createRpcId !== null && frame.id === createRpcId && frame.result && frame.result.session_id) {
