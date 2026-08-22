@@ -1148,8 +1148,12 @@
                 if (frame.id !== undefined && !frame.method && pendingRpcCallbacks[frame.id]) {
                     const cb = pendingRpcCallbacks[frame.id];
                     delete pendingRpcCallbacks[frame.id];
-                    if (frame.error) cb({ error: frame.error });
-                    else cb(frame.result);
+                    // v0.0.129: VOLLEN Frame übergeben (nicht frame.result!) — der fetchRpc-
+                    // Wrapper prüft '' + frame.id === id (v0.0.124). cb(frame.result) hatte
+                    // frame.id=undefined → Wrapper return → Promise hing bis zum 90s-Timeout
+                    // (Root Cause aller Migration-Timeouts seit v0.0.124).
+                    if (frame.error) cb({ id: frame.id, error: frame.error });
+                    else cb(frame);
                     return;
                 }
                 // v0.0.128: RPC-Antwort OHNE Callback — beim nächsten Test sofort sichtbar,
@@ -1305,8 +1309,9 @@
                 if (frame.id && pendingRpcCallbacks[frame.id]) {
                     const cb = pendingRpcCallbacks[frame.id];
                     delete pendingRpcCallbacks[frame.id];
-                    if (frame.error) cb({ error: frame.error });
-                    else cb(frame.result);
+                    // v0.0.129: vollen Frame übergeben (siehe Kommentar beim Generic ganz oben)
+                    if (frame.error) cb({ id: frame.id, error: frame.error });
+                    else cb(frame);
                     return;
                 }
                 // RPC-Antworten (keine Events): Attach-Responses speichern,
