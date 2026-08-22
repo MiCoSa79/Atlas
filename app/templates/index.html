@@ -1187,6 +1187,11 @@
                     if (ru.context_percent != null) {
                         sessionCtxPct = ru.context_percent;
                         if (ru.context_max) sessionCtxMax = ru.context_max;
+                        // v0.0.125: Wert SOFORT cachen — ctxCacheSave lief nur in
+                        // refreshUsageGauge bei echtem session.usage-Wert, und den gibt es
+                        // für kalte Sessions NIE → nach Session-Wechsel war der Cache leer
+                        // und die Anzeige blieb für immer weg (auch nach Zurückwechseln).
+                        ctxCacheSave();
                     }
                     sessionMsgCount = frame.result.message_count || (frame.result.messages || []).length;
                     updateCtxWarning();
@@ -2097,11 +2102,33 @@
                 // 1) History holen — WICHTIG: LIVE-id (hermesSessionId) verwenden, NICHT die
                 //    Stored-ID (activeSessionId): session.history antwortet auf stored-IDs mit
                 //    4001 'session not found' (v0.0.118, live per WS-Test verifiziert).
-                const hist = await fetchRpc('session.history', { session_id: hermesSessionId || activeSessionId });
-                if (!hist || !hist.messages || !hist.messages.length) {
+                //    v0.0.125: AKTIVE Session kann 0 Nachrichten liefern ODER langsamer antworten
+                //    (Live-Registry vs. Message-Store) → bei leerer Antwort/Timeout nicht abbrechen,
+                //    sondern auf die bereits gerenderten Nachrichten zurückfallen.
+                let hist = null;
+                try {
+                    hist = await fetchRpc('session.history', { session_id: hermesSessionId || activeSessionId });
+                } catch (err) {
+                    console.warn('[Atlas] Migration: session.history nicht verfügbar (' + err.message + ') — Fallback auf gerenderten Verlauf');
+                }
+                let msgs = (hist && hist.messages) ? hist.messages : [];
+                if (!msgs.length) {
+                    const seen = {}; msgs = [];
+                    document.querySelectorAll('#messagesDiv .msg').forEach(el => {
+                        const isUser = el.classList.contains('user');
+                        const isAsst = el.classList.contains('assistant');
+                        if (!isUser && !isAsst) return;
+                        const text = (el.textContent || '').trim();
+                        if (!text || seen[text]) return;
+                        seen[text] = 1;
+                        msgs.push({ role: isUser ? 'user' : 'assistant', text: text });
+                    });
+                    if (msgs.length) console.log('[Atlas] Migration: Fallback auf ' + msgs.length + ' gerenderte Nachrichten');
+                }
+                if (!msgs.length) {
                     throw new Error('Keine Nachrichten in History');
                 }
-                const msgs = hist.messages;
+                console.log('[Atlas] Migration: history OK (' + msgs.length + ' Nachrichten, Session ' + (hermesSessionId || activeSessionId) + ')');
 
                 // 2) Zusammenfassung aus letzten ~30 Nachrichten generieren (Client-seitig)
                 const last30 = msgs.slice(-30);
@@ -2135,7 +2162,7 @@
                 el.classList.add('hidden');
 
                 // Migrationstext als erste Nachricht
-                addMsg('system', '📋 Von alter Session übernommen (' + msgs.length + ' Nachrichten, Kontext: ' + (hist.messages.length > 350 ? hist.messages.length : '') + ')\nLetzte Themen:\n' + summary.slice(0, 500));
+                addMsg('system', '📋 Von alter Session übernommen (' + msgs.length + ' Nachrichten' + (hist && hist.messages && hist.messages.length > 350 ? ', Kontext: ' + hist.messages.length : '') + ')\nLetzte Themen:\n' + summary.slice(0, 500));
 
                 // Session-Label aktualisieren
                 const label = document.getElementById('currentSessionLabel');
