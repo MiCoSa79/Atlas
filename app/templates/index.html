@@ -2143,9 +2143,8 @@
             Object.keys(callbacks).forEach(k => {
                 try { callbacks[k]({ error: { message: reason } }); } catch (_) {}
             });
-            Object.keys(pendingRpcTimers).forEach(k => { clearTimeout(pendingRpcTimers[k]); });
-            pendingRpcTimers = {};
-        }
+            Object.keys(pendingRpcTimers).forEach(k => { clearTimeout(pendingRpcTimers[k]); delete pendingRpcTimers[k]; });
+        }   // v0.0.121: KEIN pendingRpcTimers = {} — const-Deklaration, TypeError werfen würde den
 </script>
 </body>
 </html>
