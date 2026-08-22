@@ -157,6 +157,20 @@
         .msg.thinking.done { opacity: .45; font-size: 11.5px; }
         .msg.thinking.done::after { content: ' ✓'; }
         .msg.status { align-self: center; background: transparent; color: var(--muted); font-size: 11.5px; padding: 2px 10px; opacity: .6; }
+        /* Clarify-Karte (v0.0.136): Agent-Frage mit Antwort-Buttons + Eigene-Antwort-Feld */
+        .msg.clarify-card { align-self: flex-start; background: #1d232e; border: 1px solid var(--border); border-bottom-left-radius: 4px; padding: 12px 14px; max-width: 84%; }
+        .clarify-q { font-weight: 600; margin-bottom: 10px; white-space: pre-wrap; word-break: break-word; }
+        .clarify-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+        .clarify-btn { background: transparent; border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 13.5px; padding: 7px 12px; cursor: pointer; transition: border-color .15s, background .15s; }
+        .clarify-btn:hover { border-color: var(--accent); }
+        .clarify-btn:disabled { opacity: .45; cursor: default; }
+        .clarify-btn.recommend { border-color: rgba(79,140,255,.55); }
+        .clarify-btn.picked { background: rgba(79,140,255,.16); border-color: var(--accent); }
+        .clarify-other { display: flex; gap: 8px; }
+        .clarify-input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 13.5px; padding: 7px 11px; outline: none; min-width: 0; }
+        .clarify-input:focus { border-color: var(--accent); }
+        .msg.clarify-card.clarify-done { opacity: .6; }
+        .msg.clarify-card .clarify-done-note { font-size: 12px; color: var(--muted); margin-top: 8px; display: block; }
 
         #composer { display: flex; gap: 8px; padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); background: var(--panel); border-top: 1px solid var(--border); }
         #composer input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 20px; color: var(--text); font-size: 15px; padding: 10px 14px; outline: none; }
@@ -555,6 +569,7 @@
         let createRpcId = null;          // ID der letzten session.create-Anfrage
         let resumeRpcId = null;          // ID der letzten session.resume-Anfrage
         let historyRpcId = null;         // ID der letzten session.history-Anfrage
+        let pendingClarifyOnResume = null; // offene clarify aus resume-Result (v0.0.136)
         let sessionCtxPct = 0;           // letzte Kontext-Auslastung in % (aus message.complete, v0.0.112)
         let sessionCtxMax = 0;           // Kontext-Limit in Tokens (context_max, v0.0.114)
         let sessionMsgCount = 0;         // Nachrichtenanzahl beim Resume (Schätzwert, v0.0.112)
@@ -1080,6 +1095,107 @@
             return m;
         }
 
+        // ---- Clarify-Karte (v0.0.136) ----
+        // Das Gateway sendet bei Agent-Fragen (clarify-Tool) ein Event
+        // {type:"clarify.request", request_id, question, choices?, multi_select?}.
+        // Antwort: clarify.respond {request_id, answer} → sonst blockiert der Turn
+        // bis zum 1h-Timeout und die Session hängt (Session 526cdc/a750a0, 2026-08-22).
+        let clarifyCard = null;   // aktuell offene Karte (eine pro Session reicht)
+        const resolvedClarifyRids = new Set(); // beantwortete/abgelaufene IDs (Replay-Schutz)
+
+        function renderClarifyCard(payload) {
+            const rid = payload.request_id;
+            if (!rid) return null;
+            // Idempotent: bei Reconnect/Replay dieselbe Frage nicht doppelt rendern
+            if (resolvedClarifyRids.has(rid)) return null;
+            if (clarifyCard && clarifyCard.dataset.rid === rid) return clarifyCard;
+            const card = addMsg('assistant', '');
+            card.dataset.rid = rid;
+            card.classList.add('clarify-card');
+            card.innerHTML = '';
+
+            const q = document.createElement('div');
+            q.className = 'clarify-q';
+            q.textContent = payload.question || '…';
+            card.appendChild(q);
+
+            const choices = Array.isArray(payload.choices) ? payload.choices : [];
+            const multi = !!payload.multi_select;
+            const selected = new Set();
+
+            const lockCard = (note) => {
+                card.querySelectorAll('button, input').forEach(el => el.disabled = true);
+                card.classList.add('clarify-done');
+                const meta = card.querySelector('.meta');
+                if (meta) meta.textContent = note;
+            };
+            const resolve = (answer) => {
+                if (card.classList.contains('clarify-done')) return;
+                sendRpc('clarify.respond', { request_id: rid, answer: answer });
+                resolvedClarifyRids.add(rid);
+                lockCard('✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }));
+                if (clarifyCard === card) clarifyCard = null;
+            };
+
+            if (choices.length) {
+                const box = document.createElement('div');
+                box.className = 'clarify-choices';
+                choices.forEach((c, i) => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'clarify-btn' + (i === 0 && choices.length > 1 ? ' recommend' : '');
+                    b.textContent = c;   // textContent → keine HTML-Injection aus LLM-Text
+                    b.addEventListener('click', () => {
+                        if (multi) {
+                            if (selected.has(c)) { selected.delete(c); b.classList.remove('picked'); }
+                            else { selected.add(c); b.classList.add('picked'); }
+                            return;
+                        }
+                        resolve(c);
+                    });
+                    box.appendChild(b);
+                });
+                card.appendChild(box);
+            }
+
+            // "Eigene Antwort"-Feld (Hermes hängt immer "Other" an; hier freie Eingabe)
+            const other = document.createElement('div');
+            other.className = 'clarify-other';
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.className = 'clarify-input';
+            inp.placeholder = choices.length ? 'Eigene Antwort…' : (payload.question ? 'Antwort…' : '…');
+            inp.autocomplete = 'off';
+            const send = document.createElement('button');
+            send.type = 'button';
+            send.className = 'clarify-btn';
+            send.textContent = 'Senden';
+            const doOther = () => { const v = inp.value.trim(); if (v) resolve(v); };
+            send.addEventListener('click', doOther);
+            inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doOther(); } });
+            other.appendChild(inp);
+            other.appendChild(send);
+            card.appendChild(other);
+
+            const meta = document.createElement('span');
+            meta.className = 'meta';
+            card.appendChild(meta);
+            clarifyCard = card;
+            followSticky();
+            return card;
+        }
+
+        function expireClarifyCard(payload) {
+            if (!clarifyCard) return;
+            if (payload && payload.request_id && clarifyCard.dataset.rid !== payload.request_id) return;
+            resolvedClarifyRids.add(clarifyCard.dataset.rid);
+            clarifyCard.querySelectorAll('button, input').forEach(el => el.disabled = true);
+            clarifyCard.classList.add('clarify-done');
+            const meta = clarifyCard.querySelector('.meta');
+            if (meta) meta.textContent = '⏱️ Zeit abgelaufen';
+            clarifyCard = null;
+        }
+
         // Interne/synthetische Nachrichten als Assistant-/Timeline-Notice links
         // rendern statt als User-Bubble rechts. Hermes markiert solche Nachrichten
         // mit display_kind (DB-History): async_delegation_complete (Delegations-
@@ -1298,6 +1414,10 @@
                     refreshUsageGauge();   // v0.0.119: Kontext-% auch bei idle Session nachladen
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
                     historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
+                    // Offene clarify-Frage aus dem resume-Result merken — die Karte
+                    // wird NACH dem Verlaufs-Rendering eingehängt (sonst löscht
+                    // messagesDiv.innerHTML sie wieder). (v0.0.136)
+                    pendingClarifyOnResume = frame.result.pending_clarify || null;
                     // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
                     if (frame.result.messages && frame.result.messages.length) {
                         messagesDiv.innerHTML = '';
@@ -1365,6 +1485,11 @@
                     addMsg('system', n ? 'Verlauf geladen (' + n + ' Nachrichten) ✓' : 'Diese Session hat noch keine Nachrichten (starte einfach ein neues Thema).');
                     // Session wurde geöffnet → bewusst ans Ende springen (neueste Nachricht)
                     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    // Offene clarify-Frage nach Reconnect/Resume wiederherstellen (v0.0.136)
+                    if (pendingClarifyOnResume) {
+                        renderClarifyCard(pendingClarifyOnResume);
+                        pendingClarifyOnResume = null;
+                    }
                     historyRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     return;
                 }
@@ -1421,6 +1546,17 @@
                     if (!statusBubble) statusBubble = addMsg('status', p.payload.text);
                     else statusBubble.querySelector('span').textContent = p.payload.text;
                     followSticky();
+                    return;
+                }
+                // Clarify-Frage des Agenten (v0.0.136): Karte mit Buttons + freiem
+                // Feld rendern. Antwort via clarify.respond — sonst blockiert der
+                // Turn bis zum 1h-Timeout und die Session hängt.
+                if (p.type === 'clarify.request' && p.payload && p.payload.request_id) {
+                    renderClarifyCard(p.payload);
+                    return;
+                }
+                if (p.type === 'clarify.expire' && p.payload) {
+                    expireClarifyCard(p.payload);
                     return;
                 }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
