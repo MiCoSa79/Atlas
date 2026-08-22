@@ -1145,6 +1145,7 @@
                     activeSessionId = null;
                     sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0; updateCtxWarning();
                     updateTokenWidget();   // neue Session: Anzeige SOFORT zurücksetzen (v0.0.115)
+                    refreshUsageGauge();   // v0.0.119: exakten Kontext-Stand sofort nachladen
                     // Neue Session als "letzte" merken (Persistenz über Tab-Close,
                     // damit Hintergrund-Ergebnisse in dieser Session landen).
                     const storedNew = frame.result.stored_session_id || frame.result.session_id;
@@ -1185,6 +1186,7 @@
                     sessionMsgCount = frame.result.message_count || (frame.result.messages || []).length;
                     updateCtxWarning();
                     updateTokenWidget();   // Session-Wechsel: Anzeige SOFORT aktualisieren (v0.0.115)
+                    refreshUsageGauge();   // v0.0.119: Kontext-% auch bei idle Session nachladen
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
                     historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
                     // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
@@ -1355,7 +1357,10 @@
                                                 // (message.complete hat kein message_count —
                                                 //  Nullen ließ die 📨-Anzeige nach Antwort verschwinden)
                         updateCtxWarning();
+                    } else {
+                        sessionMsgCount += 1;   // v0.0.119: Zähler auch ohne context_percent hochzählen
                     }
+                    refreshUsageGauge();   // v0.0.119: exakten Kontext via session.usage nachladen
                     // Token-Anzeige nach jeder fertigen Antwort sofort aktualisieren
                     updateTokenWidget();
                 }
@@ -1988,6 +1993,30 @@
         // Kontext-Warnung: Session sehr groß → Banner mit "Session weiterführen"-Button (v0.0.112, Migrate v0.0.113)
         let migratePending = null;             // aktive Migration: { oldId, historyMessages, summary }
         let migrateBtnRpcId = null;            // RPC-ID des "Weiterführen"-Buttons (für Disable-Tracking)
+
+        // v0.0.119: Füllstandsanzeige zuverlässig machen — Hermes liefert context_percent
+        // NICHT zuverlässig in session.resume.info.usage / message.complete (bei idle Session
+        // leer, live diagnostiziert). session.usage antwortet IMMER mit context_percent/
+        // context_max (per WS-Test verifiziert). Diese Funktion holt den exakten Stand
+        // nach create/resume/complete nach.
+        let usageGaugePending = false;
+        async function refreshUsageGauge() {
+            if (!hermesSessionId || usageGaugePending) return;
+            usageGaugePending = true;
+            try {
+                const p = { session_id: hermesSessionId };
+                if (selectedProfile) p.profile = selectedProfile;
+                const u = await fetchRpc('session.usage', p);
+                if (u && u.context_percent != null) {
+                    sessionCtxPct = u.context_percent;
+                    if (u.context_max) sessionCtxMax = u.context_max;
+                    updateCtxWarning();
+                    updateTokenWidget();
+                }
+            } catch (_) { /* Anzeige bleibt wie sie ist */ }
+            usageGaugePending = false;
+        }
+
         function updateCtxWarning() {
             const el = document.getElementById('ctxWarn');
             if (!el) return;
