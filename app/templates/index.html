@@ -2018,8 +2018,10 @@
             el.innerHTML = '⏳ Migration läuft… (History holen, Zusammenfassung, neue Session)';
             migrateBtnRpcId = 'migrating';
             try {
-                // 1) History holen
-                const hist = await fetchRpc('session.history', { session_id: activeSessionId || hermesSessionId });
+                // 1) History holen — WICHTIG: LIVE-id (hermesSessionId) verwenden, NICHT die
+                //    Stored-ID (activeSessionId): session.history antwortet auf stored-IDs mit
+                //    4001 'session not found' (v0.0.118, live per WS-Test verifiziert).
+                const hist = await fetchRpc('session.history', { session_id: hermesSessionId || activeSessionId });
                 if (!hist || !hist.messages || !hist.messages.length) {
                     throw new Error('Keine Nachrichten in History');
                 }
