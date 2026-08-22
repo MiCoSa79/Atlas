@@ -307,9 +307,9 @@
             {% if setup_mode %}
             <p class="hint">Willkommen! Lege zuerst deinen Admin-Zugang an.<br>Die Hermes-Verbindung richtest du danach in den <b>Einstellungen</b> ein.</p>
             <form id="setupForm">
-                <label>Benutzername</label>
+                <label for="s_username">Benutzername</label>
                 <input type="text" id="s_username" required autocomplete="username" minlength="3">
-                <label>Passwort (min. 6 Zeichen)</label>
+                <label for="s_password">Passwort (min. 6 Zeichen)</label>
                 <input type="password" id="s_password" required autocomplete="new-password" minlength="6">
                 <button type="submit">Installation starten</button>
             </form>
@@ -317,23 +317,23 @@
             <p class="hint" id="hintLogin">Melde dich an, um fortzufahren.</p>
             <p class="hint hidden" id="hintRegister">Lege dein Konto an, um mit Atlas zu chatten.</p>
             <form id="loginForm">
-                <label>Benutzername</label>
+                <label for="username">Benutzername</label>
                 <input type="text" id="username" required autocomplete="username">
-                <label>Passwort</label>
+                <label for="password">Passwort</label>
                 <input type="password" id="password" required autocomplete="current-password">
                 <button type="submit">Anmelden</button>
             </form>
             <form id="otpForm" class="hidden">
-                <label>2FA-Code (aus deiner Authenticator-App)</label>
+                <label for="otpCode">2FA-Code (aus deiner Authenticator-App)</label>
                 <input type="text" id="otpCode" required autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" style="letter-spacing:4px;text-align:center;font-size:22px;">
                 <button type="submit">Bestätigen</button>
             </form>
             <button id="backToLogin2fa" class="ghost hidden" style="width:100%;margin-top:8px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;">← Zurück zum Login</button>
             <button id="toggleRegister" class="ghost" style="width:100%;margin-top:12px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;">Noch kein Konto? Registrieren</button>
             <form id="registerForm" class="hidden">
-                <label>Benutzername</label>
+                <label for="r_username">Benutzername</label>
                 <input type="text" id="r_username" required autocomplete="username" minlength="3">
-                <label>Passwort (min. 6 Zeichen)</label>
+                <label for="r_password">Passwort (min. 6 Zeichen)</label>
                 <input type="password" id="r_password" required autocomplete="new-password" minlength="6">
                 <button type="submit">Registrieren</button>
             </form>
@@ -366,8 +366,8 @@
             <!-- Datei-Vorschau -->
             <div id="filePreview" style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; max-width:100%;"></div>
             <div style="display:flex; gap:8px; align-items:center; max-width:100%; min-width:0;">
-                <textarea id="input" rows="1" placeholder="Nachricht an Atlas..." autocomplete="off" style="flex:1; min-width:0; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:16px; font-family:inherit; line-height:20px; padding:10px 14px; outline:none; resize:none; overflow-y:auto; max-height:250px; box-sizing:border-box; white-space:pre-wrap;"></textarea>
-                <input id="fileInput" type="file" hidden multiple>
+                <textarea id="input" rows="1" placeholder="Nachricht an Atlas..." aria-label="Nachricht an Atlas" autocomplete="off" style="flex:1; min-width:0; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:16px; font-family:inherit; line-height:20px; padding:10px 14px; outline:none; resize:none; overflow-y:auto; max-height:250px; box-sizing:border-box; white-space:pre-wrap;"></textarea>
+                <input id="fileInput" type="file" hidden multiple aria-label="Datei anhängen">
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
                 <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
             </div>
@@ -385,13 +385,13 @@
     <div id="settingsModal" class="modal">
         <div class="modal-card">
             <h2>⚙️ Einstellungen</h2>
-            <label>Hermes-URL</label>
+            <label for="p_url">Hermes-URL</label>
             <input type="url" id="p_url" placeholder="http://10.0.25.60:9119">
-            <label>Hermes-Benutzer (Dashboard-Login)</label>
+            <label for="p_user">Hermes-Benutzer (Dashboard-Login)</label>
             <input type="text" id="p_user" autocomplete="username">
-            <label>Hermes-Passwort <span style="color:var(--muted);font-size:11px;">(nur bei Änderung)</span></label>
+            <label for="p_pass">Hermes-Passwort <span style="color:var(--muted);font-size:11px;">(nur bei Änderung)</span></label>
             <input type="password" id="p_pass" autocomplete="new-password">
-            <label>Hermes-Profil</label>
+            <label for="p_profile">Hermes-Profil</label>
             <select id="p_profile" style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;outline:none;appearance:none;">
                 <option value="">Standard (default)</option>
             </select>
@@ -421,7 +421,7 @@
                     <img id="otpQr" alt="QR-Code" style="width:180px;height:180px;display:block;margin:0 auto 10px;border-radius:10px;background:#fff;padding:8px;">
                     <p class="hint" style="margin:0 0 6px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Scanne den QR-Code mit deiner Authenticator-App (z.B. Google Authenticator, Aegis, 1Password) oder trage das Secret manuell ein:</p>
                     <p id="otpSecretText" style="font-family:monospace;font-size:13px;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center;margin:0 0 10px;word-break:break-all;"></p>
-                    <input type="text" id="otpSetupCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="6-stelliger Code" style="letter-spacing:4px;text-align:center;font-size:20px;">
+                    <input type="text" id="otpSetupCode" aria-label="6-stelliger Bestätigungscode" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="6-stelliger Code" style="letter-spacing:4px;text-align:center;font-size:20px;">
                     <button id="confirmOtpBtn">Aktivieren</button>
                     <button id="cancelOtpBtn" class="ghost">Abbrechen</button>
                     <p class="error-msg" id="otpError"></p>
@@ -451,8 +451,8 @@
             <h2>👥 Benutzerverwaltung</h2>
             <!-- Neuer Benutzer -->
             <form id="createUserForm" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
-                <input id="newUsername" type="text" placeholder="Benutzername" required style="flex:1;min-width:120px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;" minlength="3">
-                <input id="newPassword" type="password" placeholder="Passwort (min. 6)" required style="flex:1;min-width:120px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;" minlength="6">
+                <input id="newUsername" type="text" placeholder="Benutzername" aria-label="Benutzername" required style="flex:1;min-width:120px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;" minlength="3">
+                <input id="newPassword" type="password" placeholder="Passwort (min. 6)" aria-label="Passwort (min. 6)" required style="flex:1;min-width:120px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;" minlength="6">
                 <button type="submit" style="padding:10px 16px;background:var(--accent);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:14px;">+ Anlegen</button>
             </form>
             <p class="error-msg" id="createUserError"></p>
