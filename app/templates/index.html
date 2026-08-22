@@ -1116,6 +1116,7 @@
             ws.onclose = ev => {
                 statusDot.classList.add('offline');
                 statusDot.classList.remove('online');
+                rejectAllPendingRpc('Verbindung getrennt');   // v0.0.120: hängende fetchRpc auflösen
                 const isRateLimit = ev.reason && ev.reason.includes('429');
                 if (ev.reason && ev.reason !== '' && ev.reason !== 'Normal closure' && !ev.reason.startsWith('go away')) {
                     addMsg('system', '⚠️ Verbindung getrennt: ' + ev.reason);
@@ -1821,6 +1822,7 @@
                 old.onerror = null;
                 try { old.close(); } catch (_) {}
             }
+            rejectAllPendingRpc('Session gewechselt');   // v0.0.120: hängende fetchRpc auflösen
             hermesSessionId = null;
             messagesDiv.innerHTML = '';
             bubble = null;
@@ -2014,7 +2016,7 @@
                     updateTokenWidget();
                 }
             } catch (_) { /* Anzeige bleibt wie sie ist */ }
-            usageGaugePending = false;
+            finally { usageGaugePending = false; }   // v0.0.120: Flag IMMER freigeben (auch bei Timeout/Reject)
         }
 
         function updateCtxWarning() {
@@ -2107,20 +2109,42 @@
 
         // Hilfsfunktion: RPC mit Promise-Wrapping (ersetzt den internen sendRpc,
         // weil sendRpc asynchron per onmessage kommt — hier brauchen wir ein synchrones Promise)
-        function fetchRpc(method, params) {
+        // v0.0.120: Timeout + Cleanup bei Close/Reconnect — verhindert endlos hängende
+        // Migration/Anzeige, wenn die WS-Verbindung während der Anfrage stirbt.
+        let fetchRpcSeq = 0; const FETCH_RPC_TIMEOUT_MS = 20000;
+        const pendingRpcTimers = {};   // id -> setTimeout-Handle (v0.0.120)
+        function fetchRpc(method, params, timeoutMs = FETCH_RPC_TIMEOUT_MS) {
             return new Promise((resolve, reject) => {
                 if (!ws || ws.readyState !== WebSocket.OPEN) { reject(new Error('WS nicht offen')); return; }
-                const id = Date.now() + Math.random();
+                const id = ++fetchRpcSeq;   // Integer-ID, kein Date.now()+Random (kollisionsfrei)
+                const timer = setTimeout(() => {
+                    delete pendingRpcCallbacks[id];
+                    delete pendingRpcTimers[id];
+                    reject(new Error(method + ': Zeitüberschreitung nach ' + Math.round(timeoutMs / 1000) + 's'));
+                }, timeoutMs);
+                pendingRpcTimers[id] = timer;
                 const wrapper = (frame) => {
                     if (frame.id !== id) return;
                     delete pendingRpcCallbacks[id];
+                    if (pendingRpcTimers[id]) { clearTimeout(pendingRpcTimers[id]); delete pendingRpcTimers[id]; }
                     if (frame.error) reject(new Error(frame.error.message || 'RPC error'));
                     else resolve(frame.result);
                 };
                 pendingRpcCallbacks[id] = wrapper;
                 try { ws.send(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params })); }
-                catch (e) { delete pendingRpcCallbacks[id]; reject(e); }
+                catch (e) { delete pendingRpcCallbacks[id]; clearTimeout(timer); reject(e); }
             });
+        }
+        // v0.0.120: Alle offenen fetchRpc-Promises bei Verbindungsende auflösen,
+        // statt sie ewig hängen zu lassen (sonst Migration/Anzeige blockiert).
+        function rejectAllPendingRpc(reason) {
+            const callbacks = pendingRpcCallbacks;
+            pendingRpcCallbacks = {};
+            Object.keys(callbacks).forEach(k => {
+                try { callbacks[k]({ error: { message: reason } }); } catch (_) {}
+            });
+            Object.keys(pendingRpcTimers).forEach(k => { clearTimeout(pendingRpcTimers[k]); });
+            pendingRpcTimers = {};
         }
 </script>
 </body>
