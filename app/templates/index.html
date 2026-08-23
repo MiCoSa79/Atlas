@@ -2294,20 +2294,34 @@
                 el.classList.remove('done');
                 const fullText = el.querySelector('span').textContent;
                 const lines = fullText.split('\n').filter(l => l.trim());
-                if (lines.length <= 2) return;      // wenig Text → nichts tun
-                // Zeige nur erste und letzte Zeile
-                const previewLines = [lines[0], '…', lines[lines.length - 1]];
+                // Kürzschwelle: SICHTBARE Höhe statt \n-Zeilen (v0.0.162) — eine lange
+                // logische Zeile ist auf dem Handy optisch 3–6 Zeilen hoch, dadurch wurde
+                // die Box „erst später“ gekürzt. 12.5px * 1.5 line-height = 18.75px/Zeile,
+                // Box-Padding (2+2px) abziehen. Fallback bei nicht messbarer Höhe: \n-Zeilen.
+                const VISIBLE_LINE_H = 18.75;
+                const visibleLines = el.offsetHeight > 0 ? Math.ceil((el.offsetHeight - 4) / VISIBLE_LINE_H) : lines.length;
+                if (visibleLines <= 3 && lines.length <= 2) return;   // kurz genug → nichts tun
+                // Vorschau: erste (+ bei >2 Zeilen letzte) Zeile, je auf 120 Zeichen gekappt,
+                // damit die Vorschau auch auf schmalen Screens kompakt bleibt (v0.0.162)
+                const MAX_PREVIEW_CHARS = 120;
+                const clip = s => s.length > MAX_PREVIEW_CHARS ? s.slice(0, MAX_PREVIEW_CHARS).trimEnd() + '…' : s;
+                const moreLines = lines.length > 2;
+                const previewLines = moreLines ? [clip(lines[0]), '…', clip(lines[lines.length - 1])] : [clip(lines[0]), '…'];
+                const hiddenLines = moreLines ? lines.length - 2 : (lines.length > 1 ? 1 : 0);
+                const labelText = () => hiddenLines > 1 ? '[▶ ' + hiddenLines + ' Zeilen anzeigen]'
+                                                       : hiddenLines === 1 ? '[▶ 1 Zeile anzeigen]'
+                                                                           : '[▶ Volltext anzeigen]';
                 el.querySelector('span').textContent = previewLines.join('\n');
                 // Zusammenklapp-Label mit Toggle-Logik (v0.0.157-Fix: auch wieder einklappen)
                 const textSpan = el.querySelector('span');
                 const label = document.createElement('span');
                 label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;clear:both;';
-                label.textContent = '[▶ ' + lines.length + ' Zeilen anzeigen]';
+                label.textContent = labelText();
                 label.addEventListener('click', () => {
                     if (el.dataset.collapsed === 'expanded') {
                         // Offen → wieder einklappen (Vorschau)
                         textSpan.textContent = previewLines.join('\n');
-                        label.textContent = '[▶ ' + lines.length + ' Zeilen anzeigen]';
+                        label.textContent = labelText();
                         el.dataset.collapsed = 'true';
                     } else {
                         // Geschlossen → aufklappen (Originaltext)
