@@ -156,7 +156,7 @@
         .msg.thinking { align-self: flex-start; background: transparent; color: var(--muted); font-size: 12.5px; font-style: italic; line-height: 1.5; padding: 2px 10px; white-space: pre-wrap; opacity: .65; }
         .msg.thinking.done { opacity: .45; font-size: 11.5px; }
         .msg.thinking.done::after { content: ' ✓'; }
-        .msg.status { align-self: center; background: transparent; color: var(--muted); font-size: 11.5px; padding: 2px 10px; opacity: .6; }
+        .msg.status { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; padding: 2px 10px; opacity: .8; }
         /* Clarify-Karte (v0.0.136): Agent-Frage mit Antwort-Buttons + Eigene-Antwort-Feld */
         .msg.clarify-card { align-self: flex-start; background: #1d232e; border: 1px solid var(--border); border-bottom-left-radius: 4px; padding: 12px 14px; max-width: 84%; }
         .clarify-q { font-weight: 600; margin-bottom: 10px; white-space: pre-wrap; word-break: break-word; }
@@ -1220,7 +1220,7 @@
         // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
         // mit Sekundenzähler (kein Unterbrechen-Button).
         function showLeaseWait(text) {
-            if (statusBubble) { statusBubble.remove(); statusBubble = null; }   // v0.0.137: „Agent arbeitet…" beenden — Lease-Wartezustand dominiert
+            if (statusBubble) { stopWorkingTimer(); statusBubble.remove(); statusBubble = null; }   // v0.0.137/138: „Agent arbeitet…" (inkl. Timer) beenden — Lease-Wartezustand dominiert
             if (!leaseWaitBubble) {
                 leaseWaitBubble = addMsg('system', text);
                 leaseWaitStart = Date.now();
@@ -1263,12 +1263,32 @@
         // Wahrnehmung bei langen Tool-/Reasoning-Turns (Befund 2026-08-23, Session
         // 8676a4: 30 s–7 min tote Phase bis zum ersten message.delta, Nutzer sendete
         // Folge-Prompt, der den laufenden Turn unterbrach). Lifecycle übernimmt die
-        // bestehende statusBubble-Mechanik: thinking.delta überschreibt den Text,
-        // message.delta/message.complete entfernen die Zeile.
+        // bestehende statusBubble-Mechanik: message.delta/message.complete entfernen die Zeile.
+        // v0.0.138: Sekundenzähler als Lebenszeichen + 4-s-Haltefenster für den
+        // „Agent arbeitet…"-Text (Nutzer-Befund 2026-08-23: Zeile wurde von thinking.delta
+        // sofort mit „computing…" überschrieben und war nicht wahrnehmbar).
+        let workingTimer = null;                 // setInterval-Handle der Arbeitszeile
+        let workingStart = 0;                    // Erzeugungszeitpunkt (Zähler + Haltefenster)
+        const WORKING_MIN_HOLD_MS = 4000;        // Kernbotschaft mindestens so lange zeigen
+
+        function stopWorkingTimer() {
+            if (workingTimer) { clearInterval(workingTimer); workingTimer = null; }
+        }
+
         function showWorkingStatus() {
             if (!showStatus) return;              // Nutzer-Setting respektieren
             if (bubble || statusBubble || leaseWaitBubble) return;   // nichts überlagern
+            workingStart = Date.now();
             statusBubble = addMsg('status', 'Agent arbeitet…');
+            stopWorkingTimer();
+            workingTimer = setInterval(() => {
+                if (!statusBubble) { stopWorkingTimer(); return; }
+                const s = Math.round((Date.now() - workingStart) / 1000);
+                if (s >= 1) {
+                    const span = statusBubble.querySelector('span');
+                    if (span) span.textContent = 'Agent arbeitet… (seit ' + s + ' s)';
+                }
+            }, 1000);
             followSticky();
         }
 
@@ -1565,7 +1585,13 @@
                 // Statuszeilen ("warte auf Modell…") — kleine zentrierte Zeile
                 if (p.type === 'thinking.delta' && p.payload && p.payload.text && showStatus) {
                     if (!statusBubble) statusBubble = addMsg('status', p.payload.text);
-                    else statusBubble.querySelector('span').textContent = p.payload.text;
+                    else {
+                        // v0.0.138: „Agent arbeitet… (seit N s)" nicht sofort vom oft wertlosen
+                        // Denk-Text („computing…") überschreiben — erst nach Ablauf des Haltefensters.
+                        if (workingTimer && Date.now() - workingStart < WORKING_MIN_HOLD_MS) return;
+                        stopWorkingTimer();
+                        statusBubble.querySelector('span').textContent = p.payload.text;
+                    }
                     followSticky();
                     return;
                 }
@@ -1589,6 +1615,7 @@
                         thinkingBubble = null;
                     }
                     if (statusBubble) {
+                        stopWorkingTimer();   // v0.0.138: Zähler beenden, dann Zeile entfernen
                         statusBubble.remove();
                         statusBubble = null;
                     }
@@ -1615,6 +1642,7 @@
                         thinkingBubble = null;
                     }
                     if (statusBubble) {
+                        stopWorkingTimer();   // v0.0.138: Zähler beenden, dann Zeile entfernen
                         statusBubble.remove();
                         statusBubble = null;
                     }
