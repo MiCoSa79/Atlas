@@ -1220,6 +1220,7 @@
         // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
         // mit Sekundenzähler (kein Unterbrechen-Button).
         function showLeaseWait(text) {
+            if (statusBubble) { statusBubble.remove(); statusBubble = null; }   // v0.0.137: „Agent arbeitet…" beenden — Lease-Wartezustand dominiert
             if (!leaseWaitBubble) {
                 leaseWaitBubble = addMsg('system', text);
                 leaseWaitStart = Date.now();
@@ -1255,6 +1256,20 @@
                 }
                 leaseWaitBubble = null;
             }
+        }
+
+        // v0.0.137: „Agent arbeitet…"-Statuszeile direkt nach dem prompt.submit-ACK
+        // ({"result":{"status":"streaming"}}). Verhindert die „Session hängt"-
+        // Wahrnehmung bei langen Tool-/Reasoning-Turns (Befund 2026-08-23, Session
+        // 8676a4: 30 s–7 min tote Phase bis zum ersten message.delta, Nutzer sendete
+        // Folge-Prompt, der den laufenden Turn unterbrach). Lifecycle übernimmt die
+        // bestehende statusBubble-Mechanik: thinking.delta überschreibt den Text,
+        // message.delta/message.complete entfernen die Zeile.
+        function showWorkingStatus() {
+            if (!showStatus) return;              // Nutzer-Setting respektieren
+            if (bubble || statusBubble || leaseWaitBubble) return;   // nichts überlagern
+            statusBubble = addMsg('status', 'Agent arbeitet…');
+            followSticky();
         }
 
         function sendRpc(method, params) {
@@ -1512,6 +1527,12 @@
                                 // pendingAttachResponses landen → falscher Timeout im Frontend.
                                 if (frame.id !== undefined && !frame.method) {
                                     console.log('[Atlas] RPC response captured: id=' + frame.id + ', result=' + JSON.stringify(frame.result).substring(0, 100));
+                                    // v0.0.137: prompt.submit-ACK (result.status === 'streaming') —
+                                    // Turn läuft an, „Agent arbeitet…" sofort anzeigen (Feedback
+                                    // während langer Denk-/Tool-Phasen, sonst wirkt es wie „hängt").
+                                    if (frame.result && frame.result.status === 'streaming') {
+                                        showWorkingStatus();
+                                    }
                                     if (frame.error) {
                                         pendingAttachResponses[frame.id] = { error: frame.error };
                                     } else if (frame.result) {
@@ -1642,6 +1663,17 @@
 
         let isSending = false;
 
+        // v0.0.137: Warnung bei sehr großen Nachrichten (Befund 2026-08-23: 348-kB-
+        // Konsolen-Paste als Chat-Nachricht ≈ 90k Tokens → 2 min Antwortzeit + Folge-
+        // Prompt-Unterbrechung). Rückgabe: true = senden, false = vom Nutzer abgebrochen.
+        function confirmOversizedMessage(text) {
+            if (text.length > 50000) {
+                const kb = Math.round(text.length / 1024);
+                return confirm('Deine Nachricht ist sehr groß (' + kb + ' kB). Das kann die Antwort um mehrere Minuten verzögern — besser als Datei-Upload senden oder kürzen. Trotzdem senden?');
+            }
+            return true;
+        }
+
         async function sendMessage(text) {
             if (isSending) return;
             if (!text.trim() && pendingFiles.length === 0) return;
@@ -1653,6 +1685,7 @@
                 pendingMessages.push(text);
                 return;
             }
+            if (!confirmOversizedMessage(text)) return;   // v0.0.137: Riesen-Paste abbrechen (Text bleibt im Eingabefeld)
             isSending = true; // verhindert Doppel-Sende (Enter + Klick gleichzeitig)
             
             // Vorschau-HTML vorbereiten (nur für lokalen DOM)
