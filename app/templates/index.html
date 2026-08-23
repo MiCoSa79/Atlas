@@ -2264,11 +2264,13 @@
             connectWS();
         }
 
-        // ============ Done-Elemente zusammenklappen (v0.0.155) ============
+        // ============ Done-Elemente zusammenklappen (v0.0.155, v0.0.157) ============
         function collapseDoneElements() {
             // Alle abgeschlossenen Denk-Boxen (.msg.thinking.done) zusammenklappen
             document.querySelectorAll('.msg.thinking.done').forEach(el => {
                 if (el.dataset.collapsed) return;   // schon geklappt
+                // Nicht als 'done' markieren — sonst opacity .45 → unsichtbar
+                el.classList.remove('done');
                 const fullText = el.querySelector('span').textContent;
                 const lines = fullText.split('\n').filter(l => l.trim());
                 if (lines.length <= 2) return;      // wenig Text → nichts tun
@@ -2277,7 +2279,7 @@
                 el.querySelector('span').textContent = previewLines.join('\n');
                 // Zusammenklapp-Label
                 const label = document.createElement('span');
-                label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;';
+                label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;clear:both;';
                 label.textContent = '[▶ ' + lines.length + ' Zeilen anzeigen]';
                 label.addEventListener('click', () => {
                     el.querySelector('span').textContent = fullText;
@@ -2300,7 +2302,7 @@
                 textSpan.textContent = compact;
                 // Aufklapp-Label (origText VOR dem Kürzen speichern!)
                 const label = document.createElement('span');
-                label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;';
+                label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;clear:both;';
                 label.textContent = '[▶ ' + fullText.split('\n').length + ' Zeilen anzeigen]';
                 const origText = fullText;
                 label.addEventListener('click', () => {
