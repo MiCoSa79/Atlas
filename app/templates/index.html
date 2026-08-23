@@ -2291,20 +2291,30 @@
             // Alle Tool-Karten (.msg.system mit '⚙️ Tool:') zusammenklappen
             document.querySelectorAll('.msg.system').forEach(el => {
                 if (el.dataset.collapsed) return;
-                const text = el.querySelector('span')?.textContent || '';
-                if (!text.startsWith('⚙️ Tool:')) return;
+                const fullText = el.querySelector('span')?.textContent || '';
+                if (!fullText.startsWith('⚙️ Tool:')) return;
+                // Speichere Referenz zum Text-Element und zum Label (NICHT querySelector!)
+                const textSpan = el.querySelector('span');
                 // Text auf kompakte Zeile kürzen (Name + Status)
-                const compact = text.split('\n')[0].slice(0, 100);
-                el.querySelector('span').textContent = compact;
-                // Aufklapp-Label
+                const compact = fullText.split('\n')[0].slice(0, 100);
+                textSpan.textContent = compact;
+                // Aufklapp-Label (origText VOR dem Kürzen speichern!)
                 const label = document.createElement('span');
                 label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;';
-                label.textContent = '[▶ Details anzeigen]';
-                const origText = text;
+                label.textContent = '[▶ ' + fullText.split('\n').length + ' Zeilen anzeigen]';
+                const origText = fullText;
                 label.addEventListener('click', () => {
-                    el.querySelector('span').textContent = origText;
-                    label.textContent = '[▼ einklappen]';
-                    el.dataset.collapsed = 'expanded';
+                    if (el.dataset.collapsed === 'expanded') {
+                        // Aufklappen: Original-Text wiederherstellen
+                        textSpan.textContent = origText;
+                        label.textContent = '[▼ einklappen]';
+                        el.dataset.collapsed = 'true';
+                    } else {
+                        // Zusammenklappen (sollte hier nicht passieren, aber zur Sicherheit)
+                        textSpan.textContent = compact;
+                        label.textContent = '[▶ ' + origText.split('\n').length + ' Zeilen anzeigen]';
+                        el.dataset.collapsed = 'expanded';
+                    }
                 });
                 el.appendChild(label);
                 el.dataset.collapsed = 'true';
