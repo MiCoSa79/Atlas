@@ -1096,6 +1096,11 @@
             }
             const meta = document.createElement('span');
             meta.className = 'meta';
+            // System-Nachrichten (Tool-Start/Ende, Session-Meldungen usw.) bekommen
+            // sofort einen Zeitstempel, sonst bleiben sie leer bis zum Seiten-Refresh
+            if (role === 'system') {
+                meta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            }
             m.appendChild(meta);
             messagesDiv.appendChild(m);
             // followSticky() prüft das sticky-bottom-Flag (über den scroll-Listener)
@@ -1672,6 +1677,24 @@
                 // angezeigt, wenn ich die Seite refreshe“). tool.start rendert die ⚙️-Karte
                 // (kompakt wie im History-Rendering), tool.complete ergänzt Dauer + Status.
                 if (p.type === 'tool.start' && p.payload && p.payload.name) {
+                    // v0.0.144: Offene Text-Bubble abschließen, bevor die Tool-Karte kommt.
+                    // Hermes sendet message.complete erst am Turnende — alle Textpassagen
+                    // (vor/nach Tools) kämen sonst in EINE wachsende Bubble. Die History
+                    // zeigt sie aber als getrennte Blöcke (Hermes speichert die Timeline
+                    // einzeln). Mit bubble=null beginnt der Text nach dem Tool eine NEUE
+                    // Bubble → Live-Ansicht = Refresh-Ansicht (Befund 2026-08-23).
+                    if (bubble) {
+                        const bmeta = bubble.querySelector('.meta');
+                        if (bmeta && !bmeta.textContent) {
+                            bmeta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        }
+                        bubble = null;
+                    }
+                    // Denk-Box (falls offen) als abgeschlossen markieren
+                    if (thinkingBubble) {
+                        thinkingBubble.classList.add('done');
+                        thinkingBubble = null;
+                    }
                     const ctx = p.payload.context
                         || (p.payload.args && (p.payload.args.command || p.payload.args.url || p.payload.args.path || p.payload.args.query || ''))
                         || '';
