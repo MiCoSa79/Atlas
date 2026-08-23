@@ -1227,7 +1227,7 @@
         // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
         // mit Sekundenzähler (kein Unterbrechen-Button).
         function showLeaseWait(text) {
-            hideWorkingStatus();   // v0.0.137–139: „Agent arbeitet…“ (inkl. Timer) beenden — Lease-Wartezustand dominiert
+            endWorkingTurn();   // v0.0.137–141: „Agent arbeitet…“ (inkl. Timer/Resume) beenden — Lease-Wartezustand dominiert
             if (!leaseWaitBubble) {
                 leaseWaitBubble = addMsg('system', text);
                 leaseWaitStart = Date.now();
@@ -1281,6 +1281,13 @@
         let workingTimer = null;                 // setInterval-Handle der Arbeitszeile
         let workingStart = 0;                    // Erzeugungszeitpunkt (Zähler + Haltefenster)
         const WORKING_MIN_HOLD_MS = 4000;        // Kernbotschaft mindestens so lange zeigen
+        // v0.0.141: „Agent arbeitet…“-Zeile kehrt nach Text-Pausen zurück (Live-Befund
+        // 2026-08-23): message.delta blendet die Zeile aus — läuft der Turn danach lange
+        // ohne Events (z. B. terminal-Tool-Call, 15–420 s), fehlt jedes Feedback. timer
+        // blendet die Zeile nach WORKING_RESUME_DELAY_MS ohne neue Text-Deltas wieder ein.
+        let turnActive = false;                  // Turn läuft (true ab streaming-ACK, false ab complete/Lease/Wechsel)
+        let workingResumeTimer = null;           // Timeout „Zeile nach Text-Pause wieder einblenden“
+        const WORKING_RESUME_DELAY_MS = 6000;    // Text-Pause ab der die Zeile als Lebenszeichen zurückkehrt
 
         function workingEl() { return document.getElementById('workingStatus'); }
 
@@ -1295,9 +1302,30 @@
             workingActive = false;
         }
 
+        function cancelWorkingResume() {
+            if (workingResumeTimer) { clearTimeout(workingResumeTimer); workingResumeTimer = null; }
+        }
+
+        function scheduleWorkingResume() {
+            cancelWorkingResume();
+            workingResumeTimer = setTimeout(() => {
+                workingResumeTimer = null;
+                if (turnActive) showWorkingStatus();   // Guards in showWorkingStatus entscheiden (showStatus, workingActive, leaseWaitBubble)
+            }, WORKING_RESUME_DELAY_MS);
+        }
+
+        function endWorkingTurn() {
+            turnActive = false;
+            cancelWorkingResume();
+            hideWorkingStatus();
+        }
+
         function showWorkingStatus() {
             if (!showStatus) return;              // Nutzer-Setting respektieren
-            if (bubble || workingActive || leaseWaitBubble) return;   // nichts überlagern
+            // v0.0.141: KEIN bubble-Guard mehr — die Zeile darf auch erscheinen, wenn bereits
+            // Text floss (bubble existiert); der Resume-Timer holt sie nur nach ≥6 s Text-Pause
+            // zurück, während fließender Streams stört sie nie.
+            if (workingActive || leaseWaitBubble) return;   // nichts überlagern
             const el = workingEl();
             if (!el) return;
             workingActive = true;
@@ -1408,7 +1436,7 @@
                     hermesSessionId = frame.result.session_id;
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     messagesDiv.innerHTML = '';
-                    hideWorkingStatus();   // neue Session → Arbeitszeile ausblenden (v0.0.139)
+                    endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                     activeSessionId = null;
                     sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0; updateCtxWarning();
                     updateTokenWidget();   // neue Session: Anzeige SOFORT zurücksetzen (v0.0.115)
@@ -1480,7 +1508,7 @@
                     // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
                     if (frame.result.messages && frame.result.messages.length) {
                         messagesDiv.innerHTML = '';
-                        hideWorkingStatus();   // Resume-Verlauf → Arbeitszeile ausblenden (v0.0.139)
+                        endWorkingTurn();   // Resume-Verlauf → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                         frame.result.messages.forEach(m => {
                             if (m.role === 'user' || m.role === 'assistant') {
                                 let displayText = m.text || '';
@@ -1511,7 +1539,7 @@
                 if (frame.id === historyRpcId && frame.result && frame.result.messages) {
                     const msgs = frame.result.messages || [];
                     messagesDiv.innerHTML = '';
-                    hideWorkingStatus();   // History-Rebuild → Arbeitszeile ausblenden (v0.0.139)
+                    endWorkingTurn();   // History-Rebuild → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                     // v0.0.115: echte Gesamtzahl (count) für die 📨-Anzeige übernehmen,
                     // nicht nur die gerenderten Nachrichten (msgs.length).
                     if (frame.result.count != null) {
@@ -1577,6 +1605,7 @@
                                     // Turn läuft an, „Agent arbeitet…" sofort anzeigen (Feedback
                                     // während langer Denk-/Tool-Phasen, sonst wirkt es wie „hängt").
                                     if (frame.result && frame.result.status === 'streaming') {
+                                        turnActive = true;   // v0.0.141: Turn läuft — Resume-Timer darf später wieder einblenden
                                         showWorkingStatus();
                                     }
                                     if (frame.error) {
@@ -1642,6 +1671,7 @@
                         thinkingBubble = null;
                     }
                     if (workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
+                    scheduleWorkingResume();   // v0.0.141: Text fließt → Resume-Timer neu; bei ≥6 s Pause (Tool-Phase) kehrt die Zeile zurück
                     if (!bubble) bubble = addMsg('assistant', '');
                     bubble.querySelector('span').textContent += p.payload.text;
                     followSticky();
@@ -1664,7 +1694,7 @@
                         thinkingBubble.classList.add('done');
                         thinkingBubble = null;
                     }
-                    if (workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
+                    endWorkingTurn();   // v0.0.141: Turn-Ende — Zeile endgültig aus, kein Resume
                     const u = (p.payload && p.payload.usage) || {};
                     if (u.context_percent != null) {
                         sessionCtxPct = u.context_percent;
@@ -2155,7 +2185,7 @@
             bubble = null;
             if (leaseWaitBubble) clearLeaseWait();   // Warte-Bubble beim Wechsel aufräumen
             if (thinkingBubble) { thinkingBubble = null; }
-            hideWorkingStatus();   // „Agent arbeitet…“-Zeile beim Session-Wechsel ausblenden (v0.0.139)
+            endWorkingTurn();   // „Agent arbeitet…“-Zeile beim Session-Wechsel ausblenden, kein Resume (v0.0.139/141)
             // Anzeige-Einstellungen (Denken/Statuszeilen) frisch laden — gilt auch nach Session-Wechsel
             loadDisplaySettings();
             connectWS();
@@ -2481,7 +2511,7 @@
                 activeSessionId = null;
                 localStorage.setItem('atlas_last_session', createResult.stored_session_id || createResult.session_id);
                 messagesDiv.innerHTML = '';
-                hideWorkingStatus();   // neue Session → Arbeitszeile ausblenden (v0.0.139)
+                endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                 sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0;
                 updateCtxWarning();
                 updateTokenWidget();   // Migration: Anzeige SOFORT zurücksetzen (v0.0.115)
