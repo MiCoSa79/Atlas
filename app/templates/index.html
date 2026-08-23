@@ -1095,11 +1095,60 @@
             }
         });
 
+        // ---- Markdown-Links klickbar machen (v0.0.163) ----
+        // Hermes antwortet mit Markdown: [label](url) und nackten https://-URLs.
+        // Atlas rendert Nachrichten bisher als reinen Text (textContent) → Links
+        // waren auf dem Handy nicht antippbar (Nutzer-Befund 2026-08-23).
+        // escHtml() escapet XSS-sicher; renderMsgText() wandelt NUR http(s)-Links
+        // in <a target="_blank" rel="noopener noreferrer"> um. Alles andere bleibt
+        // escaped — kein HTML aus Agenten-Text.
+        function escHtml(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        function renderMsgText(text) {
+            if (!text) return '';
+            // Text zuerst KOMPLETT escapen — label/url in den Replaces stammen aus
+            // diesem escapten Text (DOCH KEIN zweites escHtml! sonst & -> &amp;amp;).
+            const escaped = escHtml(text);
+            const anchors = [];   // Platzhalter-Schutz: fertige <a>-Tags nie erneut matchen
+            const SAFE_URL = /^https?:\/\/[^\s<>"'`]+$/i;
+            // 1) Markdown-Links [label](url) — NUR http(s); alles andere bleibt Rohtext
+            let out = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)\]]+)\)/g, (m, label, url) => {
+                if (!SAFE_URL.test(url)) return m;   // m ist bereits escaped
+                const html = '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+                anchors.push(html);
+                return '\u0000' + (anchors.length - 1) + '\u0000';
+            });
+            // 2) Nackte http(s)-URLs autolinken; Satzzeichen am Ende abtrennen
+            out = out.replace(/(^|[\s(>])https?:\/\/[^\s<>"'`]+/g, (m, pre) => {
+                let url = m.slice(pre.length).replace(/[),.;!?]+$/, '');
+                if (!SAFE_URL.test(url)) return m;
+                const html = '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
+                anchors.push(html);
+                return pre + '\u0000' + (anchors.length - 1) + '\u0000';
+            });
+            // 3) Platzhalter durch die fertigen <a>-Tags ersetzen
+            return out.replace(/\u0000(\d+)\u0000/g, (m, i) => (anchors[+i] !== undefined ? anchors[+i] : m));
+        }
+
         function addMsg(role, text) {
             const m = document.createElement('div');
             m.className = 'msg ' + role;
             const t = document.createElement('span');
-            t.textContent = text;
+            // Chat-Blasen (user/assistant/thinking): Markdown-Links klickbar rendern;
+            // System-/Tool-Meldungen bleiben reiner Text. dataset.raw hält den
+            // Originaltext für das Live-Streaming (message.delta/reasoning.delta).
+            if (role === 'user' || role === 'assistant' || role === 'thinking') {
+                t.innerHTML = renderMsgText(text);
+                t.dataset.raw = text || '';
+            } else {
+                t.textContent = text;
+            }
             m.appendChild(t);
             // Agenten-Antworten: MEDIA:-Tags als Download-Buttons rendern
             if (role === 'assistant' && text && text.includes('MEDIA:')) {
@@ -1678,7 +1727,11 @@
                     if (!thinkingBubble) {
                         thinkingBubble = addMsg('thinking', '💭 ' + p.payload.text);
                     } else {
-                        thinkingBubble.querySelector('span').textContent += p.payload.text;
+                        const tbSpan = thinkingBubble.querySelector('span');
+                        const tbRaw = tbSpan.dataset.raw || '';
+                        const tbNext = tbRaw + p.payload.text;
+                        tbSpan.dataset.raw = tbNext;
+                        tbSpan.innerHTML = renderMsgText(tbNext);
                     }
                     followSticky();
                     // v0.0.142: KEIN return — sonst werden tool.start/complete und message.delta
@@ -1765,7 +1818,11 @@
                     if (workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
                     scheduleWorkingResume();   // v0.0.141: Text fließt → Resume-Timer neu; bei ≥6 s Pause (Tool-Phase) kehrt die Zeile zurück
                     if (!bubble) bubble = addMsg('assistant', '');
-                    bubble.querySelector('span').textContent += p.payload.text;
+                    const liveSpan = bubble.querySelector('span');
+                    const rawSoFar = liveSpan.dataset.raw || '';
+                    const nextRaw = rawSoFar + p.payload.text;
+                    liveSpan.dataset.raw = nextRaw;
+                    liveSpan.innerHTML = renderMsgText(nextRaw);
                     followSticky();
                 }
                 if (p.type === 'message.complete') {
@@ -2145,7 +2202,10 @@
             // Zeige den [Dateiname]- und @image:…-Block NICHT im Bubble-Text —
             // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
             const cleaned = text.replace(bracketMatch[0], '').replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').trim();
-            userBubble.querySelector('span').textContent = cleaned;
+            // Links in User-Blasen erhalten (v0.0.163): innerHTML + dataset.raw synchron halten
+            const uSpan = userBubble.querySelector('span');
+            uSpan.dataset.raw = cleaned;
+            uSpan.innerHTML = renderMsgText(cleaned);
 
             // Vorschau-HTML für jede Datei (localStorage-Bilder aus dem Upload)
             let attachmentsHtml = '';
@@ -2292,7 +2352,7 @@
                 if (el.dataset.collapsed) return;   // schon geklappt
                 // Nicht als 'done' markieren — sonst opacity .45 → unsichtbar
                 el.classList.remove('done');
-                const fullText = el.querySelector('span').textContent;
+                const fullText = el.querySelector('span').dataset.raw || el.querySelector('span').textContent;
                 const lines = fullText.split('\n').filter(l => l.trim());
                 // Kürzschwelle: SICHTBARE Höhe statt \n-Zeilen (v0.0.162) — eine lange
                 // logische Zeile ist auf dem Handy optisch 3–6 Zeilen hoch, dadurch wurde
@@ -2324,8 +2384,8 @@
                         label.textContent = labelText();
                         el.dataset.collapsed = 'true';
                     } else {
-                        // Geschlossen → aufklappen (Originaltext)
-                        textSpan.textContent = fullText;
+                        // Geschlossen → aufklappen (Originaltext, Links klickbar — v0.0.163)
+                        textSpan.innerHTML = renderMsgText(fullText);
                         label.textContent = '[▼ einklappen]';
                         el.dataset.collapsed = 'expanded';
                     }
