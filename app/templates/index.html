@@ -161,6 +161,9 @@
         .msg.assistant { align-self: flex-start; background: #1d232e; border-bottom-left-radius: 4px; }
         .msg.system { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; padding: 4px 10px; }
         .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; display: block; }
+        /* Links in Chat-Nachrichten: dezentes Blau statt Browser-Default (v0.0.164) */
+        .msg a { color: #8fb2e6; text-decoration: underline; text-decoration-color: rgba(143, 178, 230, 0.38); text-decoration-thickness: 1px; text-underline-offset: 2.5px; }
+        .msg a:hover, .msg a:active { color: #aac8f0; text-decoration-color: rgba(170, 200, 240, 0.55); }
         .media-downloads { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
         .media-download-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; background: #2a3547; border: 1px solid var(--border); border-radius: 10px; color: #d7e2f5; font-size: 13px; text-decoration: none; cursor: pointer; }
         .media-download-btn:hover { background: #33415a; border-color: var(--accent); }
