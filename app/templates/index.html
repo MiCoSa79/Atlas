@@ -2287,13 +2287,11 @@
                     // v0.0.150: ÄUSSERES Element als <div role="button"> — ein <button> im <button>
                     // ist ungültiges HTML und wird vom Browser zerrissen (✕-Button unsichtbar,
                     // Borders falsch).
-                    return `<div data-id="${s.id}" class="session-item" role="button" tabindex="0" style="display:flex;align-items:flex-start;gap:8px;width:100%;text-align:left;padding:10px 12px;margin-bottom:8px;background:var(--bg);border-radius:10px;cursor:pointer;color:var(--text);box-sizing:border-box;${isActive ? 'border:1px solid var(--accent);' : 'border:1px solid var(--border);'}">
-                        <div style="flex:1;min-width:0;">
-                            <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.title}</div>
-                            <div style="color:var(--muted);font-size:12px;margin-top:4px;">${dateStr} · ${s.message_count || 0} Nachrichten</div>
-                            ${s.preview ? `<div style="color:var(--muted);font-size:12px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.preview}</div>` : ''}
-                        </div>
-                        <button class="session-del-btn" title="Session löschen" data-id="${s.id}" type="button" style="flex:0 0 auto;background:none;border:none;color:var(--muted);font-size:15px;cursor:pointer;padding:2px 4px;border-radius:4px;line-height:1;transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">✕</button>
+                    return `<div data-id="${s.id}" class="session-item" role="button" tabindex="0" style="display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:8px;background:var(--bg);border-radius:10px;cursor:pointer;color:var(--text);position:relative;box-sizing:border-box;${isActive ? 'border:1px solid var(--accent);' : 'border:1px solid var(--border);'}">
+                        <button class="session-del-btn" title="Session löschen" data-id="${s.id}" type="button" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--muted);font-size:15px;cursor:pointer;padding:2px 4px;border-radius:4px;line-height:1;transition:color 0.15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--muted)'">✕</button>
+                        <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:24px;">${s.title}</div>
+                        <div style="color:var(--muted);font-size:12px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${dateStr} · ${s.message_count || 0} Nachrichten</div>
+                        ${s.preview ? `<div style="color:var(--muted);font-size:12px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.preview}</div>` : ''}
                     </div>`;
                 }).join('');
                 box.innerHTML = items;
