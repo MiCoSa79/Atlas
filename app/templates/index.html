@@ -157,6 +157,12 @@
         .msg.thinking.done { opacity: .45; font-size: 11.5px; }
         .msg.thinking.done::after { content: ' ✓'; }
         .msg.status { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; padding: 2px 10px; opacity: .8; }
+        /* v0.0.139: „Agent arbeitet…“-Zeile liegt AUSSERHALB des Scroll-Containers
+           (#workingStatus zwischen #messages und #composer) → Reasoning/Streaming
+           wächst im scrollbaren Bereich, die Zeile selbst wird nie weggescrollt
+           (Nutzer-Befund 2026-08-23: „wird durch das Reasoning nach oben weggescrollt“). */
+        #workingStatus { flex-shrink: 0; text-align: center; color: var(--muted); font-size: 12.5px; padding: 4px 12px 2px; opacity: .8; }
+        #workingStatus.hidden { display: none; }
         /* Clarify-Karte (v0.0.136): Agent-Frage mit Antwort-Buttons + Eigene-Antwort-Feld */
         .msg.clarify-card { align-self: flex-start; background: #1d232e; border: 1px solid var(--border); border-bottom-left-radius: 4px; padding: 12px 14px; max-width: 84%; }
         .clarify-q { font-weight: 600; margin-bottom: 10px; white-space: pre-wrap; word-break: break-word; }
@@ -376,6 +382,7 @@
         </header>
         <div id="setupBanner" class="banner hidden">⚠️ Noch keine Hermes-Instanz verbunden — bitte in den <a id="bannerLink">Einstellungen</a> einrichten.</div>
         <div id="messages"></div>
+        <div id="workingStatus" class="hidden" role="status" aria-live="polite"></div>
         <button id="fabScrollBottom" title="Zum Ende springen" aria-label="Zum Ende springen"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></button>
         <div id="composer" style="flex-direction:column; padding: 10px; max-width:100%; box-sizing:border-box;">
             <!-- Datei-Vorschau -->
@@ -562,7 +569,7 @@
         let pendingRpcCallbacks = {};       // Generic RPC response wrapper (v0.0.113 migration)
         let bubble = null;
         let thinkingBubble = null;      // laufende "Denken"-Box (reasoning.delta)
-        let statusBubble = null;        // laufende Statuszeile (thinking.delta)
+        let workingActive = false;      // v0.0.139: „Agent arbeitet…“-Zeile sichtbar (#workingStatus, außerhalb des Scroll-Containers)
         let rpcId = 0;
         let hermesSessionId = null;
         let activeSessionId = localStorage.getItem('atlas_last_session') || null;   // gewählte alte Session (null = neue Unterhaltung); persistiert für Hintergrund-Turns
@@ -1220,7 +1227,7 @@
         // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
         // mit Sekundenzähler (kein Unterbrechen-Button).
         function showLeaseWait(text) {
-            if (statusBubble) { stopWorkingTimer(); statusBubble.remove(); statusBubble = null; }   // v0.0.137/138: „Agent arbeitet…" (inkl. Timer) beenden — Lease-Wartezustand dominiert
+            hideWorkingStatus();   // v0.0.137–139: „Agent arbeitet…“ (inkl. Timer) beenden — Lease-Wartezustand dominiert
             if (!leaseWaitBubble) {
                 leaseWaitBubble = addMsg('system', text);
                 leaseWaitStart = Date.now();
@@ -1262,34 +1269,50 @@
         // ({"result":{"status":"streaming"}}). Verhindert die „Session hängt"-
         // Wahrnehmung bei langen Tool-/Reasoning-Turns (Befund 2026-08-23, Session
         // 8676a4: 30 s–7 min tote Phase bis zum ersten message.delta, Nutzer sendete
-        // Folge-Prompt, der den laufenden Turn unterbrach). Lifecycle übernimmt die
-        // bestehende statusBubble-Mechanik: message.delta/message.complete entfernen die Zeile.
+        // Folge-Prompt, der den laufenden Turn unterbrach).
         // v0.0.138: Sekundenzähler als Lebenszeichen + 4-s-Haltefenster für den
-        // „Agent arbeitet…"-Text (Nutzer-Befund 2026-08-23: Zeile wurde von thinking.delta
+        // „Agent arbeitet…"-Text (Nutzer-Befund: Zeile wurde von thinking.delta
         // sofort mit „computing…" überschrieben und war nicht wahrnehmbar).
+        // v0.0.139: Die Zeile liegt NICHT mehr im Nachrichtenfluss (#messages),
+        // sondern als eigenes Element #workingStatus zwischen Nachrichten-Container
+        // und Composer — Reasoning/Streaming wächst darunter im scrollbaren Bereich,
+        // die Zeile selbst wird nie weggescrollt (Nutzer-Befund 2026-08-23:
+        // „Die Anzeige kommt, wird aber durch das Reasoning nach oben weggescrollt").
         let workingTimer = null;                 // setInterval-Handle der Arbeitszeile
         let workingStart = 0;                    // Erzeugungszeitpunkt (Zähler + Haltefenster)
         const WORKING_MIN_HOLD_MS = 4000;        // Kernbotschaft mindestens so lange zeigen
+
+        function workingEl() { return document.getElementById('workingStatus'); }
 
         function stopWorkingTimer() {
             if (workingTimer) { clearInterval(workingTimer); workingTimer = null; }
         }
 
+        function hideWorkingStatus() {
+            stopWorkingTimer();
+            const el = workingEl();
+            if (el) el.classList.add('hidden');
+            workingActive = false;
+        }
+
         function showWorkingStatus() {
             if (!showStatus) return;              // Nutzer-Setting respektieren
-            if (bubble || statusBubble || leaseWaitBubble) return;   // nichts überlagern
+            if (bubble || workingActive || leaseWaitBubble) return;   // nichts überlagern
+            const el = workingEl();
+            if (!el) return;
+            workingActive = true;
             workingStart = Date.now();
-            statusBubble = addMsg('status', 'Agent arbeitet…');
+            el.classList.remove('hidden');
+            el.textContent = 'Agent arbeitet…';
             stopWorkingTimer();
             workingTimer = setInterval(() => {
-                if (!statusBubble) { stopWorkingTimer(); return; }
+                if (!workingActive) { stopWorkingTimer(); return; }
                 const s = Math.round((Date.now() - workingStart) / 1000);
                 if (s >= 1) {
-                    const span = statusBubble.querySelector('span');
-                    if (span) span.textContent = 'Agent arbeitet… (seit ' + s + ' s)';
+                    const el2 = workingEl();
+                    if (el2) el2.textContent = 'Agent arbeitet… (seit ' + s + ' s)';
                 }
             }, 1000);
-            followSticky();
         }
 
         function sendRpc(method, params) {
@@ -1385,6 +1408,7 @@
                     hermesSessionId = frame.result.session_id;
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     messagesDiv.innerHTML = '';
+                    hideWorkingStatus();   // neue Session → Arbeitszeile ausblenden (v0.0.139)
                     activeSessionId = null;
                     sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0; updateCtxWarning();
                     updateTokenWidget();   // neue Session: Anzeige SOFORT zurücksetzen (v0.0.115)
@@ -1456,6 +1480,7 @@
                     // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
                     if (frame.result.messages && frame.result.messages.length) {
                         messagesDiv.innerHTML = '';
+                        hideWorkingStatus();   // Resume-Verlauf → Arbeitszeile ausblenden (v0.0.139)
                         frame.result.messages.forEach(m => {
                             if (m.role === 'user' || m.role === 'assistant') {
                                 let displayText = m.text || '';
@@ -1486,6 +1511,7 @@
                 if (frame.id === historyRpcId && frame.result && frame.result.messages) {
                     const msgs = frame.result.messages || [];
                     messagesDiv.innerHTML = '';
+                    hideWorkingStatus();   // History-Rebuild → Arbeitszeile ausblenden (v0.0.139)
                     // v0.0.115: echte Gesamtzahl (count) für die 📨-Anzeige übernehmen,
                     // nicht nur die gerenderten Nachrichten (msgs.length).
                     if (frame.result.count != null) {
@@ -1584,15 +1610,16 @@
                 }
                 // Statuszeilen ("warte auf Modell…") — kleine zentrierte Zeile
                 if (p.type === 'thinking.delta' && p.payload && p.payload.text && showStatus) {
-                    if (!statusBubble) statusBubble = addMsg('status', p.payload.text);
-                    else {
-                        // v0.0.138: „Agent arbeitet… (seit N s)" nicht sofort vom oft wertlosen
-                        // Denk-Text („computing…") überschreiben — erst nach Ablauf des Haltefensters.
-                        if (workingTimer && Date.now() - workingStart < WORKING_MIN_HOLD_MS) return;
-                        stopWorkingTimer();
-                        statusBubble.querySelector('span').textContent = p.payload.text;
+                    const el = workingEl();
+                    // v0.0.138: „Agent arbeitet… (seit N s)" nicht sofort vom oft wertlosen
+                    // Denk-Text („computing…") überschreiben — erst nach Ablauf des Haltefensters.
+                    // v0.0.139: Zeile liegt außerhalb des Scroll-Containers — kein followSticky nötig.
+                    if (workingActive && workingTimer && Date.now() - workingStart < WORKING_MIN_HOLD_MS) return;
+                    if (workingActive) stopWorkingTimer();
+                    if (el) {
+                        if (!workingActive) { workingActive = true; workingStart = Date.now(); el.classList.remove('hidden'); }
+                        el.textContent = p.payload.text;
                     }
-                    followSticky();
                     return;
                 }
                 // Clarify-Frage des Agenten (v0.0.136): Karte mit Buttons + freiem
@@ -1614,11 +1641,7 @@
                         thinkingBubble.classList.add('done');
                         thinkingBubble = null;
                     }
-                    if (statusBubble) {
-                        stopWorkingTimer();   // v0.0.138: Zähler beenden, dann Zeile entfernen
-                        statusBubble.remove();
-                        statusBubble = null;
-                    }
+                    if (workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
                     if (!bubble) bubble = addMsg('assistant', '');
                     bubble.querySelector('span').textContent += p.payload.text;
                     followSticky();
@@ -1641,11 +1664,7 @@
                         thinkingBubble.classList.add('done');
                         thinkingBubble = null;
                     }
-                    if (statusBubble) {
-                        stopWorkingTimer();   // v0.0.138: Zähler beenden, dann Zeile entfernen
-                        statusBubble.remove();
-                        statusBubble = null;
-                    }
+                    if (workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
                     const u = (p.payload && p.payload.usage) || {};
                     if (u.context_percent != null) {
                         sessionCtxPct = u.context_percent;
@@ -2136,7 +2155,7 @@
             bubble = null;
             if (leaseWaitBubble) clearLeaseWait();   // Warte-Bubble beim Wechsel aufräumen
             if (thinkingBubble) { thinkingBubble = null; }
-            if (statusBubble) { statusBubble = null; }
+            hideWorkingStatus();   // „Agent arbeitet…“-Zeile beim Session-Wechsel ausblenden (v0.0.139)
             // Anzeige-Einstellungen (Denken/Statuszeilen) frisch laden — gilt auch nach Session-Wechsel
             loadDisplaySettings();
             connectWS();
@@ -2462,6 +2481,7 @@
                 activeSessionId = null;
                 localStorage.setItem('atlas_last_session', createResult.stored_session_id || createResult.session_id);
                 messagesDiv.innerHTML = '';
+                hideWorkingStatus();   // neue Session → Arbeitszeile ausblenden (v0.0.139)
                 sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0;
                 updateCtxWarning();
                 updateTokenWidget();   // Migration: Anzeige SOFORT zurücksetzen (v0.0.115)
