@@ -2277,50 +2277,67 @@
                 // Zeige nur erste und letzte Zeile
                 const previewLines = [lines[0], '…', lines[lines.length - 1]];
                 el.querySelector('span').textContent = previewLines.join('\n');
-                // Zusammenklapp-Label
+                // Zusammenklapp-Label mit Toggle-Logik (v0.0.157-Fix: auch wieder einklappen)
+                const textSpan = el.querySelector('span');
                 const label = document.createElement('span');
                 label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;clear:both;';
                 label.textContent = '[▶ ' + lines.length + ' Zeilen anzeigen]';
                 label.addEventListener('click', () => {
-                    el.querySelector('span').textContent = fullText;
-                    label.textContent = '[▼ einklappen]';
-                    el.dataset.collapsed = 'expanded';
-                });
-                el.appendChild(label);
-                el.dataset.collapsed = 'true';
-            });
-
-            // Alle Tool-Karten (.msg.system mit '⚙️ Tool:') zusammenklappen
-            document.querySelectorAll('.msg.system').forEach(el => {
-                if (el.dataset.collapsed) return;
-                const fullText = el.querySelector('span')?.textContent || '';
-                if (!fullText.startsWith('⚙️ Tool:')) return;
-                // Speichere Referenz zum Text-Element und zum Label (NICHT querySelector!)
-                const textSpan = el.querySelector('span');
-                // Text auf kompakte Zeile kürzen (Name + Status)
-                const compact = fullText.split('\n')[0].slice(0, 100);
-                textSpan.textContent = compact;
-                // Aufklapp-Label (origText VOR dem Kürzen speichern!)
-                const label = document.createElement('span');
-                label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;clear:both;';
-                label.textContent = '[▶ ' + fullText.split('\n').length + ' Zeilen anzeigen]';
-                const origText = fullText;
-                label.addEventListener('click', () => {
                     if (el.dataset.collapsed === 'expanded') {
-                        // Aufklappen: Original-Text wiederherstellen
-                        textSpan.textContent = origText;
-                        label.textContent = '[▼ einklappen]';
+                        // Offen → wieder einklappen (Vorschau)
+                        textSpan.textContent = previewLines.join('\n');
+                        label.textContent = '[▶ ' + lines.length + ' Zeilen anzeigen]';
                         el.dataset.collapsed = 'true';
                     } else {
-                        // Zusammenklappen (sollte hier nicht passieren, aber zur Sicherheit)
-                        textSpan.textContent = compact;
-                        label.textContent = '[▶ ' + origText.split('\n').length + ' Zeilen anzeigen]';
+                        // Geschlossen → aufklappen (Originaltext)
+                        textSpan.textContent = fullText;
+                        label.textContent = '[▼ einklappen]';
                         el.dataset.collapsed = 'expanded';
                     }
                 });
                 el.appendChild(label);
                 el.dataset.collapsed = 'true';
             });
+
+            // Alle Tool-Karten eines Turns in EINEN Aufklapp-Container packen (v0.0.158)
+            // Nutzer-Wunsch: Beim Arbeiten bleiben Tools sichtbar (Live). Nach message.complete
+            // werden ALLE Tool-Karten des Turns entfernt und durch einen einzigen
+            // "⚙️ Eingesetzte Tools (N)"-Toggle ersetzt — kein eigener Button pro Tool.
+            const toolEls = Array.from(document.querySelectorAll('.msg.system')).filter(el => {
+                if (el.dataset.toolGrouped) return false;
+                const txt = el.querySelector('span')?.textContent || '';
+                return txt.startsWith('⚙️ Tool:');
+            });
+            if (toolEls.length > 0) {
+                // Referenzen auf Text-Spans sichern (Originaltexte gehen nicht verloren)
+                toolEls.forEach(el => { el.dataset.origText = el.querySelector('span').textContent; });
+                const anchor = toolEls[0];
+                const group = document.createElement('div');
+                group.className = 'msg system tool-group';
+                group.style.cssText = 'align-self:flex-start;color:var(--muted);font-size:12px;margin:6px 0;';
+                group.dataset.toolGrouped = 'true';
+                // Toggle-Label: "⚙️ Eingesetzte Tools (N)"
+                const label = document.createElement('span');
+                label.className = 'tool-group-label';
+                label.style.cssText = 'color:var(--accent);font-size:12px;cursor:pointer;padding:2px 10px;border:1px solid var(--border);border-radius:6px;display:inline-block;';
+                label.textContent = '⚙️ Eingesetzte Tools (' + toolEls.length + ') ▶';
+                group.appendChild(label);
+                // Tool-Karten unter dem Label stapeln (versteckt via display:none)
+                const bodyWrap = document.createElement('div');
+                bodyWrap.style.cssText = 'margin-top:6px;display:none;';
+                // ZUERST den Container an der Stelle des ersten Tools einfügen,
+                // dann erst die Karten in den Container verschieben (anchor muss
+                // noch im DOM sein, damit after() funktioniert).
+                anchor.after(group);
+                toolEls.forEach(el => bodyWrap.appendChild(el));
+                group.appendChild(bodyWrap);
+                // Toggle: Klick auf Label zeigt/versteckt die Tool-Karten
+                label.addEventListener('click', () => {
+                    const open = bodyWrap.style.display !== 'none';
+                    bodyWrap.style.display = open ? 'none' : 'block';
+                    label.textContent = open ? '⚙️ Eingesetzte Tools (' + toolEls.length + ') ▶' : '⚙️ Eingesetzte Tools (' + toolEls.length + ') ▼';
+                });
+            }
         }
 
         $('sessionsBtn').addEventListener('click', () => {
