@@ -1609,8 +1609,7 @@
                             const rText = String(m.reasoning || m.reasoning_content || '').trim();
                             if (rText && rText !== 'null' && rText !== 'undefined') {
                                 const tb = addMsg('thinking', '💭 ' + rText);
-                                tb.classList.add('done');   // abgeschlossene Denk-Box
-                                // Kürzen, wenn lang (>2 Zeilen) — macht collapseDoneElements() später
+                                tb.classList.add('done');
                             }
                         }
                     });
