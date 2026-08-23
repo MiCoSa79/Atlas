@@ -2494,82 +2494,43 @@
             }
         }
 
-        // Button-Handler: alte Session-History holen → Zusammenfassung → neue Session + Migrationstext (v0.0.113)
+        // Button-Handler: "Session weiterführen" — native Hermes-Kompression + Wechsel in die
+        // Fortsetzungs-Session (v0.0.148). Ersetzt den früheren Client-Hack (session.history →
+        // 30-Clip-Stichwortkette → session.create → Migrationstext): Hermes kennt die echte
+        // LLM-Kompression selbst (session.compress, methods_session.py Z. 2630) und rotiert
+        // die SessionDB-Session in eine Continuation-Session mit komprimierter History.
         async function onMigrateClick() {
             if (migratePending || migrateBtnRpcId !== null) return;  // nur 1 Klick
             const el = document.getElementById('ctxWarn');
             if (!el) return;
             // Button: "⏳ Migration läuft…" + disable
-            el.innerHTML = '⏳ Migration läuft… (kann bei großen Sessions bis zu 90 s dauern)';
+            el.innerHTML = '⏳ Migration läuft… (native Kompression — kann ein paar Sekunden dauern)';
             migrateBtnRpcId = 'migrating';
             try {
-                // 1) History holen — WICHTIG: LIVE-id (hermesSessionId) verwenden, NICHT die
-                //    Stored-ID (activeSessionId): session.history antwortet auf stored-IDs mit
-                //    4001 'session not found' (v0.0.118, live per WS-Test verifiziert).
-                //    v0.0.125: AKTIVE Session kann 0 Nachrichten liefern ODER langsamer antworten
-                //    (Live-Registry vs. Message-Store) → bei leerer Antwort/Timeout nicht abbrechen,
-                //    sondern auf die bereits gerenderten Nachrichten zurückfallen.
-                let hist = null;
-                try {
-                    // v0.0.127: profile aus selectedProfile mitsenden — sonst erzeugt session.create
-                    // die Session im FALSCHEN Profil (default statt axel) und sie ist in der
-                    // Atlas-Session-Liste unsichtbar (live per Proxy-Test reproduziert).
-                    const migProfile = selectedProfile || undefined;
-                    hist = await fetchRpc('session.history', {
-                        session_id: hermesSessionId || activeSessionId,
-                        ...(migProfile ? { profile: migProfile } : {})
-                    });
-                } catch (err) {
-                    console.warn('[Atlas] Migration: session.history nicht verfügbar (' + err.message + ') — Fallback auf gerenderten Verlauf');
-                }
-                let msgs = (hist && hist.messages) ? hist.messages : [];
-                if (!msgs.length) {
-                    const seen = {}; msgs = [];
-                    // ACHTUNG: Container ist <div id="messages"> — NICHT #messagesDiv (v0.0.126)
-                    document.querySelectorAll('#messages .msg').forEach(el => {
-                        const isUser = el.classList.contains('user');
-                        const isAsst = el.classList.contains('assistant');
-                        if (!isUser && !isAsst) return;
-                        const text = (el.textContent || '').trim();
-                        if (!text || seen[text]) return;
-                        seen[text] = 1;
-                        msgs.push({ role: isUser ? 'user' : 'assistant', text: text });
-                    });
-                    if (msgs.length) console.log('[Atlas] Migration: Fallback auf ' + msgs.length + ' gerenderte Nachrichten');
-                }
-                if (!msgs.length) {
-                    throw new Error('Keine Nachrichten in History');
-                }
-                console.log('[Atlas] Migration: history OK (' + msgs.length + ' Nachrichten, Session ' + (hermesSessionId || activeSessionId) + ')');
+                if (!hermesSessionId && !activeSessionId) throw new Error('Keine aktive Session');
 
-                // 2) Zusammenfassung aus letzten ~30 Nachrichten generieren (Client-seitig)
-                const last30 = msgs.slice(-30);
-                const summaryParts = [];
-                for (let i = last30.length - 1; i >= 0; i--) {
-                    const m = last30[i];
-                    const text = (m.text || '').trim();
-                    if (text && (m.role === 'user' || m.role === 'assistant')) {
-                        const role = m.role === 'user' ? 'Du' : 'Atlas';
-                        summaryParts.push(role + ': ' + text.slice(0, 200));
-                    }
-                }
-                const summary = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Keine Inhalt-Zusammenfassung verfügbar.';
-
-                // 3) Neue Session erstellen (v0.0.127: MIT profile — sonst default-Profil!)
-                migratePending = { oldId: activeSessionId || hermesSessionId, summary };
-                const createResult = await fetchRpc('session.create', {
-                    close_on_disconnect: false,
-                    source: 'webui',
+                // 1) Native Kompression anstoßen (LIVE-id, profile mitsenden — sonst wird
+                //    im falschen Profil komprimiert; v0.0.127-Lektion)
+                const compResult = await fetchRpc('session.compress', {
+                    session_id: hermesSessionId || activeSessionId,
                     ...(selectedProfile ? { profile: selectedProfile } : {})
                 });
-                if (!createResult || !createResult.session_id) {
-                    throw new Error('session.create fehlgeschlagen');
+                if (!compResult || (compResult.status !== 'compressed' && compResult.status !== 'aborted')) {
+                    throw new Error('session.compress fehlgeschlagen' + (compResult && compResult.message ? ': ' + compResult.message : ''));
                 }
+                console.log('[Atlas] Migration: session.compress OK (status=' + compResult.status + ', removed=' + (compResult.removed ?? 0) + ', ' + (compResult.before_messages ?? 0) + '→' + (compResult.after_messages ?? 0) + ' Nachrichten)');
 
-                // 4) Neue Session aktivieren (wie session.create-Handler, aber mit Migrationstext)
-                hermesSessionId = createResult.session_id;
-                activeSessionId = null;
-                localStorage.setItem('atlas_last_session', createResult.stored_session_id || createResult.session_id);
+                // 2) Neue (Fortsetzungs-)Session übernehmen: info.stored_session_id ist vom
+                //    Gateway nach der Rotation gemeldet (live per Probe verifiziert).
+                const newStored = (compResult.info && compResult.info.stored_session_id) || '';
+                if (!newStored) throw new Error('Keine neue Session-ID von session.compress');
+                migratePending = { oldId: activeSessionId || hermesSessionId, newStored, summary: compResult.summary ? (compResult.summary.headline || '') : '' };
+
+                // 3) Auf die Fortsetzungs-Session wechseln (restartWS → resume macht der
+                //    onopen-Pfad automatisch mit der neuen stored-id)
+                hermesSessionId = null;   // alte Live-id verwerfen
+                activeSessionId = newStored;
+                localStorage.setItem('atlas_last_session', newStored);
                 messagesDiv.innerHTML = '';
                 endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                 sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0;
@@ -2578,23 +2539,17 @@
                 el.innerHTML = '';
                 el.classList.add('hidden');
 
-                // Migrationstext als erste Nachricht — anzeigen UND an die neue Session
-                // senden (v0.0.130): Vorher wurde die Summary NUR im Browser gerendert
-                // (addMsg), nie an Hermes geschickt — die neue Session startete mit
-                // leerem Kontext (message_count: 0), Hermes wusste nichts von der alten
-                // Session. Transport: pendingMessages → flushPendingMessages() im
-                // onopen-Create-Pfad der NEUEN WS (restartWS → session.create, aktive
-                // Session 0c44fde1-artig) → prompt.submit mit der Summary als erste
-                // echte Nachricht der neuen Session.
-                const migrationText = '📋 Von alter Session übernommen (' + msgs.length + ' Nachrichten' + (hist && hist.messages && hist.messages.length > 350 ? ', Kontext: ' + hist.messages.length : '') + ')\nLetzte Themen:\n' + summary.slice(0, 500);
-                addMsg('system', migrationText);
-                pendingMessages.push(migrationText);
+                // 4) System-Hinweis: Fortsetzung + (falls gemeldet) Entlastungs-Bilanz
+                const bal = (compResult.removed != null && compResult.removed > 0)
+                    ? '(' + compResult.removed + ' Nachrichten entfernt, ' + (compResult.before_tokens ?? 0) + ' → ' + (compResult.after_tokens ?? 0) + ' Tokens) '
+                    : '';
+                addMsg('system', '📋 Session weitergeführt — Fortsetzung mit komprimiertem Kontext ' + bal + (migratePending.summary ? '— ' + migratePending.summary : ''));
 
                 // Session-Label aktualisieren
                 const label = document.getElementById('currentSessionLabel');
                 if (label) { label.textContent = ''; label.classList.add('hidden'); }
 
-                // Neue WS-Verbindung herstellen (connectWS macht resume/create automatisch)
+                // 5) Neue WS-Verbindung herstellen (onopen resumt die neue stored-id)
                 restartWS();
             } catch (err) {
                 // Fehler → Banner mit Hinweis
