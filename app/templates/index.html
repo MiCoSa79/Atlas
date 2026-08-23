@@ -1601,6 +1601,8 @@
                         renderClarifyCard(pendingClarifyOnResume);
                         pendingClarifyOnResume = null;
                     }
+                    // Done-Elemente zusammenklappen (v0.0.155)
+                    collapseDoneElements();
                     historyRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     return;
                 }
@@ -1778,6 +1780,8 @@
                     refreshUsageGauge();   // v0.0.119: exakten Kontext via session.usage nachladen
                     // Token-Anzeige nach jeder fertigen Antwort sofort aktualisieren
                     updateTokenWidget();
+                    // Done-Elemente (Denk-Boxen, Tool-Karten) zusammenklappen (v0.0.155)
+                    collapseDoneElements();
                 }
                 if (p.type === 'status.update' && p.payload && p.payload.text) {
                     const t = p.payload.text;
@@ -2258,6 +2262,53 @@
             // Anzeige-Einstellungen (Denken/Statuszeilen) frisch laden — gilt auch nach Session-Wechsel
             loadDisplaySettings();
             connectWS();
+        }
+
+        // ============ Done-Elemente zusammenklappen (v0.0.155) ============
+        function collapseDoneElements() {
+            // Alle abgeschlossenen Denk-Boxen (.msg.thinking.done) zusammenklappen
+            document.querySelectorAll('.msg.thinking.done').forEach(el => {
+                if (el.dataset.collapsed) return;   // schon geklappt
+                const fullText = el.querySelector('span').textContent;
+                const lines = fullText.split('\n').filter(l => l.trim());
+                if (lines.length <= 2) return;      // wenig Text → nichts tun
+                // Zeige nur erste und letzte Zeile
+                const previewLines = [lines[0], '…', lines[lines.length - 1]];
+                el.querySelector('span').textContent = previewLines.join('\n');
+                // Zusammenklapp-Label
+                const label = document.createElement('span');
+                label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;';
+                label.textContent = '[▶ ' + lines.length + ' Zeilen anzeigen]';
+                label.addEventListener('click', () => {
+                    el.querySelector('span').textContent = fullText;
+                    label.textContent = '[▼ einklappen]';
+                    el.dataset.collapsed = 'expanded';
+                });
+                el.appendChild(label);
+                el.dataset.collapsed = 'true';
+            });
+
+            // Alle Tool-Karten (.msg.system mit '⚙️ Tool:') zusammenklappen
+            document.querySelectorAll('.msg.system').forEach(el => {
+                if (el.dataset.collapsed) return;
+                const text = el.querySelector('span')?.textContent || '';
+                if (!text.startsWith('⚙️ Tool:')) return;
+                // Text auf kompakte Zeile kürzen (Name + Status)
+                const compact = text.split('\n')[0].slice(0, 100);
+                el.querySelector('span').textContent = compact;
+                // Aufklapp-Label
+                const label = document.createElement('span');
+                label.style.cssText = 'color:var(--accent);font-size:11px;cursor:pointer;margin-top:2px;display:block;';
+                label.textContent = '[▶ Details anzeigen]';
+                const origText = text;
+                label.addEventListener('click', () => {
+                    el.querySelector('span').textContent = origText;
+                    label.textContent = '[▼ einklappen]';
+                    el.dataset.collapsed = 'expanded';
+                });
+                el.appendChild(label);
+                el.dataset.collapsed = 'true';
+            });
         }
 
         $('sessionsBtn').addEventListener('click', () => {
