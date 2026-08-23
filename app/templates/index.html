@@ -2273,20 +2273,47 @@
                     const d = new Date((s.started_at || 0) * 1000);
                     const dateStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
                     const active = s.id === activeSessionId ? 'border:1px solid var(--accent);' : 'border:1px solid var(--border);';
-                    return `<button data-id="${s.id}" class="session-item" style="display:block;width:100%;text-align:left;padding:12px;margin-bottom:8px;background:var(--bg);${active}border-radius:10px;cursor:pointer;color:var(--text);">
-                        <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.title}</div>
+                    return `<button data-id="${s.id}" class="session-item" style="display:block;width:100%;text-align:left;padding:12px;margin-bottom:8px;background:var(--bg);${active}border-radius:10px;cursor:pointer;color:var(--text);position:relative;">
+                        <button class="session-del-btn" title="Session löschen" data-id="${s.id}" style="position:absolute;top:6px;right:6px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:4px;line-height:1;">✕</button>
+                        <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:20px;">${s.title}</div>
                         <div style="color:var(--muted);font-size:12px;margin-top:4px;">${dateStr} · ${s.message_count || 0} Nachrichten</div>
                         ${s.preview ? `<div style="color:var(--muted);font-size:12px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.preview}</div>` : ''}
                     </button>`;
                 }).join('');
                 box.innerHTML = items;
-                box.querySelectorAll('.session-item').forEach(b => b.addEventListener('click', () => {
+                box.querySelectorAll('.session-item').forEach(b => b.addEventListener('click', (e) => {
+                    // Delete-Button klickt auf den äußeren Button — abfangen
+                    if (e.target.classList.contains('session-del-btn')) return;
                     activeSessionId = b.dataset.id;
                     localStorage.setItem('atlas_last_session', b.dataset.id);
                     $('currentSessionLabel').textContent = b.dataset.id + '…';
                     $('currentSessionLabel').classList.remove('hidden');
                     $('sessionsModal').classList.remove('active');
                     restartWS();
+                }));
+                // Delete-Handler: einzelne Session löschen
+                box.querySelectorAll('.session-del-btn').forEach(b => b.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const id = b.dataset.id;
+                    const item = b.closest('.session-item');
+                    if (!confirm('Diese Session wirklich löschen?')) return;
+                    try {
+                        const r = await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+                        const j = await r.json();
+                        if (j.status !== 'ok') {
+                            alert('Löschen fehlgeschlagen: ' + (j.message || 'Unbekannter Fehler'));
+                            return;
+                        }
+                        // Aus der Liste entfernen
+                        if (item) item.remove();
+                        // Falls die gelöschte Session die aktuelle war: neue leere Session
+                        if (id === activeSessionId || id === localStorage.getItem('atlas_last_session')) {
+                            activeSessionId = null;
+                            localStorage.removeItem('atlas_last_session');
+                        }
+                    } catch (err) {
+                        alert('Fehler beim Löschen: ' + err.message);
+                    }
                 }));
             } catch (e) {
                 box.innerHTML = '<p style="color:#e5534b;text-align:center;">Fehler beim Laden</p>';

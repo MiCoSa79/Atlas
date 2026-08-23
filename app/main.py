@@ -1039,6 +1039,29 @@ async def api_upload(request: Request, file: UploadFile):
 
 # ---------------------------------------------------------------- Session-REST-Endpoints
 
+@app.delete("/api/sessions/{stored_session_id}")
+async def api_delete_session(stored_session_id: str, request: Request):
+    """Löscht eine Session in Hermes (session.delete RPC) — nur wenn die aktuelle Session NICHT gelöscht wird."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    hermes_url = db_user.get("hermes_url")
+    hermes_auth = decrypt_secret(db_user.get("hermes_auth"))
+    if not hermes_url or not hermes_auth:
+        return JSONResponse({"status": "error", "message": "Keine Hermes-Verbindung konfiguriert"}, status_code=400)
+
+    # Prüfen: kann die stored_session_id überhaupt eine ID sein?
+    # Stored IDs sind wie "20260823_081440_186665" (Datestamp + UUID), Live-IDs sind kurz (6-8 Hex).
+    # session.delete MUSS die stored_session_id haben — live-id geht nicht.
+    result = await hermes_ws_request(hermes_url, hermes_auth, "session.delete",
+                                     {"session_id": stored_session_id})
+    if not result:
+        return JSONResponse({"status": "error", "message": "session.delete fehlgeschlagen oder Session nicht gefunden"}, status_code=404)
+    # result enthält oft {removed: 1} oder leeres dict (Erfolg)
+    return JSONResponse({"status": "ok", "message": "Session gelöscht"})
+
+
 @app.get("/api/sessions")
 async def api_sessions(request: Request):
     """Listet alle Sessions des eingestellten Hermes-Profils (session.list via WS)."""
