@@ -1286,14 +1286,18 @@
         // „Die Anzeige kommt, wird aber durch das Reasoning nach oben weggescrollt").
         let workingTimer = null;                 // setInterval-Handle der Arbeitszeile
         let workingStart = 0;                    // Erzeugungszeitpunkt (Zähler + Haltefenster)
-        const WORKING_MIN_HOLD_MS = 4000;        // Kernbotschaft mindestens so lange zeigen
         // v0.0.141: „Agent arbeitet…“-Zeile kehrt nach Text-Pausen zurück (Live-Befund
         // 2026-08-23): message.delta blendet die Zeile aus — läuft der Turn danach lange
         // ohne Events (z. B. terminal-Tool-Call, 15–420 s), fehlt jedes Feedback. timer
         // blendet die Zeile nach WORKING_RESUME_DELAY_MS ohne neue Text-Deltas wieder ein.
         let turnActive = false;                  // Turn läuft (true ab streaming-ACK, false ab complete/Lease/Wechsel)
         let workingResumeTimer = null;           // Timeout „Zeile nach Text-Pause wieder einblenden“
-        const WORKING_RESUME_DELAY_MS = 6000;    // Text-Pause ab der die Zeile als Lebenszeichen zurückkehrt
+        // v0.0.145: Nutzer-Wunsch 2026-08-23 — „Agent arbeitet…“ IMMER einblenden, wenn
+        // gerade keine Message-Ausgabe erfolgt; KEIN 6-s-Timer. Der Timer ist nur noch ein
+        // kurzer Text-Stille-Detektor (~1 s): sobald der Text-Puls endet, kehrt die Zeile
+        // (fast) sofort zurück. Zusätzlich blendet thinking.delta die Zeile SOFORT ein
+        // (siehe Handler) — der Timer fängt nur Phasen ohne jedes Event ab.
+        const WORKING_RESUME_DELAY_MS = 1000;    // Text-Stille ab der die Zeile zurückkehrt
 
         function workingEl() { return document.getElementById('workingStatus'); }
 
@@ -1328,9 +1332,10 @@
 
         function showWorkingStatus() {
             if (!showStatus) return;              // Nutzer-Setting respektieren
-            // v0.0.141: KEIN bubble-Guard mehr — die Zeile darf auch erscheinen, wenn bereits
-            // Text floss (bubble existiert); der Resume-Timer holt sie nur nach ≥6 s Text-Pause
-            // zurück, während fließender Streams stört sie nie.
+            // v0.0.145: KEIN bubble-Guard, kein Haltefenster — die Zeile darf IMMER
+            // erscheinen, sobald der Turn läuft und gerade keine Message-Ausgabe fließt
+            // (Nutzer-Wunsch 2026-08-23). Resume-Timer (~1 s) + thinking.delta holen sie
+            // nach Text-Stille zurück; während fließender Streams stört sie nie.
             if (workingActive || leaseWaitBubble) return;   // nichts überlagern
             const el = workingEl();
             if (!el) return;
@@ -1648,16 +1653,12 @@
                 }
                 // Statuszeilen ("warte auf Modell…") — kleine zentrierte Zeile
                 if (p.type === 'thinking.delta' && p.payload && p.payload.text && showStatus) {
-                    const el = workingEl();
-                    // v0.0.138: „Agent arbeitet… (seit N s)" nicht sofort vom oft wertlosen
-                    // Denk-Text („computing…") überschreiben — erst nach Ablauf des Haltefensters.
-                    // v0.0.139: Zeile liegt außerhalb des Scroll-Containers — kein followSticky nötig.
-                    if (workingActive && workingTimer && Date.now() - workingStart < WORKING_MIN_HOLD_MS) return;
-                    if (workingActive) stopWorkingTimer();
-                    if (el) {
-                        if (!workingActive) { workingActive = true; workingStart = Date.now(); el.classList.remove('hidden'); }
-                        el.textContent = p.payload.text;
-                    }
+                    // v0.0.145 (Nutzer-Wunsch 2026-08-23): Deko-Denktexte wie
+                    // „( ͡° ͜ʖ ͡°) pondering…“ NICHT (mehr) in die Statuszeile schreiben —
+                    // die Zeile zeigt immer „Agent arbeitet… (seit N s)“. Stattdessen:
+                    // Läuft der Turn und die Zeile ist gerade unsichtbar (z. B. nach
+                    // Text-Ende), wird sie hier SOFORT wieder eingeblendet (kein 6-s-Timer).
+                    if (turnActive) showWorkingStatus();   // Guards entscheiden (showStatus, workingActive, leaseWaitBubble)
                     return;
                 }
                 // Clarify-Frage des Agenten (v0.0.136): Karte mit Buttons + freiem
