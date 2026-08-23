@@ -1051,15 +1051,20 @@ async def api_delete_session(stored_session_id: str, request: Request):
     if not hermes_url or not hermes_auth:
         return JSONResponse({"status": "error", "message": "Keine Hermes-Verbindung konfiguriert"}, status_code=400)
 
-    # Prüfen: kann die stored_session_id überhaupt eine ID sein?
-    # Stored IDs sind wie "20260823_081440_186665" (Datestamp + UUID), Live-IDs sind kurz (6-8 Hex).
-    # session.delete MUSS die stored_session_id haben — live-id geht nicht.
+    profile = db_user.get("hermes_profile") or ""
+    # v0.0.151-FIX: session.delete braucht profile — OHNE sucht Hermes im
+    # Default-Profil und antwortet 4007 'session not found' (live per WS-Probe
+    # verifiziert: mit profile + Ziel-Session inaktiv → {"deleted": ...}).
+    # hermes_ws_request's Zwischen-Session (close_on_disconnect=True) ist hier
+    # harmlos — sie blockiert nur ihr eigenes Löschen, nicht das der Ziel-Session.
     result = await hermes_ws_request(hermes_url, hermes_auth, "session.delete",
-                                     {"session_id": stored_session_id})
-    if not result:
-        return JSONResponse({"status": "error", "message": "session.delete fehlgeschlagen oder Session nicht gefunden"}, status_code=404)
-    # result enthält oft {removed: 1} oder leeres dict (Erfolg)
-    return JSONResponse({"status": "ok", "message": "Session gelöscht"})
+                                     {"session_id": stored_session_id, "profile": profile}, profile)
+    deleted = result.get("deleted")
+    if not deleted:
+        # hermes_ws_request liefert {} wenn der Antwort-Frame ein error war (nur
+        # 'result'-Frames werden gespeichert). Genauer Grund unbekannt → generisch melden.
+        return JSONResponse({"status": "error", "message": "session.delete fehlgeschlagen — Session existiert nicht oder ist gerade aktiv (live im Chat)"}, status_code=404)
+    return JSONResponse({"status": "ok", "message": "Session gelöscht", "deleted": deleted})
 
 
 @app.get("/api/sessions")
