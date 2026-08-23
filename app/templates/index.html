@@ -1553,6 +1553,8 @@
                         addMsg('system', 'Session geladen ✓');
                         // Session wurde gewechselt → bewusst ans Ende springen
                         messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        // Done-Elemente zusammenklappen (v0.0.158: fehlte in diesem Pfad!)
+                        collapseDoneElements();
                     }
                     $('currentSessionLabel').textContent = activeSessionId;
                     $('currentSessionLabel').classList.remove('hidden');
@@ -2303,7 +2305,11 @@
             // Nutzer-Wunsch: Beim Arbeiten bleiben Tools sichtbar (Live). Nach message.complete
             // werden ALLE Tool-Karten des Turns entfernt und durch einen einzigen
             // "⚙️ Eingesetzte Tools (N)"-Toggle ersetzt — kein eigener Button pro Tool.
-            const toolEls = Array.from(document.querySelectorAll('.msg.system')).filter(el => {
+            // v0.0.159: Nur DIREKTE Kinder von #messages filtern (#messages > .msg.system).
+            // Tools in einer bestehenden Gruppe sind verschachtelt → automatisch ausgeschlossen.
+            // Damit ist der Aufruf idempotent: doppelter Aufruf erzeugt KEINE 2. Gruppe,
+            // und ein NEUER Turn (neue Tool-Karten direkt in #messages) wird korrekt gruppiert.
+            const toolEls = Array.from(document.querySelectorAll('#messages > .msg.system')).filter(el => {
                 if (el.dataset.toolGrouped) return false;
                 const txt = el.querySelector('span')?.textContent || '';
                 return txt.startsWith('⚙️ Tool:');
@@ -2319,7 +2325,7 @@
                 // Toggle-Label: "⚙️ Eingesetzte Tools (N)"
                 const label = document.createElement('span');
                 label.className = 'tool-group-label';
-                label.style.cssText = 'color:var(--accent);font-size:12px;cursor:pointer;padding:2px 10px;border:1px solid var(--border);border-radius:6px;display:inline-block;';
+                label.style.cssText = 'color:var(--accent);font-size:13px;font-weight:600;cursor:pointer;padding:6px 14px;border:1px solid var(--accent);border-radius:8px;display:inline-block;background:rgba(64,120,224,0.12);';
                 label.textContent = '⚙️ Eingesetzte Tools (' + toolEls.length + ') ▶';
                 group.appendChild(label);
                 // Tool-Karten unter dem Label stapeln (versteckt via display:none)
