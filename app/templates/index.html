@@ -570,6 +570,7 @@
         let bubble = null;
         let thinkingBubble = null;      // laufende "Denken"-Box (reasoning.delta)
         let workingActive = false;      // v0.0.139: „Agent arbeitet…“-Zeile sichtbar (#workingStatus, außerhalb des Scroll-Containers)
+        let activeToolEls = {};         // v0.0.142: tool_id → ⚙️-Karten-Element (tool.start → tool.complete-Update)
         let rpcId = 0;
         let hermesSessionId = null;
         let activeSessionId = localStorage.getItem('atlas_last_session') || null;   // gewählte alte Session (null = neue Unterhaltung); persistiert für Hintergrund-Turns
@@ -1622,17 +1623,18 @@
                 }
                 if (frame.method !== 'event') return;
                 const p = frame.params || {};
-                // "Denken" des Agenten (Reasoning) — kompakte, gedimmte Box vor der Antwort
+                // "Denken" des Agenten (Reasoning) — kompakte, gedimmte Box vor der Antwort.
+                // v0.0.142: reasoning.delta kommt bei Tool-Turns in MEHREREN Phasen (vor dem
+                // ersten Text UND nach message.delta, wenn der Agent nach Tool-Ende weiter
+                // arbeitet). Der alte `!bubble`-Guard verschluckte alle Reasoning-Boxen nach
+                // dem ersten Text (Befund 2026-08-23: „…werden danach die Reasoning-Text auch
+                // nicht mehr angezeigt“). Fix: Denk-Box IMMER bauen/ergänzen — message.delta
+                // schließt sie je Runde ab.
                 if (p.type === 'reasoning.delta' && p.payload && p.payload.text && showReasoning) {
-                    if (!bubble) {
-                        if (!thinkingBubble) {
-                            thinkingBubble = addMsg('thinking', '💭 ' + p.payload.text);
-                        } else {
-                            thinkingBubble.querySelector('span').textContent += p.payload.text;
-                        }
-                    } else if (thinkingBubble) {
-                        thinkingBubble.classList.add('done');
-                        thinkingBubble = null;
+                    if (!thinkingBubble) {
+                        thinkingBubble = addMsg('thinking', '💭 ' + p.payload.text);
+                    } else {
+                        thinkingBubble.querySelector('span').textContent += p.payload.text;
                     }
                     followSticky();
                     return;
@@ -1662,11 +1664,41 @@
                     expireClarifyCard(p.payload);
                     return;
                 }
+                // Live-Tool-Karten (v0.0.142): Hermes sendet tool.generating → tool.start →
+                // tool.complete. Ohne Handler blieben Tool-Calls unsichtbar bis zum Seiten-
+                // Refresh (Befund 2026-08-23: „Auch die Tools die du aufrufst werden erst
+                // angezeigt, wenn ich die Seite refreshe“). tool.start rendert die ⚙️-Karte
+                // (kompakt wie im History-Rendering), tool.complete ergänzt Dauer + Status.
+                if (p.type === 'tool.start' && p.payload && p.payload.name) {
+                    const ctx = p.payload.context
+                        || (p.payload.args && (p.payload.args.command || p.payload.args.url || p.payload.args.path || p.payload.args.query || ''))
+                        || '';
+                    const el = addMsg('system', '⚙️ Tool: ' + p.payload.name
+                        + (ctx ? ' — ' + String(ctx).split('\n')[0].slice(0, 80) : ''));
+                    if (p.payload.tool_id) activeToolEls[p.payload.tool_id] = el;
+                }
+                if (p.type === 'tool.complete' && p.payload && p.payload.name) {
+                    const el = p.payload.tool_id ? activeToolEls[p.payload.tool_id] : null;
+                    const res = p.payload.result || {};
+                    const ds = p.payload.duration_s != null ? ' (' + p.payload.duration_s.toFixed(1) + ' s)' : '';
+                    let suffix;
+                    if (res.error) suffix = ' ⚠ ' + String(res.error).slice(0, 60);
+                    else if (res.exit_code && res.exit_code !== 0) suffix = ' ⚠ exit ' + res.exit_code;
+                    else suffix = ' ✓' + ds;
+                    if (el && el.querySelector('span')) {
+                        el.querySelector('span').textContent += suffix;
+                    } else {
+                        addMsg('system', '⚙️ Tool: ' + p.payload.name + ' — abgeschlossen' + suffix);
+                    }
+                    if (p.payload.tool_id) delete activeToolEls[p.payload.tool_id];
+                }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
                     // Antwort beginnt → Denk-Box abschließen, Statuszeile entfernen,
                     // Lease-Warte-Bubble (falls vorhanden) ebenfalls beenden
                     if (leaseWaitBubble) clearLeaseWait();
-                    if (thinkingBubble && !bubble) {
+                    // v0.0.142: Denk-Box auch dann abschließen, wenn die Antwort-Bubble schon
+                    // existiert (2. Agenten-Runde nach Tool-Ende) — `!bubble`-Guard entfernt.
+                    if (thinkingBubble) {
                         thinkingBubble.classList.add('done');
                         thinkingBubble = null;
                     }
