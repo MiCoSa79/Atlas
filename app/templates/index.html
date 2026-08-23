@@ -1584,6 +1584,18 @@
                         messagesDiv.innerHTML = '';
                         endWorkingTurn();   // Resume-Verlauf → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                         frame.result.messages.forEach(m => {
+                            // Reasoning der assistant-Nachricht VOR der Antwort rendern
+                            // (v0.0.160 + v0.0.165): Reihenfolge wie im Live-Pfad — Denk-Box
+                            // zwischen Eingabe und Antwort. Vorher wurde sie NACH dem
+                            // Antwort-Text angehängt (Befund 2026-08-23: „unter die letzte
+                            // Antwort verschoben“). Guard showReasoning wie im Live-Pfad.
+                            if (m.role === 'assistant' && showReasoning && (m.reasoning || m.reasoning_content)) {
+                                const rText = String(m.reasoning || m.reasoning_content || '').trim();
+                                if (rText && rText !== 'null' && rText !== 'undefined') {
+                                    const tb = addMsg('thinking', '💭 ' + rText);
+                                    tb.classList.add('done');
+                                }
+                            }
                             if (m.role === 'user' || m.role === 'assistant') {
                                 let displayText = m.text || '';
                                 const internal = isInternalNotice(m);
@@ -1600,14 +1612,6 @@
                                 }
                             } else if (m.role === 'tool') {
                                 addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
-                            }
-                            // Reasoning der assistant-Nachricht rendern (Punkt 1, v0.0.160)
-                            if (m.role === 'assistant' && (m.reasoning || m.reasoning_content)) {
-                                const rText = String(m.reasoning || m.reasoning_content || '').trim();
-                                if (rText && rText !== 'null' && rText !== 'undefined') {
-                                    const tb = addMsg('thinking', '💭 ' + rText);
-                                    tb.classList.add('done');
-                                }
                             }
                         });
                         addMsg('system', 'Session geladen ✓');
@@ -1631,6 +1635,16 @@
                         updateTokenWidget();
                     }
                     msgs.forEach(m => {
+                        // Reasoning der assistant-Nachricht VOR der Antwort rendern
+                        // (v0.0.160 + v0.0.165): Denk-Box zwischen Eingabe und Antwort
+                        // (Reihenfolge wie im Live-Pfad); Guard showReasoning wie dort.
+                        if (m.role === 'assistant' && showReasoning && (m.reasoning || m.reasoning_content)) {
+                            const rText = String(m.reasoning || m.reasoning_content || '').trim();
+                            if (rText && rText !== 'null' && rText !== 'undefined') {
+                                const tb = addMsg('thinking', '💭 ' + rText);
+                                tb.classList.add('done');
+                            }
+                        }
                         if (m.role === 'user' || m.role === 'assistant') {
                             let displayText = m.text || '';
                             const internal = isInternalNotice(m);
@@ -1652,17 +1666,6 @@
                             }
                         } else if (m.role === 'tool') {
                             addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
-                        }
-                        // Reasoning der assistant-Nachricht rendern (Punkt 1, v0.0.160):
-                        // Hermes speichert es in m.reasoning (bzw. m.reasoning_content).
-                        // Vorher wurde es ignoriert → nach Chatwechsel/Reload war kein
-                        // Reasoning mehr sichtbar (Nutzer-Befund 2026-08-23).
-                        if (m.role === 'assistant' && (m.reasoning || m.reasoning_content)) {
-                            const rText = String(m.reasoning || m.reasoning_content || '').trim();
-                            if (rText && rText !== 'null' && rText !== 'undefined') {
-                                const tb = addMsg('thinking', '💭 ' + rText);
-                                tb.classList.add('done');
-                            }
                         }
                     });
                     const n = msgs.length;
