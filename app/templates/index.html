@@ -1637,7 +1637,9 @@
                         thinkingBubble.querySelector('span').textContent += p.payload.text;
                     }
                     followSticky();
-                    return;
+                    // v0.0.142: KEIN return — sonst werden tool.start/complete und message.delta
+                    // nach dieser Reasoning-Phase nicht mehr verarbeitet (Befund: „Tools erst nach
+                    // Refresh sichtbar"). Event-Kette weiterlaufen lassen.
                 }
                 // Statuszeilen ("warte auf Modell…") — kleine zentrierte Zeile
                 if (p.type === 'thinking.delta' && p.payload && p.payload.text && showStatus) {
