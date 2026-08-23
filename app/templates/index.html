@@ -2658,9 +2658,18 @@
                 compressPending = { summary };
 
                 // 3) Zusammenfassung als System-Nachricht in ALTE Session einfügen
+                // v0.0.147: STATT pendingMessages SOFORT per sendRpc senden — pendingMessages
+                // wird nur im onopen-Pfad geleert (flushPendingMessages nach reconnect/restartWS).
+                // Bei stabiler offener Verbindung (Normalfall beim Button-Klick) blieb die
+                // Zusammenfassung sonst ewig im Puffer → Kontext-Anzeige aktualisierte sich nicht.
                 const compressText = '📐 Kontext komprimiert (' + msgs.length + ' Nachrichten → ' + summary.slice(0, 500) + ')';
                 addMsg('system', compressText);
-                pendingMessages.push(compressText);
+                if (ws && ws.readyState === WebSocket.OPEN && hermesSessionId) {
+                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: compressText });
+                    console.log('[Atlas] Komprimierung: Zusammenfassung sofort gesendet (' + msgs.length + ' Nachrichten)');
+                } else {
+                    pendingMessages.push(compressText);   // Fallback: stabiler onopen-Pfad
+                }
 
                 // 4) Banner ausblenden, Kontext aktualisieren
                 el.innerHTML = '✅ Kontext komprimiert — Zusammenfassung in dieser Session gespeichert.';
