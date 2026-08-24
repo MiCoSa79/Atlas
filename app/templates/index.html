@@ -2077,10 +2077,9 @@
                         resolve(resp);
                     }
                 }, 100);
-                // Timeout nach 300s — wird bei erhaltener Antwort gecancelt.
-                // Große Dateien (>5 MB → base64) brauchen länger als 8s
-                // (24 MB Datei ≈ 32 MB base64 im WS-Frame — das dauert und der
-                // 8s-Timeout brach den Upload ab; 300s sind sicher genug).
+                // Timeout nach 30s — wird bei erhaltener Antwort gecancelt.
+                // 24-MB-Dateien (≈32 MB base64) kommen im LAN in wenigen Sekunden
+                // durch (ws-max-size 384 MB seit v0.0.172); 30s sind Sicherheitsnetz.
                 const timeoutTimer = setTimeout(() => {
                     if (settled) return;
                     settled = true;
