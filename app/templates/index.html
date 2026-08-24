@@ -1956,6 +1956,7 @@
             }
             
             // Anhänge an Hermes attachen (WS-RPC)
+            let attachResults = [];  // v0.0.168: file.attach-Antworten (ref_text) für prompt.submit
             if (pendingFiles.length > 0) {
                 let attachPromises = [];
                 for (const pf of pendingFiles) {
@@ -1971,15 +1972,27 @@
                         );
                     }
                 }
-                await Promise.all(attachPromises);
+                // v0.0.168: Antwortergebnisse behalten — file.attach liefert ref_text
+                // ("@file:<pfad>"), den der Agent braucht, um die Datei zu lesen.
+                attachResults = await Promise.all(attachPromises);
             }
-            
+
             // JETZT erst prompt.submit senden — Dateinamen in Text einbetten,
             // damit Hermes sie in der History speichert (für Vorschau-Restore!)
             const attachNames = pendingFiles.map(f => f.name).join(', ');
             // Immer mit [Name]-Block (auch bei leerem Text), damit restoreAttachmentPreview
             // den Block in der History sicher findet
-            const promptText = attachNames ? (text ? text + ' [' + attachNames + ']' : '[' + attachNames + ']') : text;
+            let promptText = attachNames ? (text ? text + ' [' + attachNames + ']' : '[' + attachNames + ']') : text;
+            // v0.0.168 (Upload-Bug 2026-08-24): @file:-Referenzen aus den
+            // file.attach-Antworten anhängen — nur durch den Dateinamen im Text
+            // wusste der Agent nicht, WO die Datei liegt (kam namenlos + ohne
+            // Kontext-Pfad an; attachments/attachment-N unter dem Profil).
+            if (attachResults && attachResults.length) {
+                const refTexts = attachResults.filter(r => r && r.ref_text).map(r => r.ref_text);
+                if (refTexts.length) {
+                    promptText += (promptText ? '\n' : '') + refTexts.join('\n');
+                }
+            }
             sendRpc('prompt.submit', { session_id: hermesSessionId, text: promptText });
             // Persistenz VOR dem Leeren speichern (sonst ist pendingFiles leer!)
             saveAttachmentPreviews();
@@ -2042,7 +2055,10 @@
             // abstürzen. Siehe Hermes tui_gateway/methods_prompt.py.
             const params = isImage
                 ? { session_id: hermesSessionId, content_base64: pf.base64Url }
-                : { session_id: hermesSessionId, data_url: pf.base64Url };
+                : { session_id: hermesSessionId, data_url: pf.base64Url, name: pf.name };
+            // name-Pflicht für file.attach (Hermes-Contract: path/data_url/name;
+            // ohne name speichert Hermes als "attachment-N" ohne Endung —
+            // Upload-Bug 2026-08-24, Admin_Power_Pack kam namenlos an)
             console.log('[Atlas] Hermes attach:', method, pf.name);
             addMsg('system', '📤 Übertrage ' + pf.name + ' an Hermes (' + method + ') …');
             return new Promise((resolve) => {
