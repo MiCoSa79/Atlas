@@ -539,12 +539,20 @@ def session_from_ws(ws: WebSocket):
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    return templates.TemplateResponse(
+    resp = templates.TemplateResponse(
         "index.html",
         {"request": request, "setup_mode": user_count() == 0,
          "BUILD_VERSION": os.environ.get("APP_VERSION", "unknown"),
          "BUILD_DATE": os.environ.get("BUILD_DATE", "unknown")}
     )
+    # v0.0.167: index.html NIE aus dem Browser-Cache ausliefern — fehlende
+    # Cache-Header führten zu heuristischem Caching (iOS-PWA: alte Version
+    # nach Deploy, Nutzer-Befund „Tools verschwinden + Reasoning als normale
+    # Messages“ trotz aktuellem Server-Code).
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.post("/api/setup")
