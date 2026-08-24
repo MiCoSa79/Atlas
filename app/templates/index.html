@@ -1956,6 +1956,7 @@
             }
             
             // Anhänge an Hermes attachen (WS-RPC)
+            let attachResults = [];  // file.attach-Antworten (ref_text) für prompt.submit
             if (pendingFiles.length > 0) {
                 let attachPromises = [];
                 for (const pf of pendingFiles) {
@@ -1971,7 +1972,8 @@
                         );
                     }
                 }
-                await Promise.all(attachPromises);
+                // Attach-Ergebnisse behalten (enthalten ref_text für prompt.submit)
+                attachResults = await Promise.all(attachPromises);
             }
             
             // JETZT erst prompt.submit senden — Dateinamen in Text einbetten,
@@ -1979,7 +1981,15 @@
             const attachNames = pendingFiles.map(f => f.name).join(', ');
             // Immer mit [Name]-Block (auch bei leerem Text), damit restoreAttachmentPreview
             // den Block in der History sicher findet
-            const promptText = attachNames ? (text ? text + ' [' + attachNames + ']' : '[' + attachNames + ']') : text;
+            let promptText = attachNames ? (text ? text + ' [' + attachNames + ']' : '[' + attachNames + ']') : text;
+            // file.attach liefert ref_text ("@file:<pfad>") — ohne diese Referenz
+            // kommt die Datei namenlos/unsichtbar beim Agenten an (Upload-Bug 2026-08-24)
+            if (attachResults && attachResults.length) {
+                const refTexts = attachResults.filter(r => r && r.ref_text).map(r => r.ref_text);
+                if (refTexts.length) {
+                    promptText += (promptText ? '\n' : '') + refTexts.join('\n');
+                }
+            }
             sendRpc('prompt.submit', { session_id: hermesSessionId, text: promptText });
             // Persistenz VOR dem Leeren speichern (sonst ist pendingFiles leer!)
             saveAttachmentPreviews();
@@ -2042,7 +2052,7 @@
             // abstürzen. Siehe Hermes tui_gateway/methods_prompt.py.
             const params = isImage
                 ? { session_id: hermesSessionId, content_base64: pf.base64Url }
-                : { session_id: hermesSessionId, data_url: pf.base64Url };
+                : { session_id: hermesSessionId, data_url: pf.base64Url, name: pf.name };
             console.log('[Atlas] Hermes attach:', method, pf.name);
             addMsg('system', '📤 Übertrage ' + pf.name + ' an Hermes (' + method + ') …');
             return new Promise((resolve) => {
@@ -2067,7 +2077,10 @@
                         resolve(resp);
                     }
                 }, 100);
-                // Timeout nach 8s — wird bei erhaltener Antwort gecancelt (v0.0.44)
+                // Timeout nach 300s — wird bei erhaltener Antwort gecancelt.
+                // Große Dateien (>5 MB → base64) brauchen länger als 8s
+                // (24 MB Datei ≈ 32 MB base64 im WS-Frame — das dauert und der
+                // 8s-Timeout brach den Upload ab; 300s sind sicher genug).
                 const timeoutTimer = setTimeout(() => {
                     if (settled) return;
                     settled = true;
