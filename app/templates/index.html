@@ -2659,11 +2659,9 @@
             setInterval(updateTokenWidget, 5 * 60 * 1000);
         });
 
-        // Kontext-Warnung: Session sehr groß → Banner mit „Session weiterführen" + „Kontext komprimieren" (v0.0.112, v0.0.113, v0.0.146)
+        // Kontext-Warnung: Session sehr groß → Banner mit „Session weiterführen" (v0.0.112, v0.0.113; 📐-Button „Kontext komprimieren" v0.0.146 → entfernt 2026-08-24: suggerierte Entlastung, entlastete den Kontext aber nicht)
         let migratePending = null;             // aktive Migration: { oldId, historyMessages, summary }
         let migrateBtnRpcId = null;            // RPC-ID des „Weiterführen"-Buttons (für Disable-Tracking)
-        let compressPending = null;            // aktive Komprimierung (防止 Double-Klick)
-        let compressBtnRpcId = null;           // RPC-ID des „Komprimieren"-Buttons
 
         // v0.0.119: Füllstandsanzeige zuverlässig machen — Hermes liefert context_percent
         // NICHT zuverlässig in session.resume.info.usage / message.complete (bei idle Session
@@ -2723,15 +2721,15 @@
             const el = document.getElementById('ctxWarn');
             if (!el) return;
             if (sessionCtxPct >= CTX_WARN_PCT) {
-                // Banner mit zwei Buttons: „Weiterführen" (neue Session) + „Komprimieren" (aktuelle Session)
-                el.innerHTML = '⚠️ Session-Kontext ~' + sessionCtxPct + '% voll — neue Unterhaltung starten oder Kontext komprimieren. <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button> <button class="ctx-warn-btn" onclick="onCompressClick()">📐 Kontext komprimieren</button>';
+                // Banner mit einem Button: „Weiterführen" (native LLM-Kompression + neue Session)
+                el.innerHTML = '⚠️ Session-Kontext ~' + sessionCtxPct + '% voll — Session weiterführen (komprimiert den Kontext in eine neue Session). <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button>';
                 el.classList.remove('hidden');
             } else if (sessionCtxPct === 0 && sessionMsgCount >= CTX_WARN_MSGS) {
                 // v0.0.115: Trigger 2 (Nachrichtenzahl) NUR solange Kontext-% unbekannt
                 // (Resume-Fallback). Nach der ersten Antwort entscheidet nur noch der
                 // exakte context_percent — sonst bliebe das Banner bei 400+Nachrichten
                 // dauerhaft stehen, obwohl der Kontext nach Kompression wieder klein ist.
-                el.innerHTML = '⚠️ Session sehr groß (' + sessionMsgCount + ' Nachrichten) — neue Unterhaltung starten oder Kontext komprimieren. <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button> <button class="ctx-warn-btn" onclick="onCompressClick()">📐 Kontext komprimieren</button>';
+                el.innerHTML = '⚠️ Session sehr groß (' + sessionMsgCount + ' Nachrichten) — Session weiterführen (komprimiert den Kontext in eine neue Session). <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button>';
                 el.classList.remove('hidden');
             } else {
                 el.innerHTML = '';
@@ -2803,86 +2801,6 @@
                 migratePending = null;
             } finally {
                 migrateBtnRpcId = null;
-            }
-        }
-
-        // v0.0.146: Kontext-Komprimierung — Zusammenfassung in ALTE Session einfügen
-        async function onCompressClick() {
-            if (compressPending || compressBtnRpcId !== null) return;  // nur 1 Klick
-            const el = document.getElementById('ctxWarn');
-            if (!el) return;
-            const summaryText = compressPending ? compressPending.summary : '';
-            // Button: "⏳ Komprimierung läuft…" + disable
-            el.innerHTML = '⏳ Komprimierung läuft… (kann bei großen Sessions bis zu 90 s dauern)';
-            compressBtnRpcId = 'compressing';
-            try {
-                // 1) History holen (identisch zu onMigrateClick)
-                let hist = null;
-                try {
-                    const migProfile = selectedProfile || undefined;
-                    hist = await fetchRpc('session.history', {
-                        session_id: hermesSessionId || activeSessionId,
-                        ...(migProfile ? { profile: migProfile } : {})
-                    });
-                } catch (err) {
-                    console.warn('[Atlas] Komprimierung: session.history nicht verfügbar (' + err.message + ') — Fallback auf gerenderten Verlauf');
-                }
-                let msgs = (hist && hist.messages) ? hist.messages : [];
-                if (!msgs.length) {
-                    const seen = {}; msgs = [];
-                    document.querySelectorAll('#messages .msg').forEach(el => {
-                        const isUser = el.classList.contains('user');
-                        const isAsst = el.classList.contains('assistant');
-                        if (!isUser && !isAsst) return;
-                        const text = (el.textContent || '').trim();
-                        if (!text || seen[text]) return;
-                        seen[text] = 1;
-                        msgs.push({ role: isUser ? 'user' : 'assistant', text: text });
-                    });
-                }
-                if (!msgs.length) {
-                    throw new Error('Keine Nachrichten in History');
-                }
-
-                // 2) Zusammenfassung aus letzten ~30 Nachrichten generieren (identisch)
-                const last30 = msgs.slice(-30);
-                const summaryParts = [];
-                for (let i = last30.length - 1; i >= 0; i--) {
-                    const m = last30[i];
-                    const text = (m.text || '').trim();
-                    if (text && (m.role === 'user' || m.role === 'assistant')) {
-                        const role = m.role === 'user' ? 'Du' : 'Atlas';
-                        summaryParts.push(role + ': ' + text.slice(0, 200));
-                    }
-                }
-                const summary = summaryParts.length > 0 ? summaryParts.join(' | ') : 'Keine Inhalt-Zusammenfassung verfügbar.';
-                compressPending = { summary };
-
-                // 3) Zusammenfassung als System-Nachricht in ALTE Session einfügen
-                // v0.0.147: STATT pendingMessages SOFORT per sendRpc senden — pendingMessages
-                // wird nur im onopen-Pfad geleert (flushPendingMessages nach reconnect/restartWS).
-                // Bei stabiler offener Verbindung (Normalfall beim Button-Klick) blieb die
-                // Zusammenfassung sonst ewig im Puffer → Kontext-Anzeige aktualisierte sich nicht.
-                const compressText = '📐 Kontext komprimiert (' + msgs.length + ' Nachrichten → ' + summary.slice(0, 500) + ')';
-                addMsg('system', compressText);
-                if (ws && ws.readyState === WebSocket.OPEN && hermesSessionId) {
-                    sendRpc('prompt.submit', { session_id: hermesSessionId, text: compressText });
-                    console.log('[Atlas] Komprimierung: Zusammenfassung sofort gesendet (' + msgs.length + ' Nachrichten)');
-                } else {
-                    pendingMessages.push(compressText);   // Fallback: stabiler onopen-Pfad
-                }
-
-                // 4) Banner ausblenden, Kontext aktualisieren
-                el.innerHTML = '✅ Kontext komprimiert — Zusammenfassung in dieser Session gespeichert.';
-                el.classList.add('hidden');
-                migratePending = null;
-                // Kontext-Neuladen (trigger refreshUsageGauge)
-                setTimeout(() => refreshUsageGauge(), 500);
-            } catch (err) {
-                el.innerHTML = '⚠️ Komprimierung fehlgeschlagen: ' + err.message + '. <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
-                compressPending = null;
-            } finally {
-                compressBtnRpcId = null;
             }
         }
 
