@@ -1955,12 +1955,17 @@
                 followSticky();
             }
             
-            // Anhänge an Hermes attachen (WS-RPC)
+            // Anhänge an Hermes attachen (WS-RPC oder HTTP-Upload für große Dateien)
             let attachResults = [];  // v0.0.168: file.attach-Antworten (ref_text) für prompt.submit
             if (pendingFiles.length > 0) {
                 let attachPromises = [];
                 for (const pf of pendingFiles) {
-                    if (pf.base64Url) {
+                    // v0.0.169: Große Dateien (>5 MB) per HTTP multipart-upload (kein base64/WS-Timeout)
+                    const useHttpUpload = (pf.file?.size || 0) > 5 * 1024 * 1024;
+                    if (useHttpUpload) {
+                        console.log('[Atlas] HTTP-Upload für große Datei:', pf.name, `(${(pf.file.size / 1024 / 1024).toFixed(1)} MB)`);
+                        attachPromises.push(uploadLargeFileToAtlas(pf));
+                    } else if (pf.base64Url) {
                         attachPromises.push(attachFileToHermes(pf));
                     } else {
                         console.log('[Atlas] Warte auf base64-Konvertierung:', pf.name);
@@ -2026,7 +2031,8 @@
         }
 
         // ---------------------------------------------------------------- Upload
-        let pendingFiles = []; // {id, name, previewUrl, type, base64Url}
+        let pendingFiles = []; // {id, name, previewUrl, type, base64Url, file}
+        const attachmentRefs = [];  // v0.0.169: @file:-Refs für prompt.submit
         
         // Datei in base64-Daten-URL umwandeln (für Hermes RPC-Upload)
         function fileToBase64(file) {
@@ -2036,6 +2042,37 @@
                 reader.onerror = reject;
                 reader.readAsDataURL(file);
             });
+        }
+        
+        // ---------------------------------------------------------------- Large file HTTP-upload (v0.0.169)
+        // Umgeht das 32+ MB base64-Timeout von WS file.attach:
+        // 1. HTTP multipart POST an /api/upload → Datei landet als
+        //    profiles/axel/attachments/<name> (kein base64, konstantes Memory)
+        // 2. @file:-Ref anhängen (für prompt.submit)
+        async function uploadLargeFileToAtlas(pf) {
+            addMsg('system', '📎 Lade große Datei hoch: ' + pf.name);
+            const formData = new FormData();
+            formData.append('file', pf.file, pf.name);
+            try {
+                // Atlas-Upload (multipart, kein base64, kein WS)
+                addMsg('system', '📤 Atlas-Upload: ' + pf.name);
+                const resp = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const j = await resp.json();
+                if (!resp.ok || j.status !== 'ok') {
+                    addMsg('system', '❌ Atlas-Upload fehlgeschlagen: ' + (j.message || 'unbekannt'));
+                    return { error: j.message || 'upload failed' };
+                }
+                addMsg('system', '✅ Atlas-Upload erfolgreich: ' + pf.name + ' (' + (j.size / 1024 / 1024).toFixed(1) + ' MB)');
+                
+                // @file:-Ref anhängen
+                return { attached: true, path: j.path, name: pf.name, size: j.size, ref_text: '@file:' + j.path };
+            } catch (err) {
+                addMsg('system', '❌ HTTP-Upload fehlgeschlagen: ' + err.message);
+                return { error: err.message };
+            }
         }
         
 // Datei an Hermes attachen (WS-RPC)
@@ -2083,7 +2120,10 @@
                         resolve(resp);
                     }
                 }, 100);
-                // Timeout nach 8s — wird bei erhaltener Antwort gecancelt (v0.0.44)
+                // Timeout nach 300s (5 Minuten) — wird bei erhaltener Antwort gecancelt.
+                // Große Dateien (24+ MB SFM-Pakete → 32 MB base64) brauchen Zeit für
+                // base64 + WS-Übertragung + Hermes serverseitiges decoding.
+                // 300s sind auch für 100 MB noch ausreichend.
                 const timeoutTimer = setTimeout(() => {
                     if (settled) return;
                     settled = true;
