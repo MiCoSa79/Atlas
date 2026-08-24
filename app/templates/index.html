@@ -1619,6 +1619,10 @@
                         messagesDiv.scrollTop = messagesDiv.scrollHeight;
                         // Done-Elemente zusammenklappen (v0.0.158: fehlte in diesem Pfad!)
                         collapseDoneElements();
+                        // historyRpcId auflösen — wenn die session.history-Antwort
+                        // später ankommt, darf sie den DOM NICHT nochmal löschen.
+                        // (Zweipfad-Kollision: erster Pfad rendert, zweiter löscht alles.)
+                        historyRpcId = null;
                     }
                     $('currentSessionLabel').textContent = activeSessionId;
                     $('currentSessionLabel').classList.remove('hidden');
