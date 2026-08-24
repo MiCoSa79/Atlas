@@ -34,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 DB_PATH = os.environ.get("ATLAS_DB", "/data/atlas.db")
-UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "profiles", "axel", "attachments")
+UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")
 SESSION_COOKIE = "atlas_session"
 # ---------------------------------------------------------------- Zugangsdaten-Verschlüsselung (v0.0.73)
 # Hermes-Zugangsdaten (hermes_auth = "user:pass") werden mit Fernet (AES-128-CBC)
@@ -1016,35 +1016,30 @@ async def admin_delete_user(user_id: int, request: Request):
 
 
 # ---------------------------------------------------------------- Datei-Upload
-# Dateien werden per multipart/form-data (HTTP POST) hochgeladen — das vermeidet
-# das 32+ MB base64-Inflate-Problem von WS file.attach (Timeout bei großen Dateien).
-# Speichert unter /data/uploads/<original_name> (Originalname erhalten!)
 
 @app.post("/api/upload")
 async def api_upload(request: Request, file: UploadFile):
-    """Speichert eine Datei im Upload-Verzeichnis und gibt den Pfad zurück.
-    
-    Nutzt multipart/form-data (kein base64) — geeignet für große Dateien.
-    Original-Dateiname bleibt erhalten.
-    """
+    """Speichert eine Datei lokal und gibt eine interne ID zurück."""
     user = session_from_request(request)
     if not user:
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
     if file.filename is None or file.filename == "":
         return JSONResponse({"status": "error", "message": "Kein Dateiname"}, status_code=400)
     
-    # Datei direkt mit Originalnamen speichern (UUID-ID entfernt, Dateiname bleibt erhalten)
-    save_path = os.path.join(UPLOAD_DIR, file.filename)
+    # Datei-ID generieren
+    file_id = uuid.uuid4().hex
+    ext = os.path.splitext(file.filename)[1] or ".bin"
+    save_path = os.path.join(UPLOAD_DIR, f"{file_id}{ext}")
     
     try:
-        # Datei schreiben (chunkweise kopieren für große Dateien)
+        # Datei schreiben
         with open(save_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
         return JSONResponse({
             "status": "ok",
+            "file_id": file_id,
             "filename": file.filename,
-            "path": save_path,
-            "size": os.path.getsize(save_path),
+            "path": save_path
         })
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
