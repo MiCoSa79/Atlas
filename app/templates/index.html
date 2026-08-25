@@ -204,8 +204,12 @@
         #composer .ctx-warn-btn { width:auto; height:auto; box-sizing:border-box; padding:5px 12px; background:rgba(233,69,96,.25); border:1px solid rgba(233,69,96,.5); border-radius:999px; color:#fff; cursor:pointer; font-size:12px; margin-left:auto; white-space:nowrap; flex-shrink:0; line-height:1.4; }
         #composer .ctx-warn-btn:hover { background:rgba(233,69,96,.4); }
         #composer .ctx-warn-btn:disabled { opacity:.4; cursor:default; }
-        #composer .interrupt-row { display:flex; justify-content:flex-end; margin-top:6px; }
-        #composer .interrupt-btn { width:36px; height:36px; display:flex; align-items:center; justify-content:center; background:none; border:1px solid var(--border); border-radius:8px; color:var(--muted); cursor:pointer; flex-shrink:0; padding:0; transition:color .15s, border-color .15s, background .15s; }
+        /* Interrupt-Button (v0.0.175, Layout-Fix v0.0.176): sitzt seit v0.0.176 IN der
+           Composer-Button-Zeile (zwischen Anhängen und Senden, 42px wie attachBtn) —
+           keine eigene .interrupt-row mehr, dadurch KEIN Layout-Shift der Kontext-/
+           Token-Anzeige (statusBar). Idle: dezentes Icon wie die übrigen Buttons;
+           aktiver Turn: rotes Icon + roter Rand. */
+        #composer .interrupt-btn { width:42px; height:42px; display:flex; align-items:center; justify-content:center; background:none; border:1px solid transparent; border-radius:8px; color:var(--muted); cursor:pointer; flex-shrink:0; padding:0; transition:color .15s, border-color .15s, background .15s, opacity .15s; }
         #composer .interrupt-btn:disabled { opacity:.45; cursor:default; }
         #composer .interrupt-btn:not(:disabled) { color:#e5484d; border-color:rgba(229,72,77,.5); }
         #composer .interrupt-btn:not(:disabled):hover { background:rgba(229,72,77,.12); }
@@ -412,13 +416,12 @@
                 <label class="sr-only" for="fileInput">Datei anhängen</label>
                 <input id="fileInput" type="file" hidden autocomplete="off" multiple>
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
-                <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
-            </div>
-            <!-- Turn-Unterbrechen (session.interrupt, v0.0.175): unter Upload/Senden — wirkt IMMER auf die aktive Session (hermesSessionId) -->
-            <div class="interrupt-row">
+                <!-- Turn-Unterbrechen (session.interrupt, v0.0.175; Layout v0.0.176): in der Button-Zeile,
+                     wirkt IMMER auf die aktive Session (hermesSessionId); idle gedimmt, bei laufendem Turn rot -->
                 <button id="interruptBtn" class="interrupt-btn" type="button" title="Turn unterbrechen (session.interrupt)" aria-label="Turn unterbrechen" disabled>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
                 </button>
+                <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
             </div>
             <!-- Kontext-Warnung bei sehr großen Sessions (v0.0.112) -->
             <div id="ctxWarn" class="ctx-warn hidden"></div>
