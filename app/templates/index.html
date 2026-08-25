@@ -2802,7 +2802,12 @@
             } else {
                 el.innerHTML = '';
                 el.classList.add('hidden');
-                migratePending = null;
+                // v0.0.179: migratePending NUR zurücksetzen, wenn KEINE Migration läuft —
+                // onMigrateClick liest es bis zum restartWS. Vorher wurde es hier mitten in
+                // der Migration genullt (updateCtxWarning läuft in onMigrateClick mit
+                // sessionCtxPct=0) → TypeError „Cannot read properties of null (reading 'summary')“
+                // an der migratePending.summary-Stelle (Fehler 2026-08-25).
+                if (migrateBtnRpcId === null) migratePending = null;
             }
             updateMigrateBtn();
         }
@@ -2850,7 +2855,11 @@
                 //    Gateway nach der Rotation gemeldet (live per Probe verifiziert).
                 const newStored = (compResult.info && compResult.info.stored_session_id) || '';
                 if (!newStored) throw new Error('Keine neue Session-ID von session.compress');
-                migratePending = { oldId: activeSessionId || hermesSessionId, newStored, summary: compResult.summary ? (compResult.summary.headline || '') : '' };
+                // v0.0.179: Summary in LOKALE Konstante — migratePending darf nicht mehr als
+                // einzige Quelle dienen (updateCtxWarning konnte es zwischenzeitlich nullen,
+                // siehe Z. 2805 — TypeError-Fehler 2026-08-25).
+                const migSummary = (compResult.summary && compResult.summary.headline) ? compResult.summary.headline : '';
+                migratePending = { oldId: activeSessionId || hermesSessionId, newStored, summary: migSummary };
 
                 // 3) Auf die Fortsetzungs-Session wechseln (restartWS → resume macht der
                 //    onopen-Pfad automatisch mit der neuen stored-id)
@@ -2869,7 +2878,7 @@
                 const bal = (compResult.removed != null && compResult.removed > 0)
                     ? '(' + compResult.removed + ' Nachrichten entfernt, ' + (compResult.before_tokens ?? 0) + ' → ' + (compResult.after_tokens ?? 0) + ' Tokens) '
                     : '';
-                addMsg('system', '📋 Session weitergeführt — Fortsetzung mit komprimiertem Kontext ' + bal + (migratePending.summary ? '— ' + migratePending.summary : ''));
+                addMsg('system', '📋 Session weitergeführt — Fortsetzung mit komprimiertem Kontext ' + bal + (migSummary ? '— ' + migSummary : ''));
 
                 // Session-Label aktualisieren
                 const label = document.getElementById('currentSessionLabel');
@@ -2880,7 +2889,14 @@
             } catch (err) {
                 // Fehler → Banner mit Hinweis (v0.0.178: sichtbar machen — der ▶-Button ist
                 // immer klickbar, der Klick kann also auch ohne vorherige Warnung kommen)
-                el.innerHTML = '⚠️ Migration fehlgeschlagen: ' + err.message + '. <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
+                // v0.0.179: „session busy“ (4009) verständlich übersetzen — der ▶ ist immer
+                // klickbar, ein Klick während eines laufenden Agent-Turns ist jetzt der
+                // Normalfall (Hermes: „session busy — /interrupt the current turn before /compress“).
+                const rawMsg = (err && err.message) ? err.message : 'Unbekannter Fehler';
+                const friendly = /session busy/i.test(rawMsg)
+                    ? 'Die Session ist gerade beschäftigt (der Agent arbeitet noch). Erst mit dem ⏹-Button beenden oder kurz warten, dann „Session weiterführen“ erneut versuchen.'
+                    : rawMsg;
+                el.innerHTML = '⚠️ Migration fehlgeschlagen: ' + friendly + '. <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
                 el.classList.remove('hidden');
                 migratePending = null;
             } finally {
