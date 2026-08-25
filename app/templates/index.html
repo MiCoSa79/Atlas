@@ -204,15 +204,17 @@
         #composer .ctx-warn-btn { width:auto; height:auto; box-sizing:border-box; padding:5px 12px; background:rgba(233,69,96,.25); border:1px solid rgba(233,69,96,.5); border-radius:999px; color:#fff; cursor:pointer; font-size:12px; margin-left:auto; white-space:nowrap; flex-shrink:0; line-height:1.4; }
         #composer .ctx-warn-btn:hover { background:rgba(233,69,96,.4); }
         #composer .ctx-warn-btn:disabled { opacity:.4; cursor:default; }
-        /* Interrupt-Button (v0.0.175, Layout-Fix v0.0.176): sitzt seit v0.0.176 IN der
-           Composer-Button-Zeile (zwischen Anhängen und Senden, 42px wie attachBtn) —
-           keine eigene .interrupt-row mehr, dadurch KEIN Layout-Shift der Kontext-/
-           Token-Anzeige (statusBar). Idle: dezentes Icon wie die übrigen Buttons;
-           aktiver Turn: rotes Icon + roter Rand. */
-        #composer .interrupt-btn { width:42px; height:42px; display:flex; align-items:center; justify-content:center; background:none; border:1px solid transparent; border-radius:8px; color:var(--muted); cursor:pointer; flex-shrink:0; padding:0; transition:color .15s, border-color .15s, background .15s, opacity .15s; }
-        #composer .interrupt-btn:disabled { opacity:.45; cursor:default; }
-        #composer .interrupt-btn:not(:disabled) { color:#e5484d; border-color:rgba(229,72,77,.5); }
-        #composer .interrupt-btn:not(:disabled):hover { background:rgba(229,72,77,.12); }
+        /* Interrupt-Button (v0.0.175, Layout v0.0.176, RUND v0.0.177) + „Session
+           weiterführen"-Button (migrateBtn ▶, v0.0.177): sitzen IN der Composer-Button-Zeile
+           zwischen Anhängen und Senden, 42px RUND (border-radius:50%) wie Anhängen/Senden —
+           keine eigene .interrupt-row mehr, dadurch KEIN Layout-Shift der Kontext-/Token-
+           Anzeige (statusBar). Idle: dezentes Icon wie die übrigen Buttons (opacity .45);
+           aktiv (Interrupt: Turn läuft / migrateBtn: rote Kontext-Warnung sichtbar):
+           rotes Icon + roter Rand. */
+        #composer .interrupt-btn, #composer .migrate-btn { width:42px; height:42px; display:flex; align-items:center; justify-content:center; background:none; border:1px solid transparent; border-radius:50%; color:var(--muted); cursor:pointer; flex-shrink:0; padding:0; transition:color .15s, border-color .15s, background .15s, opacity .15s; }
+        #composer .interrupt-btn:disabled, #composer .migrate-btn:disabled { opacity:.45; cursor:default; }
+        #composer .interrupt-btn:not(:disabled), #composer .migrate-btn:not(:disabled) { color:#e5484d; border-color:rgba(229,72,77,.5); }
+        #composer .interrupt-btn:not(:disabled):hover, #composer .migrate-btn:not(:disabled):hover { background:rgba(229,72,77,.12); }
         /* Scroll-to-Bottom-FAB (v0.0.131): erscheint nur, wenn der Nutzer nach oben
            gescrollt hat (stickToBottom=false), führt per Klick ans Ende zurück.
            v0.0.132: Position wird per ResizeObserver an die aktuelle Composer-Höhe
@@ -420,6 +422,12 @@
                      wirkt IMMER auf die aktive Session (hermesSessionId); idle gedimmt, bei laufendem Turn rot -->
                 <button id="interruptBtn" class="interrupt-btn" type="button" title="Turn unterbrechen (session.interrupt)" aria-label="Turn unterbrechen" disabled>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+                </button>
+                <!-- Session weiterführen (v0.0.177): ▶ dauerhaft im Composer — komprimiert den
+                     Kontext und wechselt in eine Fortsetzungs-Session; gedimmt solange die rote
+                     Kontext-Warnung nicht aktiv ist, dann roter Rand -->
+                <button id="migrateBtn" class="migrate-btn" type="button" title="Session weiterführen (Kontext komprimieren — neue Session)" aria-label="Session weiterführen" disabled>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
                 </button>
                 <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
             </div>
@@ -2146,6 +2154,7 @@
 
         $('attachBtn').addEventListener('click', () => $('fileInput').click());
         $('interruptBtn').addEventListener('click', interruptTurn);   // v0.0.175
+        $('migrateBtn').addEventListener('click', onMigrateClick);    // v0.0.177: ▶ Session weiterführen (Kontext komprimieren)
         $('fileInput').addEventListener('change', async e => {
             const files = e.target.files;
             if (!files.length) return;
@@ -2775,21 +2784,34 @@
             const el = document.getElementById('ctxWarn');
             if (!el) return;
             if (sessionCtxPct >= CTX_WARN_PCT) {
-                // Banner mit einem Button: „Weiterführen" (native LLM-Kompression + neue Session)
-                el.innerHTML = '⚠️ Session-Kontext ~' + sessionCtxPct + '% voll — Session weiterführen (komprimiert den Kontext in eine neue Session). <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button>';
+                // Reine Warnmeldung (v0.0.177): der „Session weiterführen“-Button sitzt fest im
+                // Composer (#migrateBtn ▶) — die rote Meldung ist nur noch Hinweis.
+                el.innerHTML = '⚠️ Session-Kontext ~' + sessionCtxPct + '% voll — mit ▶ (Session weiterführen) in eine neue Session wechseln (komprimiert den Kontext).';
                 el.classList.remove('hidden');
             } else if (sessionCtxPct === 0 && sessionMsgCount >= CTX_WARN_MSGS) {
                 // v0.0.115: Trigger 2 (Nachrichtenzahl) NUR solange Kontext-% unbekannt
                 // (Resume-Fallback). Nach der ersten Antwort entscheidet nur noch der
                 // exakte context_percent — sonst bliebe das Banner bei 400+Nachrichten
                 // dauerhaft stehen, obwohl der Kontext nach Kompression wieder klein ist.
-                el.innerHTML = '⚠️ Session sehr groß (' + sessionMsgCount + ' Nachrichten) — Session weiterführen (komprimiert den Kontext in eine neue Session). <button class="ctx-warn-btn" onclick="onMigrateClick()">📋 Session weiterführen</button>';
+                el.innerHTML = '⚠️ Session sehr groß (' + sessionMsgCount + ' Nachrichten) — mit ▶ (Session weiterführen) in eine neue Session wechseln (komprimiert den Kontext).';
                 el.classList.remove('hidden');
             } else {
                 el.innerHTML = '';
                 el.classList.add('hidden');
                 migratePending = null;
             }
+            updateMigrateBtn();
+        }
+
+        // v0.0.177: Zustand des ▶-Buttons (#migrateBtn) — aktiv (roter Rand) GENAU dann,
+        // wenn die rote Kontext-Warnung sichtbar und keine Migration im Gange ist;
+        // sonst dezent gedimmt (disabled).
+        function updateMigrateBtn() {
+            const btn = $('migrateBtn');
+            if (!btn) return;
+            const el = document.getElementById('ctxWarn');
+            const needed = !!(el && !el.classList.contains('hidden') && !migratePending && migrateBtnRpcId === null);
+            btn.disabled = !needed;
         }
 
         // Button-Handler: "Session weiterführen" — native Hermes-Kompression + Wechsel in die
@@ -2801,9 +2823,10 @@
             if (migratePending || migrateBtnRpcId !== null) return;  // nur 1 Klick
             const el = document.getElementById('ctxWarn');
             if (!el) return;
-            // Button: "⏳ Migration läuft…" + disable
+            // Button: "⏳ Migration läuft…" + disable (auch den Composer-▶-Button)
             el.innerHTML = '⏳ Migration läuft… (native Kompression — kann ein paar Sekunden dauern)';
             migrateBtnRpcId = 'migrating';
+            updateMigrateBtn();
             try {
                 if (!hermesSessionId && !activeSessionId) throw new Error('Keine aktive Session');
 
@@ -2855,6 +2878,7 @@
                 migratePending = null;
             } finally {
                 migrateBtnRpcId = null;
+                updateMigrateBtn();   // v0.0.177: Button-Zustand nach Migration synchronisieren (Retry möglich, wenn Warnung noch sichtbar)
             }
         }
 
