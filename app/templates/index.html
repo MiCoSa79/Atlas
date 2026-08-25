@@ -204,6 +204,11 @@
         #composer .ctx-warn-btn { width:auto; height:auto; box-sizing:border-box; padding:5px 12px; background:rgba(233,69,96,.25); border:1px solid rgba(233,69,96,.5); border-radius:999px; color:#fff; cursor:pointer; font-size:12px; margin-left:auto; white-space:nowrap; flex-shrink:0; line-height:1.4; }
         #composer .ctx-warn-btn:hover { background:rgba(233,69,96,.4); }
         #composer .ctx-warn-btn:disabled { opacity:.4; cursor:default; }
+        #composer .interrupt-row { display:flex; justify-content:flex-end; margin-top:6px; }
+        #composer .interrupt-btn { width:36px; height:36px; display:flex; align-items:center; justify-content:center; background:none; border:1px solid var(--border); border-radius:8px; color:var(--muted); cursor:pointer; flex-shrink:0; padding:0; transition:color .15s, border-color .15s, background .15s; }
+        #composer .interrupt-btn:disabled { opacity:.45; cursor:default; }
+        #composer .interrupt-btn:not(:disabled) { color:#e5484d; border-color:rgba(229,72,77,.5); }
+        #composer .interrupt-btn:not(:disabled):hover { background:rgba(229,72,77,.12); }
         /* Scroll-to-Bottom-FAB (v0.0.131): erscheint nur, wenn der Nutzer nach oben
            gescrollt hat (stickToBottom=false), führt per Klick ans Ende zurück.
            v0.0.132: Position wird per ResizeObserver an die aktuelle Composer-Höhe
@@ -408,6 +413,12 @@
                 <input id="fileInput" type="file" hidden autocomplete="off" multiple>
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
                 <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
+            </div>
+            <!-- Turn-Unterbrechen (session.interrupt, v0.0.175): unter Upload/Senden — wirkt IMMER auf die aktive Session (hermesSessionId) -->
+            <div class="interrupt-row">
+                <button id="interruptBtn" class="interrupt-btn" type="button" title="Turn unterbrechen (session.interrupt)" aria-label="Turn unterbrechen" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+                </button>
             </div>
             <!-- Kontext-Warnung bei sehr großen Sessions (v0.0.112) -->
             <div id="ctxWarn" class="ctx-warn hidden"></div>
@@ -1391,6 +1402,29 @@
             turnActive = false;
             cancelWorkingResume();
             hideWorkingStatus();
+            updateInterruptBtn();   // v0.0.175: Turn-Ende → Interrupt-Button dimmen
+        }
+
+        // ============ session.interrupt (v0.0.175) ============
+        // Stopp-Button unter Upload/Senden bricht den Turn der AKTIVEN Session ab.
+        // hermesSessionId = Live-ID, wird bei jedem create/resume aktualisiert und in
+        // restartWS geleert → der Button wirkt nach Session-Wechsel automatisch auf die
+        // aktuelle Session (kein ID-Caching nötig).
+        let interruptRpcId = null;   // laufende session.interrupt-Anfrage (Doppel-Klick-Schutz)
+
+        function interruptTurn() {
+            if (interruptRpcId !== null) return;      // Anfrage läuft bereits
+            if (!turnActive) return;                   // kein laufender Turn (Button ist dann disabled)
+            if (!hermesSessionId) { addMsg('system', '⚠️ Keine aktive Session'); return; }
+            if (!ws || ws.readyState !== WebSocket.OPEN) { addMsg('system', '⚠️ Nicht verbunden'); return; }
+            interruptRpcId = sendRpc('session.interrupt', { session_id: hermesSessionId });
+            updateInterruptBtn();
+        }
+
+        function updateInterruptBtn() {
+            const btn = $('interruptBtn');
+            if (!btn) return;
+            btn.disabled = !(interruptRpcId === null && turnActive && !!hermesSessionId && ws && ws.readyState === WebSocket.OPEN);
         }
 
         function showWorkingStatus() {
@@ -1497,6 +1531,19 @@
                     else cb(frame);
                     return;
                 }
+                // v0.0.175: session.interrupt-Antwort — Doppel-Klick-Schutz freigeben + Feedback.
+                // MUSS vor dem RPC-response-captured-Block stehen (dessen return würde sie schlucken).
+                if (interruptRpcId !== null && String(frame.id) === String(interruptRpcId)) {
+                    interruptRpcId = null;
+                    updateInterruptBtn();
+                    if (frame.error) {
+                        addMsg('system', '⚠️ Unterbrechen fehlgeschlagen: ' + (frame.error.message || 'unbekannter Fehler'));
+                    } else {
+                        endWorkingTurn();   // Arbeitszeile „Agent arbeitet…“ beenden
+                        addMsg('system', '⏹ Turn unterbrochen');
+                    }
+                    return;
+                }
                 // v0.0.128: RPC-Antwort OHNE Callback — beim nächsten Test sofort sichtbar,
                 // welche Antworten kein Ziel finden (Diagnose statt stillem Verlust).
                 if (frame.id !== undefined && !frame.method && frame.result && Object.keys(pendingRpcCallbacks).length > 0) {
@@ -1508,6 +1555,7 @@
                     if (createRpcId !== null && frame.id === createRpcId && frame.result && frame.result.session_id) {
                     // session.create (Neue Unterhaltung)
                     hermesSessionId = frame.result.session_id;
+                    updateInterruptBtn();   // v0.0.175: Live-ID aktualisiert — Button-Zustand neu bewerten
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     messagesDiv.innerHTML = '';
                     endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
@@ -1541,6 +1589,7 @@
                     // findet prompt.submit die Session in der Live-Registry.
                     console.log('[Atlas] resume antwortet, Live-Session-ID = ' + frame.result.session_id);
                     hermesSessionId = frame.result.session_id;
+                    updateInterruptBtn();   // v0.0.175: Live-ID nach Session-Wechsel aktualisiert
                     resumeRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     flushPendingMessages();  // gepufferte Nachrichten sofort senden
                     // Fortgesetzte Session als "letzte" merken.
@@ -1711,6 +1760,7 @@
                                     if (frame.result && frame.result.status === 'streaming') {
                                         turnActive = true;   // v0.0.141: Turn läuft — Resume-Timer darf später wieder einblenden
                                         showWorkingStatus();
+                                        updateInterruptBtn();   // v0.0.175: Turn aktiv → Stop-Button scharf
                                     }
                                     if (frame.error) {
                                         pendingAttachResponses[frame.id] = { error: frame.error };
@@ -2092,6 +2142,7 @@
         }
 
         $('attachBtn').addEventListener('click', () => $('fileInput').click());
+        $('interruptBtn').addEventListener('click', interruptTurn);   // v0.0.175
         $('fileInput').addEventListener('change', async e => {
             const files = e.target.files;
             if (!files.length) return;
