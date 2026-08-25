@@ -205,16 +205,20 @@
         #composer .ctx-warn-btn:hover { background:rgba(233,69,96,.4); }
         #composer .ctx-warn-btn:disabled { opacity:.4; cursor:default; }
         /* Interrupt-Button (v0.0.175, Layout v0.0.176, RUND v0.0.177) + „Session
-           weiterführen"-Button (migrateBtn ▶, v0.0.177): sitzen IN der Composer-Button-Zeile
-           zwischen Anhängen und Senden, 42px RUND (border-radius:50%) wie Anhängen/Senden —
-           keine eigene .interrupt-row mehr, dadurch KEIN Layout-Shift der Kontext-/Token-
-           Anzeige (statusBar). Idle: dezentes Icon wie die übrigen Buttons (opacity .45);
-           aktiv (Interrupt: Turn läuft / migrateBtn: rote Kontext-Warnung sichtbar):
-           rotes Icon + roter Rand. */
+           weiterführen"-Button (migrateBtn ▶, v0.0.177; IMMER klickbar v0.0.178):
+           sitzen IN der Composer-Button-Zeile zwischen Anhängen und Senden, 42px RUND
+           (border-radius:50%) wie Anhängen/Senden — keine eigene .interrupt-row mehr,
+           dadurch KEIN Layout-Shift der Kontext-/Token-Anzeige (statusBar).
+           Interrupt: disabled solange kein Turn (opacity .45), rot bei laufendem Turn.
+           migrateBtn: NIE disabled — gedimmt nur optisch via .inactive-Klasse (keine
+           rote Warnung), rot wenn die rote Kontext-Warnung sichtbar ist. */
         #composer .interrupt-btn, #composer .migrate-btn { width:42px; height:42px; display:flex; align-items:center; justify-content:center; background:none; border:1px solid transparent; border-radius:50%; color:var(--muted); cursor:pointer; flex-shrink:0; padding:0; transition:color .15s, border-color .15s, background .15s, opacity .15s; }
         #composer .interrupt-btn:disabled, #composer .migrate-btn:disabled { opacity:.45; cursor:default; }
-        #composer .interrupt-btn:not(:disabled), #composer .migrate-btn:not(:disabled) { color:#e5484d; border-color:rgba(229,72,77,.5); }
-        #composer .interrupt-btn:not(:disabled):hover, #composer .migrate-btn:not(:disabled):hover { background:rgba(229,72,77,.12); }
+        #composer .interrupt-btn:not(:disabled) { color:#e5484d; border-color:rgba(229,72,77,.5); }
+        #composer .interrupt-btn:not(:disabled):hover { background:rgba(229,72,77,.12); }
+        #composer .migrate-btn.inactive { opacity:.45; }
+        #composer .migrate-btn:not(.inactive) { color:#e5484d; border-color:rgba(229,72,77,.5); }
+        #composer .migrate-btn:not(.inactive):hover { background:rgba(229,72,77,.12); }
         /* Scroll-to-Bottom-FAB (v0.0.131): erscheint nur, wenn der Nutzer nach oben
            gescrollt hat (stickToBottom=false), führt per Klick ans Ende zurück.
            v0.0.132: Position wird per ResizeObserver an die aktuelle Composer-Höhe
@@ -426,7 +430,7 @@
                 <!-- Session weiterführen (v0.0.177): ▶ dauerhaft im Composer — komprimiert den
                      Kontext und wechselt in eine Fortsetzungs-Session; gedimmt solange die rote
                      Kontext-Warnung nicht aktiv ist, dann roter Rand -->
-                <button id="migrateBtn" class="migrate-btn" type="button" title="Session weiterführen (Kontext komprimieren — neue Session)" aria-label="Session weiterführen" disabled>
+                <button id="migrateBtn" class="migrate-btn inactive" type="button" title="Session weiterführen (Kontext komprimieren — neue Session)" aria-label="Session weiterführen">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
                 </button>
                 <button data-action="send" style="width:42px; height:42px; border:none; border-radius:50%; background:var(--accent); color:#fff; font-size:17px; cursor:pointer; flex-shrink:0;">➤</button>
@@ -2803,15 +2807,16 @@
             updateMigrateBtn();
         }
 
-        // v0.0.177: Zustand des ▶-Buttons (#migrateBtn) — aktiv (roter Rand) GENAU dann,
-        // wenn die rote Kontext-Warnung sichtbar und keine Migration im Gange ist;
-        // sonst dezent gedimmt (disabled).
+        // v0.0.177/178: Zustand des ▶-Buttons (#migrateBtn) — aktiv (roter Rand) GENAU dann,
+        // wenn die rote Kontext-Warnung sichtbar und keine Migration im Gange ist. Der Button
+        // ist IMMER anklickbar (kein disabled, v0.0.178): ohne Warnung nur optisch gedimmt via
+        // .inactive-Klasse; den Doppel-Klick-Schutz übernimmt der Logik-Guard in onMigrateClick.
         function updateMigrateBtn() {
             const btn = $('migrateBtn');
             if (!btn) return;
             const el = document.getElementById('ctxWarn');
             const needed = !!(el && !el.classList.contains('hidden') && !migratePending && migrateBtnRpcId === null);
-            btn.disabled = !needed;
+            btn.classList.toggle('inactive', !needed);
         }
 
         // Button-Handler: "Session weiterführen" — native Hermes-Kompression + Wechsel in die
@@ -2873,8 +2878,10 @@
                 // 5) Neue WS-Verbindung herstellen (onopen resumt die neue stored-id)
                 restartWS();
             } catch (err) {
-                // Fehler → Banner mit Hinweis
+                // Fehler → Banner mit Hinweis (v0.0.178: sichtbar machen — der ▶-Button ist
+                // immer klickbar, der Klick kann also auch ohne vorherige Warnung kommen)
                 el.innerHTML = '⚠️ Migration fehlgeschlagen: ' + err.message + '. <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
+                el.classList.remove('hidden');
                 migratePending = null;
             } finally {
                 migrateBtnRpcId = null;
