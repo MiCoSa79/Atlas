@@ -196,6 +196,15 @@
         #composer input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 20px; color: var(--text); font-size: 15px; padding: 10px 14px; outline: none; }
         #composer input:focus { border-color: var(--accent); }
         #composer button { width: 42px; height: 42px; border: none; border-radius: 50%; background: var(--accent); color: #fff; font-size: 17px; cursor: pointer; flex-shrink: 0; }
+        /* Composer-Zeile (v0.0.186): Textarea + Aktions-Buttons in einer Flex-Zeile.
+           Mobile (<=640px): ZWEI Zeilen — Textarea volle Breite (Zeile 1), Buttons
+           rechtsbündig (Zeile 2) — vorher blieben nur ~46% Breite für das Feld. */
+        #composer .composer-row { display: flex; gap: 8px; align-items: center; max-width: 100%; min-width: 0; }
+        #composer textarea#input { flex: 1; min-width: 0; }
+        @media (max-width: 640px) {
+            #composer .composer-row { flex-wrap: wrap; justify-content: flex-end; }
+            #composer textarea#input { flex: 1 1 100%; }
+        }
         /* Kontext-Warnung: Banner + Button (v0.0.112, Migrate v0.0.113)
            Spezifität #composer .ctx-warn-btn > #composer button — sonst wird der
            Button vom 42px-Kreis-Styling des Composer erwischt (blauer Kreis, v0.0.115-Fix). */
@@ -416,9 +425,9 @@
         <div id="composer" style="flex-direction:column; padding: 10px; max-width:100%; box-sizing:border-box;">
             <!-- Datei-Vorschau -->
             <div id="filePreview" style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; max-width:100%;"></div>
-            <div style="display:flex; gap:8px; align-items:center; max-width:100%; min-width:0;">
+            <div class="composer-row">
                 <label class="sr-only" for="input">Nachricht an Atlas</label>
-                <textarea id="input" rows="1" placeholder="Nachricht an Atlas..." autocomplete="off" style="flex:1; min-width:0; background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:16px; font-family:inherit; line-height:20px; padding:10px 14px; outline:none; resize:none; overflow-y:auto; max-height:250px; box-sizing:border-box; white-space:pre-wrap;"></textarea>
+                <textarea id="input" rows="1" placeholder="Nachricht an Atlas..." autocomplete="off" style="background:var(--bg); border:1px solid var(--border); border-radius:20px; color:var(--text); font-size:16px; font-family:inherit; line-height:20px; padding:10px 14px; outline:none; resize:none; overflow-y:auto; max-height:250px; box-sizing:border-box; white-space:pre-wrap;"></textarea>
                 <label class="sr-only" for="fileInput">Datei anhängen</label>
                 <input id="fileInput" type="file" hidden autocomplete="off" multiple>
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
