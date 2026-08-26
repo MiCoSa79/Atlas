@@ -2851,8 +2851,10 @@
                 }
                 console.log('[Atlas] Migration: session.compress OK (status=' + compResult.status + ', removed=' + (compResult.removed ?? 0) + ', ' + (compResult.before_messages ?? 0) + '→' + (compResult.after_messages ?? 0) + ' Nachrichten)');
 
-                // 2) Neue (Fortsetzungs-)Session übernehmen: info.stored_session_id ist vom
-                //    Gateway nach der Rotation gemeldet (live per Probe verifiziert).
+                // 2) Ziel-Session bestimmen: info.stored_session_id meldet, in welche Session
+                //    das Gateway die Kompression gelegt hat — das ist nach Live-Probe 4
+                //    (2026-08-26) praktisch IMMER dieselbe Session (in-place-Commit). Eine
+                //    echte Rotation gibt es im aktuellen Hermes-Build nicht.
                 const newStored = (compResult.info && compResult.info.stored_session_id) || '';
                 const prevStored = localStorage.getItem('atlas_last_session') || '';
                 // v0.0.179: Summary in LOKALE Konstante — migratePending darf nicht mehr als
@@ -2860,36 +2862,35 @@
                 // siehe Z. 2805 — TypeError-Fehler 2026-08-25).
                 const migSummary = (compResult.summary && compResult.summary.headline) ? compResult.summary.headline : '';
 
-                // v0.0.180: Noop-Erkennung — „komprimiert, aber kein neuer Chat“ ist KEIN
-                // Fehler, sondern: es gibt nichts zu komprimieren (Verlauf zu kurz / keine
-                // Änderung). Live-Probe 2026-08-25 (127.0.0.1:9119, probe_compress3): noop →
-                // removed=0, before==after, info.stored_session_id = GLEICHE Session; leere
-                // Session → keine stored_session_id im info. Der alte Code „wechselte“
-                // trotzdem (restartWS → resume derselben Session) → exakt das gemeldete
-                // Verhalten: „komprimiert“-Erfolg + ready, aber kein neuer Chat. Jetzt:
-                // transparente Info-Meldung statt stillem Noop-Wechsel.
-                const removedNoop = compResult.removed ?? 0;
-                const noopBySummary = /no changes from compression/i.test(migSummary);
-                const noopByCounts = removedNoop === 0 &&
-                    (compResult.before_messages == null || compResult.before_messages === compResult.after_messages);
-                const isNoop = noopBySummary || noopByCounts;
-                if (isNoop && (!newStored || newStored === prevStored)) {
-                    const anz = (compResult.before_messages ?? 0) + ((compResult.before_messages ?? 0) === 1 ? ' Nachricht' : ' Nachrichten');
-                    const hinweis = '„Session weiterführen“: Kein Kompressionsbedarf (' + anz + ' im Verlauf) — der Chat bleibt unverändert.';
-                    el.innerHTML = 'ℹ️ ' + hinweis + ' <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
-                    el.classList.remove('hidden');
-                    addMsg('system', 'ℹ️ ' + hinweis + ' Meist entlastet der Button erst bei langem Verlauf.');
-                    migratePending = null;
-                    return;   // kein Wechsel — finally setzt Button-Zustand zurück → erneuter Klick möglich
+                // v0.0.181: Das Gateway rotiert bei session.compress NICHT — Live-Probe
+                // 2026-08-26 (probe_compress4_20260826.py, 8 große Nachrichten): die
+                // Kompression wird in place committet (in_place_committed), info
+                // .stored_session_id bleibt die GLEICHE Session, in state.db kein
+                // ended_at, keine Continuation. Es gibt also prinzipiell nie eine neue
+                // Session vom Gateway zum Wechseln. Atlas erzwingt den Wechsel deshalb
+                // selbst: wenn keine Rotation stattfand (stored_session_id fehlt oder
+                // == vorherige), wird via session.create eine NEUE Session angelegt und
+                // der Chat dorthin gewechselt. ▶ öffnet damit IMMER einen neuen Chat.
+                let targetStored = newStored;
+                let forcedNewChat = false;
+                if (!newStored || newStored === prevStored) {
+                    const cr = await fetchRpc('session.create', {
+                        close_on_disconnect: false, source: 'webui', profile: selectedProfile
+                    });
+                    if (cr && cr.stored_session_id) {
+                        targetStored = cr.stored_session_id;
+                        forcedNewChat = true;
+                    } else {
+                        throw new Error('session.create: keine neue Session-ID (Gateway unerwartet)');
+                    }
                 }
-                if (!newStored) throw new Error('session.compress: Rotation ohne neue Session-ID (Gateway unerwartet)');
-                migratePending = { oldId: activeSessionId || hermesSessionId, newStored, summary: migSummary };
+                migratePending = { oldId: activeSessionId || hermesSessionId, newStored: targetStored, summary: migSummary };
 
-                // 3) Auf die Fortsetzungs-Session wechseln (restartWS → resume macht der
-                //    onopen-Pfad automatisch mit der neuen stored-id)
+                // 3) Auf die (neue bzw. Fortsetzungs-)Session wechseln (restartWS → resume
+                //    macht der onopen-Pfad automatisch mit der neuen stored-id)
                 hermesSessionId = null;   // alte Live-id verwerfen
-                activeSessionId = newStored;
-                localStorage.setItem('atlas_last_session', newStored);
+                activeSessionId = targetStored;
+                localStorage.setItem('atlas_last_session', targetStored);
                 messagesDiv.innerHTML = '';
                 endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                 sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0;
@@ -2898,18 +2899,30 @@
                 el.innerHTML = '';
                 el.classList.add('hidden');
 
-                // 4) System-Hinweis: Fortsetzung + (falls gemeldet) Entlastungs-Bilanz
+                // 4) Neue WS-Verbindung herstellen (onopen resumt die neue stored-id).
+                //    VOR addMsg: restartWS leert messagesDiv — die System-Meldung würde
+                //    sonst mit dem Chat geleert (v0.0.181).
+                restartWS();
+
+                // 5) System-Hinweis: Fortsetzung + (falls gemeldet) Entlastungs-Bilanz —
+                //    im FRISCHEN Chat (nach dem Leeren durch restartWS)
                 const bal = (compResult.removed != null && compResult.removed > 0)
                     ? '(' + compResult.removed + ' Nachrichten entfernt, ' + (compResult.before_tokens ?? 0) + ' → ' + (compResult.after_tokens ?? 0) + ' Tokens) '
                     : '';
-                addMsg('system', '📋 Session weitergeführt — Fortsetzung mit komprimiertem Kontext ' + bal + (migSummary ? '— ' + migSummary : ''));
+                if (forcedNewChat) {
+                    // Kein Gateway-Wechsel (Hermes komprimiert in place) → wir haben eine
+                    // frische Session erzeugt; die alte Session bleibt im Chatverlauf stehen.
+                    addMsg('system', '📋 Session weitergeführt — neuer Chat geöffnet.' +
+                        (bal ? ' Vorherige Session entlastet: ' + bal.trim() + '. ' : ' ') +
+                        'Die vorherige Session blieb unverändert im Chatverlauf (Hermes komprimiert ohne Session-Wechsel).' +
+                        (migSummary ? ' — ' + migSummary : ''));
+                } else {
+                    addMsg('system', '📋 Session weitergeführt — Fortsetzung mit komprimiertem Kontext ' + bal + (migSummary ? '— ' + migSummary : ''));
+                }
 
                 // Session-Label aktualisieren
                 const label = document.getElementById('currentSessionLabel');
                 if (label) { label.textContent = ''; label.classList.add('hidden'); }
-
-                // 5) Neue WS-Verbindung herstellen (onopen resumt die neue stored-id)
-                restartWS();
             } catch (err) {
                 // Fehler → Banner mit Hinweis (v0.0.178: sichtbar machen — der ▶-Button ist
                 // immer klickbar, der Klick kann also auch ohne vorherige Warnung kommen)
@@ -2925,6 +2938,11 @@
                 migratePending = null;
             } finally {
                 migrateBtnRpcId = null;
+                // v0.0.181: migratePending auch nach ERFOLGREICHEM Wechsel zurücksetzen —
+                // vorher blieb es nach dem Erfolg gesetzt und blockierte den ▶-Guard
+                // („migratePending ||“) für den NÄCHSTEN Klick bis zum nächsten
+                // updateCtxWarning-Zyklus. (onMigrateClick liest es nur bis restartWS.)
+                migratePending = null;
                 updateMigrateBtn();   // v0.0.177: Button-Zustand nach Migration synchronisieren (Retry möglich, wenn Warnung noch sichtbar)
             }
         }
