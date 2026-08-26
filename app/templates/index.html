@@ -2839,6 +2839,9 @@
             updateMigrateBtn();
             try {
                 if (!hermesSessionId && !activeSessionId) throw new Error('Keine aktive Session');
+                // v0.0.183: Live-ID der ALTEN Session merken — für die Kontext-Übernahme
+                // (session.history auf der komprimierten Session, NUR live-id-fähig).
+                const prevLive = hermesSessionId || activeSessionId;
 
                 // 1) Native Kompression anstoßen (LIVE-id, profile mitsenden — sonst wird
                 //    im falschen Profil komprimiert; v0.0.127-Lektion)
@@ -2873,7 +2876,39 @@
                 // der Chat dorthin gewechselt. ▶ öffnet damit IMMER einen neuen Chat.
                 let targetStored = newStored;
                 let forcedNewChat = false;
+                let contextSeed = '';   // v0.0.183: komprimierte Vorgeschichte für den neuen Chat
                 if (!newStored || newStored === prevStored) {
+                    // v0.0.183 KONTEXT-ÜBERNAHME: Hermes hat die alte Session (compress)
+                    // in place komprimiert — session.history liefert jetzt die KOMPRIMIERTE
+                    // Fassung (Head-Story + letzte Nachrichten). Dieser Seed wird nach dem
+                    // Wechsel als erste Nachricht in die neue Session gespielt, damit der
+                    // neue Chat die Vorgeschichte weiter kennt (Erwartung des Nutzers).
+                    // Nur mit LIVE-id möglich (stored id → 4001); Fehler sind nicht fatal.
+                    if (prevLive) {
+                        try {
+                            const hr = await fetchRpc('session.history', {
+                                session_id: prevLive,
+                                ...(selectedProfile ? { profile: selectedProfile } : {})
+                            });
+                            const hmsgs = (hr && hr.messages) || [];
+                            if (Array.isArray(hmsgs) && hmsgs.length) {
+                                let budget = 10000, parts = [];
+                                for (const hm of hmsgs.slice(-16)) {
+                                    if (!(hm && hm.text)) continue;
+                                    if (!(hm.role === 'user' || hm.role === 'assistant')) continue;
+                                    let t = String(hm.text).trim();
+                                    if (!t) continue;
+                                    if (t.length > 1800) t = t.slice(0, 1800) + '…';
+                                    if (budget - t.length < 0) break;
+                                    parts.push((hm.role === 'user' ? 'User: ' : 'KI: ') + t);
+                                    budget -= t.length;
+                                }
+                                contextSeed = parts.join('\n\n');
+                            }
+                        } catch (e) {
+                            console.warn('[Atlas] Kontext-Übernahme übersprungen:', e && e.message ? e.message : e);
+                        }
+                    }
                     const cr = await fetchRpc('session.create', {
                         close_on_disconnect: false, source: 'webui', profile: selectedProfile
                     });
@@ -2882,6 +2917,12 @@
                         forcedNewChat = true;
                     } else {
                         throw new Error('session.create: keine neue Session-ID (Gateway unerwartet)');
+                    }
+                    // Seed als ERSTE Nachricht der neuen Session: pendingMessages werden
+                    // vom onopen-/resume-Pfad nach dem WS-Neustart als prompt.submit
+                    // geflusht → der Agent übernimmt den Kontext und antwortet kurz.
+                    if (contextSeed) {
+                        pendingMessages.push('📎 Kontextübernahme aus der vorherigen Session (Hermes-Kompression):\n\n' + contextSeed + '\n\nBehandle das als übernommenen Kontext; das Anliegen des Nutzers folgt in der nächsten Nachricht.');
                     }
                 }
                 migratePending = { oldId: activeSessionId || hermesSessionId, newStored: targetStored, summary: migSummary };
@@ -2913,8 +2954,9 @@
                     // Kein Gateway-Wechsel (Hermes komprimiert in place) → wir haben eine
                     // frische Session erzeugt; die alte Session bleibt im Chatverlauf stehen.
                     addMsg('system', '📋 Session weitergeführt — neuer Chat geöffnet.' +
-                        (bal ? ' Vorherige Session entlastet: ' + bal.trim() + '. ' : ' ') +
-                        'Die vorherige Session blieb unverändert im Chatverlauf (Hermes komprimiert ohne Session-Wechsel).' +
+                        (contextSeed ? ' ✓ Kontext der vorherigen Session übernommen (komprimiert).' : '') +
+                        (bal ? ' Vorherige Session entlastet: ' + bal.trim() + '.' : '') +
+                        ' Die alte Session bleibt im Chatverlauf erhalten.' +
                         (migSummary ? ' — ' + migSummary : ''));
                 } else {
                     addMsg('system', '📋 Session weitergeführt — Fortsetzung mit komprimiertem Kontext ' + bal + (migSummary ? '— ' + migSummary : ''));
