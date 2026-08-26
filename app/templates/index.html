@@ -1507,6 +1507,8 @@
                 statusDot.classList.add('offline');
                 statusDot.classList.remove('online');
                 rejectAllPendingRpc('Verbindung getrennt');   // v0.0.120: hängende fetchRpc auflösen
+                interruptRpcId = null;   // v0.0.184: Verbindung weg → session.interrupt-Antwort kommt nie → Doppel-Klick-Schutz freigeben (sonst Button dauerhaft disabled)
+                updateInterruptBtn();
                 const isRateLimit = ev.reason && ev.reason.includes('429');
                 if (ev.reason && ev.reason !== '' && ev.reason !== 'Normal closure' && !ev.reason.startsWith('go away')) {
                     addMsg('system', '⚠️ Verbindung getrennt: ' + ev.reason);
@@ -2423,6 +2425,8 @@
                 try { old.close(); } catch (_) {}
             }
             rejectAllPendingRpc('Session gewechselt');   // v0.0.120: hängende fetchRpc auflösen
+            interruptRpcId = null;   // v0.0.184: Interrupt-Anfrage gehört zur alten Verbindung — Antwort kommt nach close() nie → freigeben (sonst Button dauerhaft disabled)
+            updateInterruptBtn();
             hermesSessionId = null;
             messagesDiv.innerHTML = '';
             bubble = null;
@@ -2833,6 +2837,11 @@
             if (migratePending || migrateBtnRpcId !== null) return;  // nur 1 Klick
             const el = document.getElementById('ctxWarn');
             if (!el) return;
+            // v0.0.184: Fortschritts-Meldung IM alten Chat — die native Kompression kann je nach
+            // Sessiongröße 30–90 s dauern (LLM-Summary über das Aux-Modell); ohne Rückmeldung
+            // wirkt der Klick wie „hängt“. restartWS leert den Chat erst beim Wechsel — die
+            // Meldung ist also genau während der Wartezeit im alten Chat sichtbar (gewollt).
+            const migrateChatNotice = addMsg('system', '⏳ Komprimierung läuft, bitte warten — ein neuer Chat öffnet sich gleich …');
             // Button: "⏳ Migration läuft…" + disable (auch den Composer-▶-Button)
             el.innerHTML = '⏳ Migration läuft… (native Kompression — kann ein paar Sekunden dauern)';
             migrateBtnRpcId = 'migrating';
@@ -2966,6 +2975,10 @@
                 const label = document.getElementById('currentSessionLabel');
                 if (label) { label.textContent = ''; label.classList.add('hidden'); }
             } catch (err) {
+                // v0.0.184: Chat-Hinweis entfernen — bei Fehlschlag öffnet sich KEIN neuer Chat
+                if (migrateChatNotice && migrateChatNotice.parentNode) {
+                    migrateChatNotice.parentNode.removeChild(migrateChatNotice);
+                }
                 // Fehler → Banner mit Hinweis (v0.0.178: sichtbar machen — der ▶-Button ist
                 // immer klickbar, der Klick kann also auch ohne vorherige Warnung kommen)
                 // v0.0.179: „session busy“ (4009) verständlich übersetzen — der ▶ ist immer
