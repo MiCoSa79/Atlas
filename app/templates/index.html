@@ -2854,11 +2854,35 @@
                 // 2) Neue (Fortsetzungs-)Session übernehmen: info.stored_session_id ist vom
                 //    Gateway nach der Rotation gemeldet (live per Probe verifiziert).
                 const newStored = (compResult.info && compResult.info.stored_session_id) || '';
-                if (!newStored) throw new Error('Keine neue Session-ID von session.compress');
+                const prevStored = localStorage.getItem('atlas_last_session') || '';
                 // v0.0.179: Summary in LOKALE Konstante — migratePending darf nicht mehr als
                 // einzige Quelle dienen (updateCtxWarning konnte es zwischenzeitlich nullen,
                 // siehe Z. 2805 — TypeError-Fehler 2026-08-25).
                 const migSummary = (compResult.summary && compResult.summary.headline) ? compResult.summary.headline : '';
+
+                // v0.0.180: Noop-Erkennung — „komprimiert, aber kein neuer Chat“ ist KEIN
+                // Fehler, sondern: es gibt nichts zu komprimieren (Verlauf zu kurz / keine
+                // Änderung). Live-Probe 2026-08-25 (127.0.0.1:9119, probe_compress3): noop →
+                // removed=0, before==after, info.stored_session_id = GLEICHE Session; leere
+                // Session → keine stored_session_id im info. Der alte Code „wechselte“
+                // trotzdem (restartWS → resume derselben Session) → exakt das gemeldete
+                // Verhalten: „komprimiert“-Erfolg + ready, aber kein neuer Chat. Jetzt:
+                // transparente Info-Meldung statt stillem Noop-Wechsel.
+                const removedNoop = compResult.removed ?? 0;
+                const noopBySummary = /no changes from compression/i.test(migSummary);
+                const noopByCounts = removedNoop === 0 &&
+                    (compResult.before_messages == null || compResult.before_messages === compResult.after_messages);
+                const isNoop = noopBySummary || noopByCounts;
+                if (isNoop && (!newStored || newStored === prevStored)) {
+                    const anz = (compResult.before_messages ?? 0) + ((compResult.before_messages ?? 0) === 1 ? ' Nachricht' : ' Nachrichten');
+                    const hinweis = '„Session weiterführen“: Kein Kompressionsbedarf (' + anz + ' im Verlauf) — der Chat bleibt unverändert.';
+                    el.innerHTML = 'ℹ️ ' + hinweis + ' <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
+                    el.classList.remove('hidden');
+                    addMsg('system', 'ℹ️ ' + hinweis + ' Meist entlastet der Button erst bei langem Verlauf.');
+                    migratePending = null;
+                    return;   // kein Wechsel — finally setzt Button-Zustand zurück → erneuter Klick möglich
+                }
+                if (!newStored) throw new Error('session.compress: Rotation ohne neue Session-ID (Gateway unerwartet)');
                 migratePending = { oldId: activeSessionId || hermesSessionId, newStored, summary: migSummary };
 
                 // 3) Auf die Fortsetzungs-Session wechseln (restartWS → resume macht der
