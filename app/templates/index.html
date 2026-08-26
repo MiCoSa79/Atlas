@@ -2857,7 +2857,7 @@
                 const compResult = await fetchRpc('session.compress', {
                     session_id: hermesSessionId || activeSessionId,
                     ...(selectedProfile ? { profile: selectedProfile } : {})
-                });
+                }, 300000);   // v0.0.185: 90s-Default zu knapp — Kompression mit Aux-LLM-Summary + Fallback braucht real oft >90s (82s-Messung 26.08., Nutzer-Timeout bei v0.0.184)
                 if (!compResult || (compResult.status !== 'compressed' && compResult.status !== 'aborted')) {
                     throw new Error('session.compress fehlgeschlagen' + (compResult && compResult.message ? ': ' + compResult.message : ''));
                 }
@@ -2987,7 +2987,9 @@
                 const rawMsg = (err && err.message) ? err.message : 'Unbekannter Fehler';
                 const friendly = /session busy/i.test(rawMsg)
                     ? 'Die Session ist gerade beschäftigt (der Agent arbeitet noch). Erst mit dem ⏹-Button beenden oder kurz warten, dann „Session weiterführen“ erneut versuchen.'
-                    : rawMsg;
+                    : /Zeitüberschreitung|timed out/i.test(rawMsg)
+                        ? 'Die Komprimierung hat länger als 5 Minuten gedauert (Hermes arbeitet serverseitig vermutlich trotzdem weiter). In ein paar Minuten einfach erneut „Session weiterführen“ klicken — die alte Session ist dann bereits entlastet.'
+                        : rawMsg;
                 el.innerHTML = '⚠️ Migration fehlgeschlagen: ' + friendly + '. <button class="ctx-warn-btn" onclick="updateCtxWarning()">OK</button>';
                 el.classList.remove('hidden');
                 migratePending = null;
