@@ -356,6 +356,52 @@
             .statusbar .ctx-line { justify-content: flex-start; }
         }
 
+        /* ---- Code-Blöcke in Nachrichten (v0.0.187) ---- */
+        .codeblock {
+            margin: 8px 0;
+            border: 1px solid #2a2f3a;
+            border-radius: 8px;
+            background: #0d1320;
+            overflow: hidden;
+        }
+        .codeblock-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #171e2d;
+            border-bottom: 1px solid #2a2f3a;
+            padding: 4px 6px 4px 10px;
+        }
+        .codeblock-lang {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            color: #8ab4f8;
+        }
+        .codeblock-copy {
+            font-size: 11px;
+            padding: 3px 8px;
+            border: 1px solid #3a4356;
+            border-radius: 6px;
+            background: #222b3c;
+            color: #cfd8e3;
+            cursor: pointer;
+        }
+        .codeblock-copy:hover { border-color: #4ea1ff; color: #4ea1ff; }
+        .codeblock pre {
+            margin: 0;
+            padding: 8px 10px;
+            overflow-x: auto;
+            max-height: 420px;
+            overflow-y: auto;
+        }
+        .codeblock code {
+            font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+            font-size: 12.5px;
+            line-height: 1.45;
+            color: #d5dee8;
+            white-space: pre;
+        }
 </style>
 </head>
 <body>
@@ -1153,10 +1199,24 @@
             // Text zuerst KOMPLETT escapen — label/url in den Replaces stammen aus
             // diesem escapten Text (DOCH KEIN zweites escHtml! sonst & -> &amp;amp;).
             const escaped = escHtml(text);
+            // Fenced-Code-Blöcke (```lang\n…```) ZUERST rausziehen: Inhalt bleibt
+            // Rohtext (keine Linkify/HTML), wird in <pre><code> gepackt und bekommt
+            // einen Kopieren-Button (v0.0.187). Marker \u0001N\u0001 sind von den
+            // Link-Markern (\u0000N\u0000) getrennt — keine Kollision möglich.
+            const cblocks = [];
+            let out = escaped.replace(/```([A-Za-z0-9_+\-.#]*)[ \t]*\n([\s\S]*?)```/g, (m, lang, code) => {
+                code = code.replace(/\n$/, '');   // Zeilenumbruch VOR dem Schließen gehört nicht zum Code
+                const html = '<div class="codeblock"><div class="codeblock-head">'
+                    + '<span class="codeblock-lang">' + (lang || 'code') + '</span>'
+                    + '<button type="button" class="codeblock-copy">Kopieren</button></div>'
+                    + '<pre><code>' + code + '</code></pre></div>';
+                cblocks.push(html);
+                return '\u0001' + (cblocks.length - 1) + '\u0001';
+            });
             const anchors = [];   // Platzhalter-Schutz: fertige <a>-Tags nie erneut matchen
             const SAFE_URL = /^https?:\/\/[^\s<>"'`]+$/i;
             // 1) Markdown-Links [label](url) — NUR http(s); alles andere bleibt Rohtext
-            let out = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)\]]+)\)/g, (m, label, url) => {
+            out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)\]]+)\)/g, (m, label, url) => {
                 if (!SAFE_URL.test(url)) return m;   // m ist bereits escaped
                 const html = '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
                 anchors.push(html);
@@ -1171,8 +1231,57 @@
                 return pre + '\u0000' + (anchors.length - 1) + '\u0000';
             });
             // 3) Platzhalter durch die fertigen <a>-Tags ersetzen
-            return out.replace(/\u0000(\d+)\u0000/g, (m, i) => (anchors[+i] !== undefined ? anchors[+i] : m));
+            out = out.replace(/\u0000(\d+)\u0000/g, (m, i) => (anchors[+i] !== undefined ? anchors[+i] : m));
+            // 4) Code-Blöcke zuletzt einsetzen — nichts darin wird nachbearbeitet
+            return out.replace(/\u0001(\d+)\u0001/g, (m, i) => (cblocks[+i] !== undefined ? cblocks[+i] : m));
         }
+
+        // ---- Code-Block: Kopieren in die Zwischenablage (v0.0.187) ----
+        // Event-Delegation auf document — Nachrichten werden dynamisch nachgerendert
+        // (Streaming/History), ein Listener reicht. navigator.clipboard existiert nur
+        // in secure contexts (https/localhost) — für HTTP-LAN textarea/execCommand-
+        // Fallback, damit der Button auf dem ZimaOS-Setup überall funktioniert.
+        function fallbackCopyText(text) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '0';
+            ta.style.left = '0';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            return ok;
+        }
+        function copyTextToClipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                // writeText resolved mit undefined — explizit true liefern, sonst
+                // zeigt der Button „Fehler“, obwohl kopiert wurde (jsdom-Test T15c)
+                return navigator.clipboard.writeText(text).then(function () {
+                    return true;
+                }, function () {
+                    return fallbackCopyText(text);
+                });
+            }
+            return Promise.resolve(fallbackCopyText(text));
+        }
+        document.addEventListener('click', function (e) {
+            const btn = e.target.closest('.codeblock-copy');
+            if (!btn) return;
+            const block = btn.closest('.codeblock');
+            const codeEl = block ? block.querySelector('code') : null;
+            if (!codeEl) return;
+            const text = codeEl.textContent || '';
+            const label = btn.textContent;
+            copyTextToClipboard(text).then(ok => {
+                btn.textContent = ok ? 'Kopiert ✓' : 'Fehler';
+                setTimeout(function () { btn.textContent = label; }, 1500);
+            });
+        });
 
         function addMsg(role, text) {
             const m = document.createElement('div');
