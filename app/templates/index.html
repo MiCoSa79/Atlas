@@ -1544,6 +1544,7 @@
         // restartWS geleert → der Button wirkt nach Session-Wechsel automatisch auf die
         // aktuelle Session (kein ID-Caching nötig).
         let interruptRpcId = null;   // laufende session.interrupt-Anfrage (Doppel-Klick-Schutz)
+        let lastSubmitRpcId = null;  // v0.0.188: letzte prompt.submit-Request-ID — ersetzt turnActive-ACK bei Fehler zurück
 
         function interruptTurn() {
             if (interruptRpcId !== null) return;      // Anfrage läuft bereits
@@ -1558,6 +1559,16 @@
             const btn = $('interruptBtn');
             if (!btn) return;
             btn.disabled = !(interruptRpcId === null && turnActive && !!hermesSessionId && ws && ws.readyState === WebSocket.OPEN);
+        }
+
+        // v0.0.188: Turn optimistisch als aktiv markieren, SOBALD prompt.submit gesendet
+        // wird (nicht erst aufs streaming-ACK warten). Geht dieses eine ACK verloren
+        // (WS-Reconnect-Fenster, halb-offene Verbindung), blieb der Stop-Button sonst
+        // für den GESAMTEN Turn deaktiviert — App pollt keinen session.status nach.
+        function markTurnActive() {
+            turnActive = true;
+            showWorkingStatus();
+            updateInterruptBtn();
         }
 
         function showWorkingStatus() {
@@ -1637,7 +1648,11 @@
                 const delay = isRateLimit ? 30000 : 3000;
                 setTimeout(connectWS, delay);
             };
-            ws.onerror = () => console.log('[Atlas] WS error');
+            ws.onerror = () => {
+                console.log('[Atlas] WS error');
+                interruptRpcId = null;   // v0.0.188: onerror (halb-offene Verbindung) → session.interrupt-Antwort kommt nie → Doppel-Klick-Schutz freigeben (v0.0.184 deckte nur den sauberen onclose ab)
+                updateInterruptBtn();
+            };
             ws.onmessage = ev => {
                 let frame;
                 try { frame = JSON.parse(ev.data); } catch (_) { return; }
@@ -1888,7 +1903,12 @@
                                 // bei 'frame.method !== event' verworfen und nie in
                                 // pendingAttachResponses landen → falscher Timeout im Frontend.
                                 if (frame.id !== undefined && !frame.method) {
-                                    console.log('[Atlas] RPC response captured: id=' + frame.id + ', result=' + JSON.stringify(frame.result).substring(0, 100));
+                                    // v0.0.188: CRASH-FIX — bei error-Frames ist frame.result undefined;
+                                    // JSON.stringify(undefined) === undefined → .substring crashte den ganzen
+                                    // onmessage-Handler (Befund 2026-08-27: Button tot + keine „Agent arbeitet…“-
+                                    // Zeile, sobald ein Fehler-Frame wie 4009/„session busy“ durchkam — danach
+                                    // wurden ACK/Events verworfen, bis Reload/Reconnect).
+                                    console.log('[Atlas] RPC response captured: id=' + frame.id + ', result=' + (frame.result ? JSON.stringify(frame.result).substring(0, 100) : 'undefined'));
                                     // v0.0.137: prompt.submit-ACK (result.status === 'streaming') —
                                     // Turn läuft an, „Agent arbeitet…" sofort anzeigen (Feedback
                                     // während langer Denk-/Tool-Phasen, sonst wirkt es wie „hängt").
@@ -1896,6 +1916,15 @@
                                         turnActive = true;   // v0.0.141: Turn läuft — Resume-Timer darf später wieder einblenden
                                         showWorkingStatus();
                                         updateInterruptBtn();   // v0.0.175: Turn aktiv → Stop-Button scharf
+                                        if (lastSubmitRpcId !== null && frame.id === lastSubmitRpcId) lastSubmitRpcId = null;   // v0.0.188: ACK erhalten
+                                    }
+                                    // v0.0.188: prompt.submit abgelehnt (Error) → optimistisches turnActive zurücknehmen
+                                    if (lastSubmitRpcId !== null && frame.id === lastSubmitRpcId) {
+                                        lastSubmitRpcId = null;
+                                        if (frame.error) {
+                                            turnActive = false;
+                                            updateInterruptBtn();
+                                        }
                                     }
                                     if (frame.error) {
                                         pendingAttachResponses[frame.id] = { error: frame.error };
@@ -2175,7 +2204,8 @@
                     promptText += (promptText ? '\n' : '') + refTexts.join('\n');
                 }
             }
-            sendRpc('prompt.submit', { session_id: hermesSessionId, text: promptText });
+            lastSubmitRpcId = sendRpc('prompt.submit', { session_id: hermesSessionId, text: promptText });
+            markTurnActive();   // v0.0.188: optimistisch scharf ab Senden — verlorenes streaming-ACK darf den Stop-Button nicht für den ganzen Turn deaktivieren
             // Persistenz VOR dem Leeren speichern (sonst ist pendingFiles leer!)
             saveAttachmentPreviews();
             // Nach Senden aufräumen
@@ -2203,7 +2233,8 @@
             if (!hermesSessionId) return;
             const msgs = pendingMessages.splice(0);
             for (const text of msgs) {
-                sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+                lastSubmitRpcId = sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+                markTurnActive();   // v0.0.188: wie beim Composer-Send — Button sofort scharf
             }
         }
 
