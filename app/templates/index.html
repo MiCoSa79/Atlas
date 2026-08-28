@@ -185,6 +185,13 @@
         .file-viewer .fv-body { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 10px; min-height: 0; min-width: 0; }
         .file-viewer .fv-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
         .file-viewer .fv-body iframe { width: 100%; height: 100%; min-width: 0; max-width: 100%; border: none; background: #fff; border-radius: 6px; }
+        /* v0.0.194: PDF-Canvas-Rendering (pdf.js) — Seiten untereinander, exakt auf
+           die verfügbare Breite skaliert (iOS-Browser-Viewer skaliert NICHT auf die
+           Frame-Breite, deshalb eigenes Rendering statt iframe) */
+        .file-viewer .fv-body.pdfdoc { display: block; overflow-y: auto; overflow-x: hidden; }
+        .file-viewer .pdf-status { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 8px; }
+        .file-viewer .pdf-page { text-align: center; padding-bottom: 10px; }
+        .file-viewer .pdf-page canvas { display: block; margin: 0 auto; max-width: 100%; height: auto; background: #fff; border-radius: 6px; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35); }
         .msg.thinking { align-self: flex-start; background: transparent; color: var(--muted); font-size: 12.5px; font-style: italic; line-height: 1.5; padding: 2px 10px; white-space: pre-wrap; opacity: .65; }
         .msg.thinking.done { opacity: .45; font-size: 11.5px; }
         .msg.thinking.done::after { content: ' ✓'; }
@@ -665,6 +672,10 @@
     </div>
     <!-- Build-Nummer lebt jetzt im Header (oben rechts, immer sichtbar) -->
 
+    <!-- pdf.js (v3.11.174, lokal, Apache-2.0): PDF-Vorschau wird selbst gerendert
+         (Canvas, fit-to-width) statt im iOS-Browser-Viewer — der skaliert PDFs auf
+         dem iPhone NICHT auf die Frame-Breite (v0.0.194, F46-Folge) -->
+    <script src="/static/pdfjs/pdf.min.js"></script>
     <script>
         const $ = id => document.getElementById(id);
         const authPage = $('authPage');
@@ -2612,7 +2623,7 @@
         // Download-Tab nicht wieder schließen → Bilder und PDFs werden INLINE in einem
         // Overlay mit Schließen-Button (X) angezeigt; der Download bleibt per Button
         // im Overlay erreichbar. Alle anderen Dateitypen laden direkt herunter.
-        const fileViewerState = { el: null };
+        const fileViewerState = { el: null, renderSeq: 0 };
 
         function isPreviewablePath(p) {
             return isImageFilePath(p) || /\.pdf$/i.test(p.split('?')[0]);
@@ -2660,11 +2671,67 @@
                 img.alt = fileName;
                 body.appendChild(img);
             } else {
+                // v0.0.194: PDF per pdf.js als Canvas rendern (fit-to-width auf
+                // jedem Gerät) — der iOS-Browser-Viewer skaliert sonst NICHT auf
+                // die Frame-Breite (Befund 28.08. auf dem iPhone)
+                renderPdfInOverlay(url, body, fileName);
+            }
+            v.classList.add('open');
+        }
+
+        // v0.0.194: PDF-Vorschau selbst rendern statt Browser-iframe. pdf.js
+        // (lokal unter /static/pdfjs) zeichnet jede Seite als Canvas, exakt
+        // skaliert auf die verfügbare Breite (.fv-body-Breite minus Padding).
+        // Fehlerpfad: Fallback auf den bisherigen iframe-Viewer.
+        async function renderPdfInOverlay(url, body, fileName) {
+            const myId = ++fileViewerState.renderSeq; // Abbruch-Generation
+            body.classList.add('pdfdoc');
+            body.innerHTML = '';
+            const statusEl = document.createElement('div');
+            statusEl.className = 'pdf-status';
+            statusEl.textContent = '📄 PDF wird geladen…';
+            body.appendChild(statusEl);
+            try {
+                if (typeof pdfjsLib === 'undefined') throw new Error('pdfjs fehlt (static nicht geladen)');
+                pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/pdfjs/pdf.worker.min.js';
+                // PDF-Daten über den eigenen Proxy holen (Session-Cookie), damit
+                // pdf.js betten-frei laden kann
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({ data }).promise;
+                if (myId !== fileViewerState.renderSeq) return; // Overlay inzwischen geschlossen/neu geöffnet
+                statusEl.remove();
+                const rawW = body.clientWidth || window.innerWidth || 300;
+                const availableWidth = Math.max(1, rawW - 20); // 2×10px padding
+                const dpr = window.devicePixelRatio || 1;
+                for (let p = 1; p <= pdf.numPages; p++) {
+                    if (myId !== fileViewerState.renderSeq) return;
+                    const page = await pdf.getPage(p);
+                    const base = page.getViewport({ scale: 1 });
+                    const scale = Math.max(0.1, availableWidth / base.width);
+                    const cssH = Math.floor((base.height * scale) * 100) / 100;
+                    const vp = page.getViewport({ scale: scale * dpr });
+                    const canvas = document.createElement('canvas');
+                    canvas.width = Math.max(1, Math.floor(vp.width));
+                    canvas.height = Math.max(1, Math.floor(vp.height));
+                    canvas.style.width = Math.floor(availableWidth) + 'px';
+                    canvas.style.height = Math.floor(cssH) + 'px';
+                    const wrap = document.createElement('div');
+                    wrap.className = 'pdf-page';
+                    wrap.appendChild(canvas);
+                    body.appendChild(wrap);
+                    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+                }
+            } catch (e) {
+                console.warn('[Atlas] pdf.js-Render fehlgeschlagen, iframe-Fallback:', e);
+                if (myId !== fileViewerState.renderSeq) return;
+                body.classList.remove('pdfdoc');
+                body.innerHTML = '';
                 const fr = document.createElement('iframe');
                 fr.src = url;
                 body.appendChild(fr);
             }
-            v.classList.add('open');
         }
 
         // „In anderer App öffnen…" (v0.0.192): öffnet das iOS-SHARE-SHEET mit der
@@ -2689,6 +2756,7 @@
 
         function closeFileViewer() {
             if (!fileViewerState.el) return;
+            fileViewerState.renderSeq++; // laufendes pdf.js-Rendering unwirksam machen
             fileViewerState.el.classList.remove('open');
             fileViewerState.el.querySelector('.fv-body').innerHTML = '';
         }
