@@ -2452,11 +2452,19 @@
 
         // MEDIA:-Zeile allein in einer Zeile (wie die Desktop-App):
         //   MEDIA:/opt/data/uploads/datei.pdf
-        const MEDIA_LINE_RE = /(^|\n)[\t ]*[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?[\t ]*(\n|$)/g;
+        // Toleranz: führende/trailing Markdown-Fett- oder Kursiv-Marker (** oder *)
+        // um die MEDIA:-Zeile werden mitgeschluckt (Agent schrieb z.B.
+        // „**MEDIA:/pfad/datei.pdf**") — ohne das wandern die ** in den Pfad
+        // und der Datei-Proxy liefert 404 (iPhone: Fehler-JSON statt PDF → kein
+        // „In Acrobat öffnen" im Share-Sheet).
+        const MEDIA_LINE_RE = /(^|\n)[\t ]*(?:[*]{1,2})?[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+?)(?:[*]{1,2})?[`"']?[\t ]*(\n|$)/g;
         // MEDIA:-Tag inline — WICHTIG: kein /g-Flag! Wird pro Aufruf neu erstellt
         // um lastIndex-Problem zu vermeiden.
         function makeMediaTagRe() {
-            return /[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?/;
+            // Greedy \S+ (kein Lazy!): ein Lazy-Pfad würde bei optionalen
+            // Trailing-Markern nur das erste Zeichen fressen („bild.png" → „/“).
+            // Trailing **/* bereinigt unquoteMediaPath (Schritt 2).
+            return /(?:[*]{1,2})?[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?/;
         }
 
                 function unquoteMediaPath(value) {
@@ -2470,7 +2478,11 @@
                     trimmed = trimmed.slice(1, -1);
                 }
             }
-            // 2) Abschließende Zeichensetzung entfernen (.,!?;'") — der Agent
+            // 2) Abschließende Markdown-Marker entfernen (** oder * vom Agenten
+            //    um den MEDIA:-Ausdruck gesetzt, siehe MEDIA_LINE_RE-Toleranz).
+            while (trimmed.endsWith('**')) trimmed = trimmed.slice(0, -2);
+            while (trimmed.endsWith('*')) trimmed = trimmed.slice(0, -1);
+            // 3) Abschließende Zeichensetzung entfernen (.,!?;'") — der Agent
             //    setzt diese nach dem Pfad, z.B. "datei.pdf'" oder "datei.pdf."
             const trail = "[.,!'?:;\"]";
             while (trimmed.length > 0 && trail.indexOf(trimmed.charAt(trimmed.length - 1)) >= 0) {
@@ -2614,6 +2626,7 @@
                 '<span class="fv-title"></span>' +
                 '<div class="fv-actions">' +
                 '<button type="button" class="fv-btn fv-download" title="Datei herunterladen">⬇ Download</button>' +
+                '<button type="button" class="fv-btn fv-open" title="In anderer App öffnen (z.B. Acrobat Reader)">⬆ Öffnen in…</button>' +
                 '<button type="button" class="fv-btn fv-close" aria-label="Vorschau schließen" title="Schließen">✕</button>' +
                 '</div></div>' +
                 '<div class="fv-body"></div>';
@@ -2636,6 +2649,7 @@
             body.innerHTML = '';
             v.querySelector('.fv-title').textContent = fileName;
             v.querySelector('.fv-download').onclick = () => downloadAtlasFile(filePath);
+            v.querySelector('.fv-open').onclick = () => openFileInOtherApp(filePath);
             if (isImageFilePath(filePath)) {
                 const img = document.createElement('img');
                 img.src = url;
@@ -2647,6 +2661,26 @@
                 body.appendChild(fr);
             }
             v.classList.add('open');
+        }
+
+        // „In anderer App öffnen…" (v0.0.192): öffnet das iOS-SHARE-SHEET mit der
+        // Datei — dort stehen kompatible Apps (z.B. Acrobat Reader) direkt zur
+        // Auswahl, was der eingebaute iframe-Viewer nicht kann. Fallback (kein
+        // Datei-Support im Browser / Fehler): normaler Download.
+        async function openFileInOtherApp(filePath) {
+            const fileName = filePath.split('/').pop() || filePath;
+            try {
+                const resp = await fetch('/api/files/download?path=' + encodeURIComponent(filePath) + '&inline=1');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const blob = await resp.blob();
+                if (typeof File === 'undefined' || !navigator.canShare) throw new Error('no-file-share');
+                const file = new File([blob], fileName, { type: resp.headers.get('content-type') || 'application/octet-stream' });
+                if (!navigator.canShare({ files: [file] })) throw new Error('share-unsupported');
+                await navigator.share({ files: [file], title: fileName });
+            } catch (e) {
+                if (e && e.name === 'AbortError') return; // User hat das Sheet abgebrochen
+                downloadAtlasFile(filePath);
+            }
         }
 
         function closeFileViewer() {
