@@ -2727,49 +2727,58 @@
                 el.dataset.collapsed = 'true';
             });
 
-            // Alle Tool-Karten eines Turns in EINEN Aufklapp-Container packen (v0.0.158)
-            // Nutzer-Wunsch: Beim Arbeiten bleiben Tools sichtbar (Live). Nach message.complete
-            // werden ALLE Tool-Karten des Turns entfernt und durch einen einzigen
-            // "⚙️ Eingesetzte Tools (N)"-Toggle ersetzt — kein eigener Button pro Tool.
-            // v0.0.159: Nur DIREKTE Kinder von #messages filtern (#messages > .msg.system).
-            // Tools in einer bestehenden Gruppe sind verschachtelt → automatisch ausgeschlossen.
-            // Damit ist der Aufruf idempotent: doppelter Aufruf erzeugt KEINE 2. Gruppe,
-            // und ein NEUER Turn (neue Tool-Karten direkt in #messages) wird korrekt gruppiert.
-            const toolEls = Array.from(document.querySelectorAll('#messages > .msg.system')).filter(el => {
-                if (el.dataset.toolGrouped) return false;
-                const txt = el.querySelector('span')?.textContent || '';
-                return txt.startsWith('⚙️ Tool:');
-            });
-            if (toolEls.length > 0) {
-                // Referenzen auf Text-Spans sichern (Originaltexte gehen nicht verloren)
-                toolEls.forEach(el => { el.dataset.origText = el.querySelector('span').textContent; });
-                const anchor = toolEls[0];
-                const group = document.createElement('div');
-                group.className = 'msg system tool-group';
-                group.style.cssText = 'align-self:flex-start;color:var(--muted);font-size:12px;margin:6px 0;';
-                group.dataset.toolGrouped = 'true';
-                // Toggle-Label: "⚙️ Eingesetzte Tools (N)"
-                const label = document.createElement('span');
-                label.className = 'tool-group-label';
-                label.style.cssText = 'color:var(--accent);font-size:13px;font-weight:600;cursor:pointer;padding:6px 14px;border:1px solid var(--accent);border-radius:8px;display:inline-block;background:rgba(64,120,224,0.12);';
-                label.textContent = '⚙️ Eingesetzte Tools (' + toolEls.length + ') ▶';
-                group.appendChild(label);
-                // Tool-Karten unter dem Label stapeln (versteckt via display:none)
-                const bodyWrap = document.createElement('div');
-                bodyWrap.style.cssText = 'margin-top:6px;display:none;';
-                // ZUERST den Container an der Stelle des ersten Tools einfügen,
-                // dann erst die Karten in den Container verschieben (anchor muss
-                // noch im DOM sein, damit after() funktioniert).
-                anchor.after(group);
-                toolEls.forEach(el => bodyWrap.appendChild(el));
-                group.appendChild(bodyWrap);
-                // Toggle: Klick auf Label zeigt/versteckt die Tool-Karten
-                label.addEventListener('click', () => {
-                    const open = bodyWrap.style.display !== 'none';
-                    bodyWrap.style.display = open ? 'none' : 'block';
-                    label.textContent = open ? '⚙️ Eingesetzte Tools (' + toolEls.length + ') ▶' : '⚙️ Eingesetzte Tools (' + toolEls.length + ') ▼';
-                });
+            // Tool-Karten positionsgetreu im Verlauf bündeln (v0.0.187, F44)
+            // Nutzer-Wunsch: Tools bleiben im Chatverlauf AN DER STELLE, wo sie
+            // eingesetzt wurden — nicht mehr als EIN Sammel-Toggle am Turn-Anfang.
+            // NUR direkt aufeinanderfolgende Karten (keine Nachricht dazwischen)
+            // werden an Ort und Stelle zu EINER Aufklapp-Gruppe zusammengefasst;
+            // ein einzelnes Tool bleibt als Karte direkt sichtbar (kein Toggle).
+            // Jede Nicht-Tool-Nachricht (Text, Denk-Box, System-Zeile) trennt die Läufe.
+            // v0.0.159-kompatibel: bereits gruppierte Container (dataset.toolGrouped)
+            // bleiben unangetastet und trennen ebenfalls — damit idempotent
+            // (Doppel-Aufruf erzeugt keine 2. Gruppe, neue Turns werden korrekt neu gebündelt).
+            const msgKids = Array.from(document.querySelectorAll('#messages > *'));
+            let toolRun = [];   // aktueller Lauf ungruppierter Tool-Karten
+            const flushRun = () => {
+                if (toolRun.length >= 2) {
+                    // Referenzen auf Text-Spans sichern (Originaltexte gehen nicht verloren)
+                    toolRun.forEach(el => { el.dataset.origText = el.querySelector('span').textContent; });
+                    const anchor = toolRun[0];
+                    const group = document.createElement('div');
+                    group.className = 'msg system tool-group';
+                    group.style.cssText = 'align-self:flex-start;color:var(--muted);font-size:12px;margin:6px 0;';
+                    group.dataset.toolGrouped = 'true';
+                    // Toggle-Label: "⚙️ Eingesetzte Tools (N)"
+                    const label = document.createElement('span');
+                    label.className = 'tool-group-label';
+                    label.style.cssText = 'color:var(--accent);font-size:13px;font-weight:600;cursor:pointer;padding:6px 14px;border:1px solid var(--accent);border-radius:8px;display:inline-block;background:rgba(64,120,224,0.12);';
+                    label.textContent = '⚙️ Eingesetzte Tools (' + toolRun.length + ') ▶';
+                    group.appendChild(label);
+                    // Tool-Karten unter dem Label stapeln (versteckt via display:none)
+                    const bodyWrap = document.createElement('div');
+                    bodyWrap.style.cssText = 'margin-top:6px;display:none;';
+                    // ZUERST den Container an der Stelle des ERSTEN Tools der Sequenz
+                    // einfügen (Position bleibt erhalten), dann Karten verschieben.
+                    anchor.after(group);
+                    toolRun.forEach(el => bodyWrap.appendChild(el));
+                    group.appendChild(bodyWrap);
+                    // Toggle: Klick auf Label zeigt/versteckt die Tool-Karten
+                    label.addEventListener('click', () => {
+                        const open = bodyWrap.style.display !== 'none';
+                        bodyWrap.style.display = open ? 'none' : 'block';
+                        label.textContent = open ? '⚙️ Eingesetzte Tools (' + toolRun.length + ') ▶' : '⚙️ Eingesetzte Tools (' + toolRun.length + ') ▼';
+                    });
+                }
+                toolRun = [];
+            };
+            const isToolCard = (el) => el.classList && el.classList.contains('msg') && el.classList.contains('system')
+                && (el.querySelector('span')?.textContent || '').startsWith('⚙️ Tool:');
+            for (const el of msgKids) {
+                if (el.dataset.toolGrouped) { flushRun(); continue; }
+                if (isToolCard(el)) { toolRun.push(el); }
+                else { flushRun(); }
             }
+            flushRun();
         }
 
         $('sessionsBtn').addEventListener('click', () => {
