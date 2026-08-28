@@ -2612,25 +2612,49 @@
         // dann Web Share API Level 2 (natives Share-Sheet mit Datei, „In Dateien
         // sichern…“ — gleicher Mechanismus wie „Öffnen in…“); ohne Share-Sheet
         // (Desktop): Blob-URL-Anchor (download-Attribut greift dort zuverlässig).
+        // v0.0.196: JEDER Fehlerpfad ist sichtbar (Toast) statt stumm — vorher
+        // endeten 3 stillen Pfade in console.warn (HTTP-Fehler von Hermes,
+        // navigator.share-NotAllowedError wegen verbrauchter iOS-User-Activation
+        // nach await fetch, Fehler in share selbst) → „Button-Rand ja, aber
+        // nichts passiert“ auf dem iPhone (Befund 28.08.). Tipp: erneutes
+        // Antippen liefert eine NEUE User-Activation und öffnet das Share-Sheet
+        // dann zuverlässig (fetch-Antwort landet im HTTP-Cache → zweiter Versuch
+        // ist deutlich schneller als der erste).
         async function downloadAtlasFile(filePath) {
             const btn = fileViewerState.el && fileViewerState.el.querySelector('.fv-download');
             const prevText = btn ? btn.textContent : '';
             // restore: Buttontext zurück + dataset.o aufräumen; im Fehlerfall läuft
             // der Restore zeitverzögert (dataset.o dient bis dahin als Marker).
             const restore = () => { if (btn) { btn.textContent = prevText; delete btn.dataset.o; } };
+            const fail = (msg) => { restore(); showToast('⚠ ' + msg); };
             const fileName = filePath.split('/').pop() || 'download';
             const url = '/api/files/download?path=' + encodeURIComponent(filePath);
             try {
                 if (btn) { btn.dataset.o = prevText; btn.textContent = '⏳ …'; }
                 const resp = await fetch(url);
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                if (!resp.ok) {
+                    // 401 = Atlas-Session abgelaufen, 404 = Datei am Hermes-Server
+                    // nicht (mehr) vorhanden, 502 = Hermes-Login/-Backend-Problem
+                    const hint = resp.status === 401 ? 'Sitzung abgelaufen — bitte neu anmelden'
+                        : resp.status === 404 ? 'Datei wurde auf dem Server nicht gefunden'
+                        : resp.status === 502 ? 'Hermes-Server nicht erreichbar oder Login fehlgeschlagen'
+                        : 'Serverfehler (HTTP ' + resp.status + ')';
+                    throw new Error(hint);
+                }
                 const blob = await resp.blob();
                 if (navigator.share && navigator.canShare &&
                         navigator.canShare({ files: [new File([blob], fileName)] })) {
                     const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
-                    await navigator.share({ files: [file], title: fileName });
-                    restore(); // Save/Share-Dialog erledigt
-                    return;
+                    try {
+                        await navigator.share({ files: [file], title: fileName });
+                        restore(); // Save/Share-Dialog erledigt
+                        return;
+                    } catch (shareErr) {
+                        if (shareErr && shareErr.name === 'AbortError') { restore(); return; } // Abbruch ist kein Fehler
+                        // iOS: Transient User Activation nach await fetch/blob oft
+                        // verbraucht → NotAllowedError. Neuer Tipp = neue Activation.
+                        throw new Error('Teilen nicht möglich — bitte erneut antippen (iOS braucht den Teilen-Aufruf direkt nach dem Tippen)');
+                    }
                 }
                 const objUrl = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -2643,6 +2667,7 @@
             } catch (e) {
                 if (e && e.name === 'AbortError') { restore(); return; } // Abbruch ist kein Fehler
                 console.warn('[Atlas] Download fehlgeschlagen:', e);
+                fail(e && e.message ? e.message : 'unbekannter Fehler');
                 if (btn) { btn.dataset.o = prevText; btn.textContent = '⚠ Download fehlgeschlagen'; }
                 setTimeout(() => { if (btn && btn.dataset.o) { btn.textContent = btn.dataset.o; delete btn.dataset.o; } }, 2000);
             }
