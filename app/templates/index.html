@@ -167,6 +167,20 @@
         .media-downloads { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
         .media-download-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; background: #2a3547; border: 1px solid var(--border); border-radius: 10px; color: #d7e2f5; font-size: 13px; text-decoration: none; cursor: pointer; }
         .media-download-btn:hover { background: #33415a; border-color: var(--accent); }
+
+        /* Datei-Vorschau-Overlay (v0.0.191, F46): MEDIA-Dateien inline im App-Fenster
+           statt neuem Tab — auf dem iPhone (PWA/Standalone) lässt sich ein per
+           target=_blank geöffneter Download-Tab nicht wieder schließen */
+        .file-viewer { display: none; position: fixed; inset: 0; background: rgba(10, 12, 16, 0.92); z-index: 60; flex-direction: column; }
+        .file-viewer.open { display: flex; }
+        .file-viewer .fv-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
+        .file-viewer .fv-title { flex: 1; font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .file-viewer .fv-actions { display: flex; gap: 8px; flex-shrink: 0; }
+        .file-viewer .fv-btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer; }
+        .file-viewer .fv-close { min-width: 44px; min-height: 44px; justify-content: center; font-size: 20px; }
+        .file-viewer .fv-body { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 10px; min-height: 0; }
+        .file-viewer .fv-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+        .file-viewer .fv-body iframe { width: 100%; height: 100%; border: none; background: #fff; border-radius: 6px; }
         .msg.thinking { align-self: flex-start; background: transparent; color: var(--muted); font-size: 12.5px; font-style: italic; line-height: 1.5; padding: 2px 10px; white-space: pre-wrap; opacity: .65; }
         .msg.thinking.done { opacity: .45; font-size: 11.5px; }
         .msg.thinking.done::after { content: ' ✓'; }
@@ -2505,14 +2519,21 @@
             wrap.className = 'media-downloads';
             for (const p of paths) {
                 const fileName = p.split('/').pop() || p;
+                const previewable = isPreviewablePath(p);
                 const btn = document.createElement('a');
                 btn.href = '#';
                 btn.className = 'media-download-btn';
-                btn.textContent = '📥 ' + fileName + ' (Download)';
+                // v0.0.191 (F46): Bilder/PDFs öffnen die Inline-Vorschau (Overlay mit
+                // Schließen-Button) statt eines neuen Tabs; andere Dateien laden direkt.
+                btn.textContent = (previewable ? '📄 ' : '📥 ') + fileName + (previewable ? ' (Ansicht)' : ' (Download)');
                 btn.title = p;
                 btn.addEventListener('click', (ev) => {
                     ev.preventDefault();
-                    downloadAtlasFile(p);
+                    if (previewable) {
+                        openFilePreview(p);
+                    } else {
+                        downloadAtlasFile(p);
+                    }
                 });
                 wrap.appendChild(btn);
             }
@@ -2568,6 +2589,70 @@
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
+        }
+
+        // ------------------------------------------ Datei-Vorschau im App-Fenster (v0.0.191, F46)
+        // Auf dem iPhone (PWA/Standalone) lässt sich ein per target=_blank geöffneter
+        // Download-Tab nicht wieder schließen → Bilder und PDFs werden INLINE in einem
+        // Overlay mit Schließen-Button (X) angezeigt; der Download bleibt per Button
+        // im Overlay erreichbar. Alle anderen Dateitypen laden direkt herunter.
+        const fileViewerState = { el: null };
+
+        function isPreviewablePath(p) {
+            return isImageFilePath(p) || /\.pdf$/i.test(p.split('?')[0]);
+        }
+        function isImageFilePath(p) {
+            return /\.(png|jpe?g|gif|webp|svg|bmp|heic)$/i.test(p.split('?')[0]);
+        }
+
+        function ensureFileViewer() {
+            if (fileViewerState.el) return fileViewerState.el;
+            const v = document.createElement('div');
+            v.className = 'file-viewer';
+            v.innerHTML =
+                '<div class="fv-bar">' +
+                '<span class="fv-title"></span>' +
+                '<div class="fv-actions">' +
+                '<button type="button" class="fv-btn fv-download" title="Datei herunterladen">⬇ Download</button>' +
+                '<button type="button" class="fv-btn fv-close" aria-label="Vorschau schließen" title="Schließen">✕</button>' +
+                '</div></div>' +
+                '<div class="fv-body"></div>';
+            const close = () => closeFileViewer();
+            v.querySelector('.fv-close').addEventListener('click', close);
+            v.addEventListener('click', (ev) => { if (ev.target === v) close(); });
+            document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
+            document.body.appendChild(v);
+            fileViewerState.el = v;
+            return v;
+        }
+
+        function openFilePreview(filePath) {
+            const v = ensureFileViewer();
+            const fileName = filePath.split('/').pop() || filePath;
+            // inline=1 → Content-Disposition:inline (Backend v0.0.191) — nur so
+            // zeigt iOS den PDF-Stream im iframe an statt ihn zu laden
+            const url = '/api/files/download?path=' + encodeURIComponent(filePath) + '&inline=1';
+            const body = v.querySelector('.fv-body');
+            body.innerHTML = '';
+            v.querySelector('.fv-title').textContent = fileName;
+            v.querySelector('.fv-download').onclick = () => downloadAtlasFile(filePath);
+            if (isImageFilePath(filePath)) {
+                const img = document.createElement('img');
+                img.src = url;
+                img.alt = fileName;
+                body.appendChild(img);
+            } else {
+                const fr = document.createElement('iframe');
+                fr.src = url;
+                body.appendChild(fr);
+            }
+            v.classList.add('open');
+        }
+
+        function closeFileViewer() {
+            if (!fileViewerState.el) return;
+            fileViewerState.el.classList.remove('open');
+            fileViewerState.el.querySelector('.fv-body').innerHTML = '';
         }
 
         function renderFilePreviews() {

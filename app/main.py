@@ -1230,12 +1230,16 @@ async def proxy_file_download(request: Request):
         status, content_type, data = await file_generator(http, proxy_url, headers)
         if status != 200:
             raise HTTPException(status_code=status, detail="Hermes-Download fehlgeschlagen")
-        # Antwort als fertige Bytes (v0.0.67: kein lazy Streaming mehr, das
-        # wegen vorzeitig geschlossener Hermes-Verbindung abbrach)
+        # v0.0.191 (F46): inline=1 → Content-Disposition:inline statt attachment,
+        # damit Bilder (<img>) und PDFs (<iframe>) INLINE im App-Overlay angezeigt
+        # werden können (iPhone: keinen neuen Tab öffnen, sonst lässt sich der
+        # geöffnete Download-Tab in der PWA/Standalone nicht schließen).
+        inline = request.query_params.get("inline", "") == "1"
+        disposition_kind = "inline" if inline else "attachment"
         return Response(
             content=data,
             media_type=content_type,
-            headers={"Content-Disposition": f'attachment; filename="{path.split("/")[-1]}"'},
+            headers={"Content-Disposition": f'{disposition_kind}; filename="{path.split("/")[-1]}"'},
         )
 
 
