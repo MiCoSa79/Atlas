@@ -2606,16 +2606,46 @@
 
         // Datei über Atlas-Proxy herunterladen — holt sie vom Hermes-Backend
         // (gleicher Mechanismus wie die Desktop-App), KEIN Volume-Mount nötig.
-        function downloadAtlasFile(filePath) {
+        // v0.0.195: Download OHNE Navigation. a[download] auf Server-URL wird von
+        // iOS-PWA ignoriert → PDF öffnet im selben WebView (kein Zurück mehr,
+        // Sackgasse — Befund 28.08.). Stattdessen: Datei per fetch als Blob holen,
+        // dann Web Share API Level 2 (natives Share-Sheet mit Datei, „In Dateien
+        // sichern…“ — gleicher Mechanismus wie „Öffnen in…“); ohne Share-Sheet
+        // (Desktop): Blob-URL-Anchor (download-Attribut greift dort zuverlässig).
+        async function downloadAtlasFile(filePath) {
+            const btn = fileViewerState.el && fileViewerState.el.querySelector('.fv-download');
+            const prevText = btn ? btn.textContent : '';
+            // restore: Buttontext zurück + dataset.o aufräumen; im Fehlerfall läuft
+            // der Restore zeitverzögert (dataset.o dient bis dahin als Marker).
+            const restore = () => { if (btn) { btn.textContent = prevText; delete btn.dataset.o; } };
             const fileName = filePath.split('/').pop() || 'download';
             const url = '/api/files/download?path=' + encodeURIComponent(filePath);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName;
-            a.target = '_blank';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            try {
+                if (btn) { btn.dataset.o = prevText; btn.textContent = '⏳ …'; }
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const blob = await resp.blob();
+                if (navigator.share && navigator.canShare &&
+                        navigator.canShare({ files: [new File([blob], fileName)] })) {
+                    const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
+                    await navigator.share({ files: [file], title: fileName });
+                    restore(); // Save/Share-Dialog erledigt
+                    return;
+                }
+                const objUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = objUrl;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => { URL.revokeObjectURL(objUrl); a.remove(); }, 4000);
+                restore();
+            } catch (e) {
+                if (e && e.name === 'AbortError') { restore(); return; } // Abbruch ist kein Fehler
+                console.warn('[Atlas] Download fehlgeschlagen:', e);
+                if (btn) { btn.dataset.o = prevText; btn.textContent = '⚠ Download fehlgeschlagen'; }
+                setTimeout(() => { if (btn && btn.dataset.o) { btn.textContent = btn.dataset.o; delete btn.dataset.o; } }, 2000);
+            }
         }
 
         // ------------------------------------------ Datei-Vorschau im App-Fenster (v0.0.191, F46)
