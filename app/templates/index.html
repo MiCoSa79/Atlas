@@ -247,13 +247,14 @@
                 box-shadow: 0 0 30px rgba(0,0,0,.5);
             }
             #sessionSidebar.mobile-open { transform: translateX(0); }
-            /* v0.0.222: Mobile — Bar kollabiert zum ⋮-Button; Tap (#fabBar.open) klappt die
-               Sprung-Buttons als vertikale Säule ÜBER dem ⋮ auf (flex-column, wächst nach oben,
-               da bottom verankert); ⋮ bleibt als Basis unten. Desktop ≥900px unverändert. */
-            #fabBar > button:not(#fabToggle), #fabInputCount { display: none; }
-            #fabBar { gap: 6px; }
-            #fabBar.open > button, #fabBar.open > #fabInputCount { display: flex; }
-            #fabBar.open > #fabInputCount { align-items: center; justify-content: center; min-width: 30px; }
+            /* v0.0.223: Mobile — Bar kollabiert zum ⋮-Button; Tap (#fabBar.open) klappt die
+               Sprung-Buttons als VERTIKALE Säule ÜBER dem ⋮ auf (flex-direction:column — die
+               Basis-Bar ist row! + bottom verankert → Säule wächst nach oben), ⋮ bleibt als
+               Basis unten. Spezifitäts-sicher: hidden nur via :not(.open) (kein
+               Konkurrenz-Regelpaar mehr — v0.0.222 zeigte nur „5/5“ links vom ⋮, keine Buttons). */
+            #fabBar { flex-direction: column; gap: 6px; }
+            #fabBar:not(.open) > button:not(#fabToggle),
+            #fabBar:not(.open) > #fabInputCount { display: none; }
             #fabToggle { width: 44px; height: 44px; }
         }
         @media (min-width: 768px) {
