@@ -143,12 +143,14 @@
         /* Chat */
         #app { display: none; flex-direction: column; height: 100dvh; }
         #app.active { display: flex; }
-        /* v0.0.197: Desktop-Layout mit Session-Sidebar links (Tabs-light) */
-        #app.sidebar-on { flex-direction: row; max-width: 1380px; margin: 0 auto; width: 100%; }
-        #chatPane { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100dvh; max-width: 1100px; margin: 0 auto; width: 100%; }
+        /* v0.0.206: #app immer column — Header oben volle Breite, Mittelzeile #appBody
+           [Sidebar | Chat], Statusleiste unten volle Breite: Sidebar sitzt DAZWISCHEN */
+        #appBody { display: flex; flex: 1; min-height: 0; }
+        #app.sidebar-on { max-width: 1380px; margin: 0 auto; width: 100%; }
+        #chatPane { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; max-width: 1100px; margin: 0 auto; width: 100%; }
         #sessionSidebar {
             display: none;
-            width: 260px; flex-shrink: 0; height: 100dvh;
+            width: 260px; flex-shrink: 0; height: 100%;
             background: var(--bg2, #17171c); border-right: 1px solid var(--border);
             flex-direction: column; overflow-y: auto;
         }
@@ -202,7 +204,7 @@
         .sb-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .sb-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         @media (max-width: 899.98px) {
-            #app.sidebar-on { flex-direction: column; }
+            /* v0.0.206: #app ist immer column — Mittelzeile ist #appBody (Sidebar wird zum Drawer) */
             /* v0.0.201: Sidebar wird zum Drawer — schiebt sich von links über die
                Chat-Ansicht, schließt sich nach Session-Auswahl / ➕ Neustart / Tap außerhalb */
             #sbToggleBtn { display: flex; }
@@ -221,7 +223,7 @@
             #sessionSidebar.mobile-open { transform: translateX(0); }
         }
         @media (min-width: 768px) {
-            #app { max-width: 1100px; margin: 0 auto; width: 100%; }
+            #app:not(.sidebar-on) { max-width: 1100px; margin: 0 auto; width: 100%; }
             #app .banner { border-radius: 0; }
         }
         header { display: flex; align-items: center; gap: 10px; padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px; background: var(--panel); border-bottom: 1px solid var(--border); overflow: hidden; }
@@ -603,16 +605,6 @@
 
     <!-- Chat -->
     <div id="app">
-        <!-- v0.0.197: Session-Sidebar links (Desktop ≥900px; auf schmalen Screens ausgeblendet) -->
-        <aside id="sessionSidebar" aria-label="Sessions">
-            <div class="sb-head">
-                <span class="sb-title">Sessions</span>
-                <button id="sbNewBtn" class="icon-btn" title="Neue Unterhaltung" aria-label="Neue Unterhaltung">➕</button>
-            </div>
-            <div id="sbList" class="sb-list"><div class="sb-name" style="padding:8px 10px;color:var(--muted);font-size:12px;">Sessions werden geladen…</div></div>
-        </aside>
-        <div id="sbBackdrop"></div>
-        <div id="chatPane">
         <header>
             <button id="sbToggleBtn" class="icon-btn" title="Sessions anzeigen" aria-label="Sessions anzeigen" style="display:none;">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
@@ -631,6 +623,17 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
             </button>
         </header>
+        <div id="appBody">
+        <!-- v0.0.197: Session-Sidebar links (Desktop ≥900px; auf schmalen Screens ausgeblendet) -->
+        <aside id="sessionSidebar" aria-label="Sessions">
+            <div class="sb-head">
+                <span class="sb-title">Sessions</span>
+                <button id="sbNewBtn" class="icon-btn" title="Neue Unterhaltung" aria-label="Neue Unterhaltung">➕</button>
+            </div>
+            <div id="sbList" class="sb-list"><div class="sb-name" style="padding:8px 10px;color:var(--muted);font-size:12px;">Sessions werden geladen…</div></div>
+        </aside>
+        <div id="sbBackdrop"></div>
+        <div id="chatPane">
         <div id="setupBanner" class="banner hidden">⚠️ Noch keine Hermes-Instanz verbunden — bitte in den <a id="bannerLink">Einstellungen</a> einrichten.</div>
         <div id="messages"></div>
         <div id="workingStatus" class="hidden" role="status" aria-live="polite"></div>
@@ -660,11 +663,12 @@
             <!-- Kontext-Warnung bei sehr großen Sessions (v0.0.112) -->
             <div id="ctxWarn" class="ctx-warn hidden"></div>
             <!-- Token-Kosten-Statuszeile -->
-            <div id="statusBar" class="statusbar">
-                <span class="single loading">Token-Infos werden geladen…</span>
-            </div>
         </div>
-    </div>
+        </div>
+        </div>
+        <div id="statusBar" class="statusbar">
+            <span class="single loading">Token-Infos werden geladen…</span>
+        </div>
     </div>
 
     
