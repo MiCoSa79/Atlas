@@ -131,6 +131,57 @@
         /* Chat */
         #app { display: none; flex-direction: column; height: 100dvh; }
         #app.active { display: flex; }
+        /* v0.0.197: Desktop-Layout mit Session-Sidebar links (Tabs-light) */
+        #app.sidebar-on { flex-direction: row; max-width: 1380px; margin: 0 auto; width: 100%; }
+        #chatPane { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100dvh; max-width: 1100px; margin: 0 auto; width: 100%; }
+        #sessionSidebar {
+            display: none;
+            width: 260px; flex-shrink: 0; height: 100dvh;
+            background: var(--bg2, #17171c); border-right: 1px solid var(--border);
+            flex-direction: column; overflow-y: auto;
+        }
+        #app.sidebar-on #sessionSidebar { display: flex; }
+        .sb-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px; }
+        .sb-title { font-size: 13px; font-weight: 600; letter-spacing: .4px; color: var(--muted); text-transform: uppercase; }
+        #sbNewBtn { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: none; color: var(--text); cursor: pointer; font-size: 15px; line-height: 1; }
+        #sbNewBtn:hover { border-color: var(--accent); color: var(--accent); }
+        .sb-list { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px 12px; }
+        .sb-item {
+            position: relative;
+            display: flex; align-items: center; gap: 8px;
+            width: 100%; text-align: left;
+            padding: 8px 10px; border-radius: 8px;
+            border: none; background: none; color: var(--text);
+            cursor: pointer; font: inherit;
+            min-width: 0;
+        }
+        .sb-item:hover { background: rgba(127,127,127,.12); }
+        .sb-item.active { background: rgba(127,127,127,.2); }
+        /* Arc-Animation (v0.0.197, wie Hermes-Desktop): arbeitende Session bekommt einen
+           umlaufenden Randbogen — rein CSS, kein JS-Timer. data-working am .sb-item. */
+        .sb-item[data-working="1"] .sb-arc {
+            position: absolute; inset: 0; border-radius: 8px; pointer-events: none;
+            border: 2px solid transparent;
+            background: conic-gradient(from 0deg, transparent 0 82%, var(--accent) 87% 94%, transparent 100%) border-box;
+            -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor; mask-composite: exclude;
+            animation: sb-arc-spin 1.1s linear infinite;
+            transition: opacity .2s;
+        }
+        @keyframes sb-arc-spin { to { transform: rotate(360deg); } }
+        .sb-item[data-working="1"] { background: rgba(127,127,127,.1); }
+        .sb-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; flex-shrink: 0; }
+        .sb-dot.working { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+        .sb-dot.stalled { background: #e5a53d; }
+        .sb-dot.needs-input { background: #e5484d; }
+        .sb-dot.unread { background: #4ade80; }
+        .sb-meta { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+        .sb-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sb-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        @media (max-width: 899.98px) {
+            #app.sidebar-on { flex-direction: column; }
+            #sessionSidebar { display: none !important; }
+        }
         @media (min-width: 768px) {
             #app { max-width: 1100px; margin: 0 auto; width: 100%; }
             #app .banner { border-radius: 0; }
@@ -514,6 +565,15 @@
 
     <!-- Chat -->
     <div id="app">
+        <!-- v0.0.197: Session-Sidebar links (Desktop ≥900px; auf schmalen Screens ausgeblendet) -->
+        <aside id="sessionSidebar" aria-label="Sessions">
+            <div class="sb-head">
+                <span class="sb-title">Sessions</span>
+                <button id="sbNewBtn" class="icon-btn" title="Neue Unterhaltung" aria-label="Neue Unterhaltung">➕</button>
+            </div>
+            <div id="sbList" class="sb-list"><div class="sb-name" style="padding:8px 10px;color:var(--muted);font-size:12px;">Sessions werden geladen…</div></div>
+        </aside>
+        <div id="chatPane">
         <header>
             <img class="logo" src="/static/icon.svg" alt="Atlas">
             <h1>Atlas</h1>
@@ -562,6 +622,7 @@
                 <span class="single loading">Token-Infos werden geladen…</span>
             </div>
         </div>
+    </div>
     </div>
 
     
@@ -680,6 +741,13 @@
         const $ = id => document.getElementById(id);
         const authPage = $('authPage');
         const app = $('app');
+        // v0.0.198 (Tabs-light): Sidebar nur auf Desktop (≥900px) einblenden;
+        // auf schmalen Screens bleibt die klassische Ein-Spalten-Ansicht.
+        function updateSidebarVisibility() {
+            app.classList.toggle('sidebar-on', window.innerWidth >= 900);
+        }
+        updateSidebarVisibility();
+        window.addEventListener('resize', updateSidebarVisibility);
         const statusDot = $('statusDot');
         const messagesDiv = $('messages');
         // ---- Smart-Scroll (v0.0.75): Sticky-Bottom wie WhatsApp/Telegram ----
@@ -772,6 +840,10 @@
                 sessionCtxPct: 0,                 // letzte Kontext-Auslastung in % (v0.0.112)
                 sessionCtxMax: 0,                 // Kontext-Limit in Tokens (context_max, v0.0.114)
                 sessionMsgCount: 0,               // Nachrichtenanzahl beim Resume (Schätzwert, v0.0.112)
+                // v0.0.197 (Tabs-light): Surface = unsichtbare Ansammlung der Streams
+                // einer INAKTIVEN Session; beim Zurückwechseln wandern die Knoten in #messages.
+                surface: null,
+                surfaceScrollTop: 0,
             };
             ctx.sendRpc = function (method, params) {
                 this.rpcId += 1;
@@ -857,6 +929,7 @@
             // 2FA-Pflicht-Overlay (Admin hat 2FA zur Pflicht gemacht)
             $('otpRequiredOverlay').classList.toggle('active', !!(user && user.otp_required));
             openSession(activeSessionId || localStorage.getItem('atlas_last_session') || null);
+            loadSessionTitles();   // v0.0.198: Sidebar-Titel für Bestands-Sessions nachladen
         }
 
         // Bestehende Sitzung prüfen
@@ -1467,7 +1540,15 @@
             });
         });
 
-        function addMsg(role, text) {
+        // v0.0.197: addMsg rendert in die SICHTBARE Ansicht (#messages); addMsgTo(ctx,…)
+        // in die Ctx (Surface) — die AKTIVE Ctx schreibt weiter in #messages.
+        function addMsg(role, text) { return addMsgIn(messagesDiv, role, text); }
+        function addMsgTo(ctx, role, text) {
+            if (ctx === C) return addMsg(role, text);
+            if (!ctx.surface) { ctx.surface = document.createElement('div'); ctx.surface.className = 'msg-surface'; }
+            return addMsgIn(ctx.surface, role, text);
+        }
+        function addMsgIn(container, role, text) {
             const m = document.createElement('div');
             m.className = 'msg ' + role;
             const t = document.createElement('span');
@@ -1493,7 +1574,7 @@
                 meta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             }
             m.appendChild(meta);
-            messagesDiv.appendChild(m);
+            container.appendChild(m);
             // followSticky() prüft das sticky-bottom-Flag (über den scroll-Listener)
             followSticky();
             return m;
@@ -1681,39 +1762,37 @@
 
         function workingEl() { return document.getElementById('workingStatus'); }
 
-        function stopWorkingTimer() {
-            const ctx = C;
+        function stopWorkingTimer(ctx) {
             if (ctx.workingTimer) { clearInterval(ctx.workingTimer); ctx.workingTimer = null; }
         }
 
-        function hideWorkingStatus() {
-            const ctx = C;
-            stopWorkingTimer();
-            const el = workingEl();
-            if (el) el.classList.add('hidden');
+        function hideWorkingStatus(ctx) {
+            if (!ctx) ctx = C; if (!ctx) return;
+            stopWorkingTimer(ctx);
+            if (ctx === C) { const el = workingEl(); if (el) el.classList.add('hidden'); }
             ctx.workingActive = false;
         }
 
-        function cancelWorkingResume() {
-            const ctx = C;
+        function cancelWorkingResume(ctx) {
+            if (!ctx) ctx = C; if (!ctx) return;
             if (ctx.workingResumeTimer) { clearTimeout(ctx.workingResumeTimer); ctx.workingResumeTimer = null; }
         }
 
-        function scheduleWorkingResume() {
-            const ctx = C;
-            cancelWorkingResume();
+        function scheduleWorkingResume(ctx) {
+            if (!ctx) ctx = C; if (!ctx) return;
+            cancelWorkingResume(ctx);
             ctx.workingResumeTimer = setTimeout(() => {
                 ctx.workingResumeTimer = null;
-                if (ctx.turnActive) showWorkingStatus();   // Guards in showWorkingStatus entscheiden (showStatus, workingActive, leaseWaitBubble)
+                if (ctx === C && ctx.turnActive) showWorkingStatus(ctx);   // nur aktive Session → Zeile
             }, WORKING_RESUME_DELAY_MS);
         }
 
-        function endWorkingTurn() {
-            const ctx = C;
+        function endWorkingTurn(ctx) {
+            if (!ctx) ctx = C; if (!ctx) return;
             ctx.turnActive = false;
-            cancelWorkingResume();
-            hideWorkingStatus();
-            updateInterruptBtn();   // v0.0.175: Turn-Ende → Interrupt-Button dimmen
+            cancelWorkingResume(ctx);
+            hideWorkingStatus(ctx);
+            if (ctx === C) updateInterruptBtn();   // nur aktive Session → Button-Update
         }
 
         // ============ session.interrupt (v0.0.175) ============
@@ -1743,30 +1822,27 @@
         // wird (nicht erst aufs streaming-ACK warten). Geht dieses eine ACK verloren
         // (WS-Reconnect-Fenster, halb-offene Verbindung), blieb der Stop-Button sonst
         // für den GESAMTEN Turn deaktiviert — App pollt keinen session.status nach.
-        function markTurnActive() {
-            const ctx = C;
+        function markTurnActive(ctx) {
+            if (!ctx) ctx = C; if (!ctx) return;
             ctx.turnActive = true;
-            showWorkingStatus();
-            updateInterruptBtn();
+            showWorkingStatus(ctx);
+            if (ctx === C) updateInterruptBtn();
         }
 
-        function showWorkingStatus() {
-            const ctx = C;
+        function showWorkingStatus(ctx) {
+            if (!ctx) ctx = C; if (!ctx) return;
             if (!showStatus) return;              // Nutzer-Setting respektieren
-            // v0.0.145: KEIN bubble-Guard, kein Haltefenster — die Zeile darf IMMER
-            // erscheinen, sobald der Turn läuft und gerade keine Message-Ausgabe fließt
-            // (Nutzer-Wunsch 2026-08-23). Resume-Timer (~1 s) + thinking.delta holen sie
-            // nach Text-Stille zurück; während fließender Streams stört sie nie.
             if (ctx.workingActive || ctx.leaseWaitBubble) return;   // nichts überlagern
+            if (ctx !== C) return;   // nur für AKTIVE Session → sichtbare Zeile
             const el = workingEl();
             if (!el) return;
             ctx.workingActive = true;
             ctx.workingStart = Date.now();
             el.classList.remove('hidden');
             el.textContent = 'Agent arbeitet…';
-            stopWorkingTimer();
+            stopWorkingTimer(ctx);
             ctx.workingTimer = setInterval(() => {
-                if (!ctx.workingActive) { stopWorkingTimer(); return; }
+                if (!ctx.workingActive || ctx !== C) { stopWorkingTimer(ctx); return; }  // Guard: nur aktive
                 const s = Math.round((Date.now() - ctx.workingStart) / 1000);
                 if (s >= 1) {
                     const el2 = workingEl();
@@ -1800,12 +1876,123 @@
                 ctx.ws = null;
             }
             if (!ctx.ws) connectCtx(ctx);   // v0.0.197: die ZIEL-Ctx verbinden (nicht die aktive)
+            renderSidebar();                // v0.0.198: Liste nach Registry-Änderung aktualisieren
         }
 
-        // v0.0.197: Ctx zur sichtbaren Ansicht machen (Wechsel = nur View, keine WS-Close)
+        // v0.0.197: Ctx zur sichtbaren Ansicht machen (Wechsel = nur View, keine WS-Close).
+        // Sichtbare Knoten werden zwischen #messages und der Ctx-Surface umgewandelt
+        // („Surfaces" — jede inaktive Session sammelt ihre Streams in ctx.surface).
         function setActiveCtx(ctx) {
+            // 1) Knoten der bisherigen Ctx zurück in deren Surface (falls vorhanden)
+            if (C && C !== ctx) {
+                if (!C.surface) { C.surface = document.createElement('div'); C.surface.className = 'msg-surface'; }
+                if (C.surface && messagesDiv.children.length) {
+                    C.surfaceScrollTop = messagesDiv.scrollTop;
+                    while (messagesDiv.firstChild) C.surface.appendChild(messagesDiv.firstChild);
+                }
+            }
             C = ctx;
             activeSessionId = ctx.storedId || null;
+            // v0.0.198: Wechsel-Auswahl persistieren — Reload öffnet die zuletzt
+            // sichtbare Session (nicht nur die zuletzt ERZEUGTE).
+            if (ctx.storedId) localStorage.setItem('atlas_last_session', ctx.storedId);
+            else localStorage.removeItem('atlas_last_session');
+            // 2) Knoten der neuen Ctx in #messages
+            messagesDiv.innerHTML = '';
+            if (ctx.surface && ctx.surface.children.length) {
+                while (ctx.surface.firstChild) messagesDiv.appendChild(ctx.surface.firstChild);
+                messagesDiv.scrollTop = ctx.surfaceScrollTop || messagesDiv.scrollHeight;
+            } else {
+                messagesDiv.scrollTop = 0;
+            }
+            // 3) Working-UI für die neue Ctx aktualisieren
+            refreshWorkingUI();
+            // 4) Sidebar-Highlight aktualisieren
+            renderSidebarActive();
+        }
+
+        function refreshWorkingUI() {
+            // Zeige die Arbeitszeile nur, wenn die AKTIVE Ctx einen laufenden Turn hat
+            const el = workingEl(); if (!el) return;
+            if (C && C.workingActive) {
+                el.classList.remove('hidden');
+                // Zähler zurücksetzen (neue Zeile ohne Startzeit) — der Timer setzt sie beim ersten Tick
+                const s = C.workingStart ? Math.round((Date.now() - C.workingStart) / 1000) : 0;
+                if (s >= 1) el.textContent = 'Agent arbeitet… (seit ' + s + ' s)';
+                else if (s === 0 && C.turnActive) el.textContent = 'Agent arbeitet…';
+            } else {
+                el.classList.add('hidden');
+            }
+        }
+
+        // v0.0.198 (Tabs-light): Sidebar — Liste der OFFENEN parallelen Sessions.
+        // Einträge kommen aus der Registry (sessions-Map); Klick = weicher Wechsel
+        // (openSession ohne force → WS der Ziel-Ctx bleibt offen, nur View-Umtausch).
+        const sessionTitles = {};   // Stored-ID -> Titel (Cache aus /api/sessions)
+
+        function sessionDisplayTitle(ctx) {
+            if (!ctx.storedId) return 'Neue Unterhaltung';
+            const t = sessionTitles[ctx.storedId];
+            if (t) return t;
+            return ctx.storedId.length > 10 ? ctx.storedId.slice(0, 8) + '…' : ctx.storedId;
+        }
+
+        function renderSidebar() {
+            const list = $('sbList');
+            if (!list) return;
+            if (!sessions.size) {
+                list.innerHTML = '<div class="sb-name" style="padding:8px 10px;color:var(--muted);font-size:12px;">Noch keine Sessions offen</div>';
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            sessions.forEach((ctx, key) => {
+                const item = document.createElement('div');
+                item.className = 'sb-item' + (ctx === C ? ' active' : '');
+                if (ctx.turnActive) item.dataset.working = '1';
+                item.dataset.key = key;
+                item.setAttribute('role', 'button');
+                item.setAttribute('tabindex', '0');
+                item.innerHTML = '<span class="sb-arc"></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
+                item.querySelector('.sb-name').textContent = sessionDisplayTitle(ctx);
+                item.querySelector('.sb-sub').textContent = ctx.storedId ? ((ctx.sessionMsgCount || 0) + ' Nachr.') : 'wird erstellt…';
+                frag.appendChild(item);
+            });
+            list.innerHTML = '';
+            list.appendChild(frag);
+        }
+
+        function renderSidebarActive() {
+            const list = $('sbList');
+            if (!list) return;
+            Array.prototype.forEach.call(list.children, it => {
+                const key = it.dataset ? it.dataset.key : null;
+                const ctx = key ? sessions.get(key) : null;
+                if (!it.classList) return;
+                if (ctx) {
+                    it.classList.toggle('active', ctx === C);
+                    it.dataset.working = ctx.turnActive ? '1' : '';
+                } else {
+                    it.classList.remove('active');
+                    it.dataset.working = '';
+                }
+            });
+        }
+
+        // Titel-Cache aus der Server-Sessionliste (Bestands-Sessions nach Reload).
+        async function loadSessionTitles() {
+            try {
+                const r = await fetch('/api/sessions');
+                const j = await r.json();
+                if (j.status !== 'ok' || !j.sessions) return;
+                j.sessions.forEach(s => { if (s.id && s.title) sessionTitles[s.id] = s.title; });
+                renderSidebar();
+            } catch (_) { /* Sidebar bleibt mit Kurz-IDs sichtbar */ }
+        }
+
+        // Sidebar-Klick: weicher Wechsel zur Ziel-Ctx (WS bleibt offen). Delegiert
+        // über den #sbList-Listener aus dem Init-Block (bindSidebarEvents).
+        function onSidebarClick(key) {
+            openSession(key === '__new__' ? null : key);
         }
 
         // v0.0.197: Harte Neuverbindung der AKTIVEN Session — View-Reset + Verbindungs-
@@ -1920,10 +2107,10 @@
                     ctx.interruptRpcId = null;
                     updateInterruptBtn();
                     if (frame.error) {
-                        addMsg('system', '⚠️ Unterbrechen fehlgeschlagen: ' + (frame.error.message || 'unbekannter Fehler'));
+                        addMsgTo(ctx, 'system', '⚠️ Unterbrechen fehlgeschlagen: ' + (frame.error.message || 'unbekannter Fehler'));
                     } else {
-                        endWorkingTurn();   // Arbeitszeile „Agent arbeitet…“ beenden
-                        addMsg('system', '⏹ Turn unterbrochen');
+                        endWorkingTurn(ctx);   // Arbeitszeile „Agent arbeitet…“ beenden
+                        addMsgTo(ctx, 'system', '⏹ Turn unterbrochen');
                     }
                     return;
                 }
@@ -1940,8 +2127,11 @@
                     ctx.liveSessionId = frame.result.session_id;
                     updateInterruptBtn();   // v0.0.175: Live-ID aktualisiert — Button-Zustand neu bewerten
                     flushPendingMessages(ctx);  // gepufferte Nachrichten sofort senden
-                    messagesDiv.innerHTML = '';
-                    endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
+                    // v0.0.198: Nur die SICHTBARE Ctx leeren — eine Hintergrund-Ctx,
+                    // die währenddessen eine create-Antwort bekommt, darf die Ansicht
+                    // der aktiven Session nicht löschen (Tabs-light).
+                    if (ctx === C) messagesDiv.innerHTML = '';
+                    endWorkingTurn(ctx);   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                     // v0.0.197: '__new__'-Ctx registrieren — die neue Session bekommt ihre
                     // echte stored-id (Sidebar/Reconnect sehen die echte Session).
                     const storedNew2 = frame.result.stored_session_id || frame.result.session_id;
@@ -1951,16 +2141,17 @@
                         sessions.set(storedNew2, ctx);
                     }
                     activeSessionId = storedNew2;   // v0.0.197: View folgt der neuen Session (vorher null — Reconnect eröffnete sonst eine NEUE Unterhaltung)
-                    ctx.sessionCtxPct = 0; ctx.sessionCtxMax = 0; ctx.sessionMsgCount = 0; updateCtxWarning();
-                    updateTokenWidget();   // neue Session: Anzeige SOFORT zurücksetzen (v0.0.115)
-                    refreshUsageGauge();   // v0.0.119: exakten Kontext-Stand sofort nachladen
+                    renderSidebar();   // v0.0.198: '__new__'-Ctx ist jetzt die echte Session — Sidebar neu aufbauen
+                    ctx.sessionCtxPct = 0; ctx.sessionCtxMax = 0; ctx.sessionMsgCount = 0; if (ctx === C) updateCtxWarning();
+                    if (ctx === C) updateTokenWidget();   // neue Session: Anzeige SOFORT zurücksetzen (v0.0.115)
+                    if (ctx === C) refreshUsageGauge();   // v0.0.119: exakten Kontext-Stand sofort nachladen
                     // Neue Session als "letzte" merken (Persistenz über Tab-Close,
                     // damit Hintergrund-Ergebnisse in dieser Session landen).
                     const storedNew = frame.result.stored_session_id || frame.result.session_id;
                     localStorage.setItem('atlas_last_session', storedNew);
                     ctx.createRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     $('currentSessionLabel').classList.add('hidden');
-                    addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
+                    addMsgTo(ctx, 'system', 'Verbunden mit Hermes-Instanz ✓');
                     return;
                 }
                 // Wenn resume fehlschlägt (Session existiert nicht mehr),
@@ -1972,6 +2163,7 @@
                     // v0.0.197: tote Ctx aus der Registry lösen, damit die Sidebar
                     // (Task 2) sie nicht mehr als offene Session führt.
                     if (ctx.storedId) sessions.delete(storeKey(ctx.storedId));
+                    renderSidebar();   // v0.0.198: tote Ctx aus der Sidebar entfernen
                     ctx.storedId = null;
                     ctx.liveSessionId = null;
                     const p = { close_on_disconnect: false, source: 'webui' };
@@ -2002,7 +2194,7 @@
                         // refreshUsageGauge bei echtem session.usage-Wert, und den gibt es
                         // für kalte Sessions NIE → nach Session-Wechsel war der Cache leer
                         // und die Anzeige blieb für immer weg (auch nach Zurückwechseln).
-                        ctxCacheSave();
+                        if (ctx === C) ctxCacheSave();
                     }
                     ctx.sessionMsgCount = frame.result.message_count || (frame.result.messages || []).length;
                     // v0.0.125: Ersten bekannten Kontext-Stand anzeigen, wenn Hermes keinen
@@ -2015,9 +2207,9 @@
                         const cc = ctxCacheLoad();
                         if (cc) { ctx.sessionCtxPct = cc.pct; if (cc.max) ctx.sessionCtxMax = cc.max; }
                     }
-                    updateCtxWarning();
-                    updateTokenWidget();   // Session-Wechsel: Anzeige SOFORT aktualisieren (v0.0.115)
-                    refreshUsageGauge();   // v0.0.119: Kontext-% auch bei idle Session nachladen
+                    if (ctx === C) updateCtxWarning();
+                    if (ctx === C) updateTokenWidget();   // Session-Wechsel: Anzeige SOFORT aktualisieren (v0.0.115)
+                    if (ctx === C) refreshUsageGauge();   // v0.0.119: Kontext-% auch bei idle Session nachladen
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
                     ctx.historyRpcId = sendRpc('session.history', { session_id: ctx.liveSessionId });
                     // Offene clarify-Frage aus dem resume-Result merken — die Karte
@@ -2026,8 +2218,8 @@
                     ctx.pendingClarifyOnResume = frame.result.pending_clarify || null;
                     // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
                     if (frame.result.messages && frame.result.messages.length) {
-                        messagesDiv.innerHTML = '';
-                        endWorkingTurn();   // Resume-Verlauf → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
+                        if (ctx === C) messagesDiv.innerHTML = '';
+                        endWorkingTurn(ctx);   // Resume-Verlauf → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                         frame.result.messages.forEach(m => {
                             // Reasoning der assistant-Nachricht VOR der Antwort rendern
                             // (v0.0.160 + v0.0.165): Reihenfolge wie im Live-Pfad — Denk-Box
@@ -2037,7 +2229,7 @@
                             if (m.role === 'assistant' && showReasoning && (m.reasoning || m.reasoning_content)) {
                                 const rText = String(m.reasoning || m.reasoning_content || '').trim();
                                 if (rText && rText !== 'null' && rText !== 'undefined') {
-                                    const tb = addMsg('thinking', '💭 ' + rText);
+                                    const tb = addMsgTo(ctx, 'thinking', '💭 ' + rText);
                                     tb.classList.add('done');
                                 }
                             }
@@ -2050,38 +2242,39 @@
                                 if (m.role === 'user' && !internal) {
                                     displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                                 }
-                                const mm = addMsg(internal ? 'assistant' : m.role, displayText);
+                                const mm = addMsgTo(ctx, internal ? 'assistant' : m.role, displayText);
                                 // User-Uploads: [Name]-Block aus localStorage-Vorschau rekonstruieren
                                 if (m.role === 'user' && !internal && m.text && /\[[^\]]+\]/.test(m.text)) {
                                     restoreAttachmentPreview(mm, m.text);
                                 }
                             } else if (m.role === 'tool') {
-                                addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                                addMsgTo(ctx, 'system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
                             }
                         });
-                        addMsg('system', 'Session geladen ✓');
+                        addMsgTo(ctx, 'system', 'Session geladen ✓');
                         // Session wurde gewechselt → bewusst ans Ende springen
-                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        if (ctx === C) messagesDiv.scrollTop = messagesDiv.scrollHeight;
                         // Done-Elemente zusammenklappen (v0.0.158: fehlte in diesem Pfad!)
-                        collapseDoneElements();
+                        collapseDoneElements(ctx === C ? null : (ctx.surface || null));
                         // ctx.historyRpcId auflösen — wenn die session.history-Antwort
                         // später ankommt, darf sie den DOM NICHT nochmal löschen.
                         // (Zweipfad-Kollision: erster Pfad rendert, zweiter löscht alles.)
                         ctx.historyRpcId = null;
                     }
-                    $('currentSessionLabel').textContent = activeSessionId;
-                    $('currentSessionLabel').classList.remove('hidden');
+                    // v0.0.198: Label nur für die sichtbare Session setzen (Hintergrund-Resume
+                    // würde sonst die Session-Anzeige der aktiven Ctx überschreiben)
+                    if (ctx === C) { $('currentSessionLabel').textContent = activeSessionId; $('currentSessionLabel').classList.remove('hidden'); }
                     return;
                 }
                 if (frame.id === ctx.historyRpcId && frame.result && frame.result.messages) {
                     const msgs = frame.result.messages || [];
-                    messagesDiv.innerHTML = '';
-                    endWorkingTurn();   // History-Rebuild → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
+                    if (ctx === C) messagesDiv.innerHTML = '';
+                    endWorkingTurn(ctx);   // History-Rebuild → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                     // v0.0.115: echte Gesamtzahl (count) für die 📨-Anzeige übernehmen,
                     // nicht nur die gerenderten Nachrichten (msgs.length).
                     if (frame.result.count != null) {
                         ctx.sessionMsgCount = frame.result.count;
-                        updateTokenWidget();
+                        if (ctx === C) updateTokenWidget();
                     }
                     msgs.forEach(m => {
                         // Reasoning der assistant-Nachricht VOR der Antwort rendern
@@ -2090,7 +2283,7 @@
                         if (m.role === 'assistant' && showReasoning && (m.reasoning || m.reasoning_content)) {
                             const rText = String(m.reasoning || m.reasoning_content || '').trim();
                             if (rText && rText !== 'null' && rText !== 'undefined') {
-                                const tb = addMsg('thinking', '💭 ' + rText);
+                                const tb = addMsgTo(ctx, 'thinking', '💭 ' + rText);
                                 tb.classList.add('done');
                             }
                         }
@@ -2103,7 +2296,7 @@
                             if (m.role === 'user' && !internal) {
                                 displayText = displayText.replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').replace(/\[[^\]]+\]/g, '').trim();
                             }
-                            const mm = addMsg(internal ? 'assistant' : m.role, displayText);
+                            const mm = addMsgTo(ctx, internal ? 'assistant' : m.role, displayText);
                             // User-Uploads: [Name]-Block aus localStorage-Vorschau rekonstruieren
                             if (m.role === 'user' && !internal && m.text && /\[[^\]]+\]/.test(m.text)) {
                                 restoreAttachmentPreview(mm, m.text);
@@ -2114,20 +2307,20 @@
                                 t.textContent = ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
                             }
                         } else if (m.role === 'tool') {
-                            addMsg('system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                            addMsgTo(ctx, 'system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
                         }
                     });
                     const n = msgs.length;
-                    addMsg('system', n ? 'Verlauf geladen (' + n + ' Nachrichten) ✓' : 'Diese Session hat noch keine Nachrichten (starte einfach ein neues Thema).');
+                    addMsgTo(ctx, 'system', n ? 'Verlauf geladen (' + n + ' Nachrichten) ✓' : 'Diese Session hat noch keine Nachrichten (starte einfach ein neues Thema).');
                     // Session wurde geöffnet → bewusst ans Ende springen (neueste Nachricht)
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    if (ctx === C) messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     // Offene clarify-Frage nach Reconnect/Resume wiederherstellen (v0.0.136)
                     if (ctx.pendingClarifyOnResume) {
-                        renderClarifyCard(ctx.pendingClarifyOnResume);
+                        if (ctx === C) renderClarifyCard(ctx.pendingClarifyOnResume);
                         ctx.pendingClarifyOnResume = null;
                     }
                     // Done-Elemente zusammenklappen (v0.0.155)
-                    collapseDoneElements();
+                    collapseDoneElements(ctx === C ? null : (ctx.surface || null));
                     ctx.historyRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     return;
                 }
@@ -2160,7 +2353,7 @@
                                     // während langer Denk-/Tool-Phasen, sonst wirkt es wie „hängt").
                                     if (frame.result && frame.result.status === 'streaming') {
                                         ctx.turnActive = true;   // v0.0.141: Turn läuft — Resume-Timer darf später wieder einblenden
-                                        showWorkingStatus();
+                                        showWorkingStatus(ctx);
                                         updateInterruptBtn();   // v0.0.175: Turn aktiv → Stop-Button scharf
                                         if (ctx.lastSubmitRpcId !== null && frame.id === ctx.lastSubmitRpcId) ctx.lastSubmitRpcId = null;   // v0.0.188: ACK erhalten
                                     }
@@ -2195,7 +2388,7 @@
                 // schließt sie je Runde ab.
                 if (p.type === 'reasoning.delta' && p.payload && p.payload.text && showReasoning) {
                     if (!ctx.thinkingBubble) {
-                        ctx.thinkingBubble = addMsg('thinking', '💭 ' + p.payload.text);
+                        ctx.thinkingBubble = addMsgTo(ctx, 'thinking', '💭 ' + p.payload.text);
                     } else {
                         const tbSpan = ctx.thinkingBubble.querySelector('span');
                         const tbRaw = tbSpan.dataset.raw || '';
@@ -2215,14 +2408,14 @@
                     // die Zeile zeigt immer „Agent arbeitet… (seit N s)“. Stattdessen:
                     // Läuft der Turn und die Zeile ist gerade unsichtbar (z. B. nach
                     // Text-Ende), wird sie hier SOFORT wieder eingeblendet (kein 6-s-Timer).
-                    if (ctx.turnActive) showWorkingStatus();   // Guards entscheiden (showStatus, workingActive, ctx.leaseWaitBubble)
+                    if (ctx.turnActive) showWorkingStatus(ctx);   // Guards entscheiden (showStatus, workingActive, ctx.leaseWaitBubble)
                     return;
                 }
                 // Clarify-Frage des Agenten (v0.0.136): Karte mit Buttons + freiem
                 // Feld rendern. Antwort via clarify.respond — sonst blockiert der
                 // Turn bis zum 1h-Timeout und die Session hängt.
                 if (p.type === 'clarify.request' && p.payload && p.payload.request_id) {
-                    renderClarifyCard(p.payload);
+            if (ctx === C) renderClarifyCard(p.payload);
                     return;
                 }
                 if (p.type === 'clarify.expire' && p.payload) {
@@ -2256,7 +2449,7 @@
                     const toolCtx = p.payload.context
                         || (p.payload.args && (p.payload.args.command || p.payload.args.url || p.payload.args.path || p.payload.args.query || ''))
                         || '';
-                    const el = addMsg('system', '⚙️ Tool: ' + p.payload.name
+                    const el = addMsgTo(ctx, 'system', '⚙️ Tool: ' + p.payload.name
                         + (toolCtx ? ' — ' + String(toolCtx).split('\n')[0].slice(0, 80) : ''));
                     if (p.payload.tool_id) ctx.activeToolEls[p.payload.tool_id] = el;
                 }
@@ -2271,7 +2464,7 @@
                     if (el && el.querySelector('span')) {
                         el.querySelector('span').textContent += suffix;
                     } else {
-                        addMsg('system', '⚙️ Tool: ' + p.payload.name + ' — abgeschlossen' + suffix);
+                        addMsgTo(ctx, 'system', '⚙️ Tool: ' + p.payload.name + ' — abgeschlossen' + suffix);
                     }
                     if (p.payload.tool_id) delete ctx.activeToolEls[p.payload.tool_id];
                 }
@@ -2285,9 +2478,9 @@
                         ctx.thinkingBubble.classList.add('done');
                         ctx.thinkingBubble = null;
                     }
-                    if (ctx.workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
-                    scheduleWorkingResume();   // v0.0.141: Text fließt → Resume-Timer neu; bei ≥6 s Pause (Tool-Phase) kehrt die Zeile zurück
-                    if (!ctx.bubble) ctx.bubble = addMsg('assistant', '');
+                    if (ctx.workingActive) hideWorkingStatus(ctx);   // v0.0.138/139: Zähler beenden, Zeile ausblenden
+                    scheduleWorkingResume(ctx);   // v0.0.141: Text fließt → Resume-Timer neu; bei ≥6 s Pause (Tool-Phase) kehrt die Zeile zurück
+                    if (!ctx.bubble) ctx.bubble = addMsgTo(ctx, 'assistant', '');
                     const liveSpan = ctx.bubble.querySelector('span');
                     const rawSoFar = liveSpan.dataset.raw || '';
                     const nextRaw = rawSoFar + p.payload.text;
@@ -2313,7 +2506,7 @@
                         ctx.thinkingBubble.classList.add('done');
                         ctx.thinkingBubble = null;
                     }
-                    endWorkingTurn();   // v0.0.141: Turn-Ende — Zeile endgültig aus, kein Resume
+                    endWorkingTurn(ctx);   // v0.0.141: Turn-Ende — Zeile endgültig aus, kein Resume
                     const u = (p.payload && p.payload.usage) || {};
                     if (u.context_percent != null) {
                         ctx.sessionCtxPct = u.context_percent;
@@ -2321,15 +2514,15 @@
                         ctx.sessionMsgCount += 1;   // v0.0.115: Zähler hochzählen statt nullen
                                                 // (message.complete hat kein message_count —
                                                 //  Nullen ließ die 📨-Anzeige nach Antwort verschwinden)
-                        updateCtxWarning();
+                        if (ctx === C) updateCtxWarning();
                     } else {
                         ctx.sessionMsgCount += 1;   // v0.0.119: Zähler auch ohne context_percent hochzählen
                     }
-                    refreshUsageGauge();   // v0.0.119: exakten Kontext via session.usage nachladen
+                    if (ctx === C) refreshUsageGauge();   // v0.0.119: exakten Kontext via session.usage nachladen
                     // Token-Anzeige nach jeder fertigen Antwort sofort aktualisieren
-                    updateTokenWidget();
+                    if (ctx === C) updateTokenWidget();
                     // Done-Elemente (Denk-Boxen, Tool-Karten) zusammenklappen (v0.0.155)
-                    collapseDoneElements();
+                    collapseDoneElements(ctx === C ? null : (ctx.surface || null));
                 }
                 if (p.type === 'status.update' && p.payload && p.payload.text) {
                     const t = p.payload.text;
@@ -3138,6 +3331,25 @@
             $('sessionsModal').classList.add('active');
             loadSessions();
         });
+        // v0.0.198 (Tabs-light): Sidebar — Klick auf einen Eintrag wechselt WEICH
+        // (openSession ohne force: WS der Ziel-Ctx bleibt offen, Hintergrund-Turn läuft weiter).
+        $('sbList').addEventListener('click', (e) => {
+            const item = e.target.closest('.sb-item');
+            if (!item) return;
+            onSidebarClick(item.dataset.key);
+        });
+        $('sbList').addEventListener('keydown', (e) => {
+            const item = e.target.closest('.sb-item');
+            if (!item) return;
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSidebarClick(item.dataset.key); }
+        });
+        // ➕ in der Sidebar: neue Unterhaltung starten (wie newSessionBtn)
+        $('sbNewBtn').addEventListener('click', () => {
+            activeSessionId = null;
+            localStorage.removeItem('atlas_last_session');
+            $('currentSessionLabel').classList.add('hidden');
+            restartWS();
+        });
         $('closeSessions').addEventListener('click', () => $('sessionsModal').classList.remove('active'));
         $('sessionsModal').addEventListener('click', e => {
             if (e.target === $('sessionsModal')) $('sessionsModal').classList.remove('active');
@@ -3198,6 +3410,20 @@
                         }
                         // Aus der Liste entfernen
                         if (item) item.remove();
+                        // v0.0.198: offene parallele Ctx (Tabs-light) lösen — WS schließen,
+                        // Sidebar-Eintrag entfernen. Zeigt die gelöschte Session gerade die
+                        // sichtbare Ansicht, wechselt Atlas in eine neue Unterhaltung.
+                        if (sessions.has(id)) {
+                            const ctx = sessions.get(id);
+                            if (ctx.ws) { try { ctx.ws.onclose = null; ctx.ws.close(); } catch (_) {} }
+                            sessions.delete(id);
+                            renderSidebar();
+                            if (C === ctx) {
+                                activeSessionId = null;
+                                localStorage.removeItem('atlas_last_session');
+                                openSession(null, { force: true });
+                            }
+                        }
                         // Falls die gelöschte Session die aktuelle war: neue leere Session
                         if (id === activeSessionId || id === localStorage.getItem('atlas_last_session')) {
                             activeSessionId = null;
