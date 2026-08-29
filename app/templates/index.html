@@ -543,7 +543,7 @@
                 <input id="fileInput" type="file" hidden autocomplete="off" multiple>
                 <button id="attachBtn" class="icon-btn" title="Dateien anhängen" style="padding:0; width:42px; height:42px; flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
                 <!-- Turn-Unterbrechen (session.interrupt, v0.0.175; Layout v0.0.176): in der Button-Zeile,
-                     wirkt IMMER auf die aktive Session (hermesSessionId); idle gedimmt, bei laufendem Turn rot -->
+                     wirkt IMMER auf die aktive Session (C.liveSessionId); idle gedimmt, bei laufendem Turn rot -->
                 <button id="interruptBtn" class="interrupt-btn" type="button" title="Turn unterbrechen (session.interrupt)" aria-label="Turn unterbrechen" disabled>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
                 </button>
@@ -728,27 +728,91 @@
             updateFabScroll();   // v0.0.131: Button-Zustand nach jedem Auto-Scroll aktualisieren
         }
         const banner = $('setupBanner');
-        let ws = null;
-        let pendingAttachResponses = {};
-        let pendingRpcCallbacks = {};       // Generic RPC response wrapper (v0.0.113 migration)
-        let bubble = null;
-        let thinkingBubble = null;      // laufende "Denken"-Box (reasoning.delta)
-        let workingActive = false;      // v0.0.139: „Agent arbeitet…“-Zeile sichtbar (#workingStatus, außerhalb des Scroll-Containers)
-        let activeToolEls = {};         // v0.0.142: tool_id → ⚙️-Karten-Element (tool.start → tool.complete-Update)
-        let rpcId = 0;
-        let hermesSessionId = null;
+        // ---- v0.0.197: Session-Registry — jede offene Session hat ihre eigene
+        // WebSocket-Verbindung + ihren eigenen RPC-/Turn-/View-Zustand (parallele
+        // Session-Tabs „Tabs-light"). C = aktive (sichtbare) Ctx; sessions: Map.
+        let C = null;                        // aktive Session-Ctx (sichtbare Ansicht)
+        const sessions = new Map();          // storeKey -> Ctx (offene parallele Sessions)
+        const FETCH_RPC_TIMEOUT_MS = 90000;  // v0.0.127: 20s war zu knapp (Antworten kamen nach >20s an)
         let activeSessionId = localStorage.getItem('atlas_last_session') || null;   // gewählte alte Session (null = neue Unterhaltung); persistiert für Hintergrund-Turns
-        let createRpcId = null;          // ID der letzten session.create-Anfrage
-        let resumeRpcId = null;          // ID der letzten session.resume-Anfrage
-        let historyRpcId = null;         // ID der letzten session.history-Anfrage
-        let pendingClarifyOnResume = null; // offene clarify aus resume-Result (v0.0.136)
-        let sessionCtxPct = 0;           // letzte Kontext-Auslastung in % (aus message.complete, v0.0.112)
-        let sessionCtxMax = 0;           // Kontext-Limit in Tokens (context_max, v0.0.114)
-        let sessionMsgCount = 0;         // Nachrichtenanzahl beim Resume (Schätzwert, v0.0.112)
+        let pendingMigrateSeed = null;   // v0.0.197: Kontext-Seed (Migration) — openSession legt ihn in die ZIEL-Ctx
+
+        function storeKey(storedId) { return storedId || '__new__'; }
+
+        // Eine offene Session: eigener WS-Transport + isolierter RPC-/Turn-Zustand.
+        function makeCtx(storedId) {
+            const ctx = {
+                storedId: storedId || null,       // Session-ID der Atlas-DB (null = neue Unterhaltung)
+                liveSessionId: null,              // kurze Live-ID von Hermes (session.create/resume)
+                ws: null,                         // eigene WebSocket-Verbindung
+                connectAttempts: 0,               // Reconnect-Versuche (max 5)
+                rpcId: 0,
+                pendingRpcCallbacks: {},          // Generic-RPC-Wrapper (v0.0.113 migration)
+                pendingRpcTimers: {},             // fetchRpc-Timeout-Handles (v0.0.120)
+                fetchRpcSeq: 1000000,             // fetchRpc-IDs ab 1M (v0.0.122 — kollidieren nie mit sendRpc)
+                createRpcId: null,                // ID der letzten session.create-Anfrage
+                resumeRpcId: null,                // ID der letzten session.resume-Anfrage
+                historyRpcId: null,               // ID der letzten session.history-Anfrage
+                interruptRpcId: null,             // laufende session.interrupt-Anfrage (Doppel-Klick-Schutz)
+                lastSubmitRpcId: null,            // v0.0.188: letzte prompt.submit-Request-ID
+                turnActive: false,                // Turn läuft (true ab streaming-ACK, false ab complete/Lease/Wechsel)
+                workingActive: false,             // v0.0.139: „Agent arbeitet…“-Zeile sichtbar (#workingStatus)
+                workingTimer: null,               // setInterval-Handle der Arbeitszeile
+                workingStart: 0,                  // Uhrzeit des letzten Arbeitszeilen-Erscheinens
+                workingResumeTimer: null,         // Timeout „Zeile nach Text-Pause wieder einblenden“
+                pendingMessages: [],              // Warteschlange: Nachrichten die auf session.create warten
+                pendingAttachResponses: {},       // Attach-Antworten (v0.0.106+)
+                pendingClarifyOnResume: null,     // offene clarify aus resume-Result (v0.0.136)
+                bubble: null,                     // laufende Antwort-Bubble des Live-Streams
+                thinkingBubble: null,             // laufende „Denken“-Box (reasoning.delta)
+                activeToolEls: {},                // v0.0.142: tool_id → ⚙️-Karten-Element (tool.start → tool.complete)
+                leaseWaitBubble: null,            // dauerhafte Lease-Warte-System-Bubble
+                leaseWaitStart: 0,                // Startzeit in ms
+                leaseWaitTimer: null,             // Intervall für Sekundenzähler
+                sessionCtxPct: 0,                 // letzte Kontext-Auslastung in % (v0.0.112)
+                sessionCtxMax: 0,                 // Kontext-Limit in Tokens (context_max, v0.0.114)
+                sessionMsgCount: 0,               // Nachrichtenanzahl beim Resume (Schätzwert, v0.0.112)
+            };
+            ctx.sendRpc = function (method, params) {
+                this.rpcId += 1;
+                this.ws.send(JSON.stringify({ jsonrpc: "2.0", id: this.rpcId, method: method, params: params || {} }));
+                return this.rpcId;
+            };
+            // v0.0.197: fetchRpc je Ctx (parallele Session-Tabs) — früher global
+            // (Z. 3588). IDs ab 1M je Ctx: kollidieren nie mit sendRpc-IDs.
+            ctx.fetchRpc = function (method, params, timeoutMs = FETCH_RPC_TIMEOUT_MS) {
+                const self = this;
+                return new Promise((resolve, reject) => {
+                    if (!self.ws || self.ws.readyState !== WebSocket.OPEN) { reject(new Error('WS nicht offen')); return; }
+                    const id = '' + (++self.fetchRpcSeq);   // STRING-ID — Gateway+Proxy konvertieren Zahlen oft zu Strings, ==-Match sonst fehlgeschlagen
+                    const timer = setTimeout(() => {
+                        delete self.pendingRpcCallbacks[id];
+                        delete self.pendingRpcTimers[id];
+                        reject(new Error(method + ': Zeitüberschreitung nach ' + Math.round(timeoutMs / 1000) + 's'));
+                    }, timeoutMs);
+                    self.pendingRpcTimers[id] = timer;
+                    const wrapper = (frame) => {
+                        if ('' + frame.id !== id) return;
+                        delete self.pendingRpcCallbacks[id];
+                        if (self.pendingRpcTimers[id]) { clearTimeout(self.pendingRpcTimers[id]); delete self.pendingRpcTimers[id]; }
+                        if (frame.error) reject(new Error(frame.error.message || 'RPC error'));
+                        else resolve(frame.result);
+                    };
+                    self.pendingRpcCallbacks[id] = wrapper;
+                    try { self.ws.send(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params })); }
+                    catch (e) { delete self.pendingRpcCallbacks[id]; clearTimeout(timer); reject(e); }
+                });
+            };
+            return ctx;
+        }
+
+        // Globale Kompatibilitäts-Wrapper (v0.0.197): alle bestehenden Aufrufer
+        // (Composer, Interrupt, Attach, Migrate, Status-Gauge, beforeunload)
+        // wirken auf die AKTIVE Ctx — Verhalten unverändert (1 sichtbare Session).
+        function Cx() { return C; }
+        function sendRpc(method, params) { return C.sendRpc(method, params); }
         const CTX_WARN_PCT = 60;         // Warnung ab 60 % Kontextauslastung — Hermes komprimiert sonst erst zu spät
         const CTX_WARN_MSGS = 350;       // Warnung ab 350 Nachrichten (Resume ohne Token-Wert)
-        let pendingMessages = [];        // Warteschlange: Nachrichten die auf session.create warten
-        let connectAttempts = 0;         // Reconnect-Versuche (max 5)
 
         function showToast(msg) {
             const t = $('toast');
@@ -792,7 +856,7 @@
             }
             // 2FA-Pflicht-Overlay (Admin hat 2FA zur Pflicht gemacht)
             $('otpRequiredOverlay').classList.toggle('active', !!(user && user.otp_required));
-            connectWS();
+            openSession(activeSessionId || localStorage.getItem('atlas_last_session') || null);
         }
 
         // Bestehende Sitzung prüfen
@@ -1553,26 +1617,25 @@
         }
 
         // ---- "Session von anderem Prozess benutzt" (Turn-Lease) ----
-        let leaseWaitBubble = null;   // dauerhafte System-Bubble statt Toast
-        let leaseWaitStart = 0;       // Startzeit in ms
-        let leaseWaitTimer = null;    // Intervall für Sekundenzähler
+        // Zustand je Session-Ctx: leaseWaitBubble / leaseWaitStart / leaseWaitTimer
 
         // Zeigt die Lease-Warte-Meldung als dauerhafte System-Nachricht
         // mit Sekundenzähler (kein Unterbrechen-Button).
         function showLeaseWait(text) {
+            const ctx = C;
             endWorkingTurn();   // v0.0.137–141: „Agent arbeitet…“ (inkl. Timer/Resume) beenden — Lease-Wartezustand dominiert
-            if (!leaseWaitBubble) {
-                leaseWaitBubble = addMsg('system', text);
-                leaseWaitStart = Date.now();
+            if (!ctx.leaseWaitBubble) {
+                ctx.leaseWaitBubble = addMsg('system', text);
+                ctx.leaseWaitStart = Date.now();
                 // Sekundenzähler in der Meta-Zeile
-                leaseWaitTimer = setInterval(() => {
-                    const s = Math.round((Date.now() - leaseWaitStart) / 1000);
-                    const meta = leaseWaitBubble && leaseWaitBubble.querySelector('.meta');
+                ctx.leaseWaitTimer = setInterval(() => {
+                    const s = Math.round((Date.now() - ctx.leaseWaitStart) / 1000);
+                    const meta = ctx.leaseWaitBubble && ctx.leaseWaitBubble.querySelector('.meta');
                     if (meta) meta.textContent = ' · wartet seit ' + s + 's';
                 }, 1000);
             } else {
                 // Hermes wiederholt alle paar Sekunden "Still waiting…" → Text aktualisieren
-                const span = leaseWaitBubble.querySelector('span');
+                const span = ctx.leaseWaitBubble.querySelector('span');
                 if (span) span.textContent = text;
                 followSticky();
             }
@@ -1581,20 +1644,21 @@
         // Beendet die Lease-Bubble: finalText gesetzt = Text ersetzen + Button entfernen,
         // sonst Bubble als 'done' markieren.
         function clearLeaseWait(finalText) {
-            if (leaseWaitTimer) {
-                clearInterval(leaseWaitTimer);
-                leaseWaitTimer = null;
+            const ctx = C;
+            if (ctx.leaseWaitTimer) {
+                clearInterval(ctx.leaseWaitTimer);
+                ctx.leaseWaitTimer = null;
             }
-            if (leaseWaitBubble) {
+            if (ctx.leaseWaitBubble) {
                 if (finalText) {
-                    const span = leaseWaitBubble.querySelector('span');
+                    const span = ctx.leaseWaitBubble.querySelector('span');
                     if (span) span.textContent = finalText;
-                    const btn = leaseWaitBubble.querySelector('button');
+                    const btn = ctx.leaseWaitBubble.querySelector('button');
                     if (btn) btn.remove();
                 } else {
-                    leaseWaitBubble.classList.add('done');
+                    ctx.leaseWaitBubble.classList.add('done');
                 }
-                leaseWaitBubble = null;
+                ctx.leaseWaitBubble = null;
             }
         }
 
@@ -1605,54 +1669,48 @@
         // Folge-Prompt, der den laufenden Turn unterbrach).
         // v0.0.138: Sekundenzähler als Lebenszeichen + 4-s-Haltefenster für den
         // „Agent arbeitet…"-Text (Nutzer-Befund: Zeile wurde von thinking.delta
-        // sofort mit „computing…" überschrieben und war nicht wahrnehmbar).
+        // sofort mit „computing…“ überschrieben und war nicht wahrnehmbar).
         // v0.0.139: Die Zeile liegt NICHT mehr im Nachrichtenfluss (#messages),
         // sondern als eigenes Element #workingStatus zwischen Nachrichten-Container
         // und Composer — Reasoning/Streaming wächst darunter im scrollbaren Bereich,
         // die Zeile selbst wird nie weggescrollt (Nutzer-Befund 2026-08-23:
         // „Die Anzeige kommt, wird aber durch das Reasoning nach oben weggescrollt").
-        let workingTimer = null;                 // setInterval-Handle der Arbeitszeile
-        let workingStart = 0;                    // Erzeugungszeitpunkt (Zähler + Haltefenster)
-        // v0.0.141: „Agent arbeitet…“-Zeile kehrt nach Text-Pausen zurück (Live-Befund
-        // 2026-08-23): message.delta blendet die Zeile aus — läuft der Turn danach lange
-        // ohne Events (z. B. terminal-Tool-Call, 15–420 s), fehlt jedes Feedback. timer
-        // blendet die Zeile nach WORKING_RESUME_DELAY_MS ohne neue Text-Deltas wieder ein.
-        let turnActive = false;                  // Turn läuft (true ab streaming-ACK, false ab complete/Lease/Wechsel)
-        let workingResumeTimer = null;           // Timeout „Zeile nach Text-Pause wieder einblenden“
-        // v0.0.145: Nutzer-Wunsch 2026-08-23 — „Agent arbeitet…“ IMMER einblenden, wenn
-        // gerade keine Message-Ausgabe erfolgt; KEIN 6-s-Timer. Der Timer ist nur noch ein
-        // kurzer Text-Stille-Detektor (~1 s): sobald der Text-Puls endet, kehrt die Zeile
-        // (fast) sofort zurück. Zusätzlich blendet thinking.delta die Zeile SOFORT ein
-        // (siehe Handler) — der Timer fängt nur Phasen ohne jedes Event ab.
+        // v0.0.197: workingTimer/Start/workingActive/turnActive/workingResumeTimer
+        // sind je Session in der Ctx (parallele Session-Tabs).
         const WORKING_RESUME_DELAY_MS = 1000;    // Text-Stille ab der die Zeile zurückkehrt
 
         function workingEl() { return document.getElementById('workingStatus'); }
 
         function stopWorkingTimer() {
-            if (workingTimer) { clearInterval(workingTimer); workingTimer = null; }
+            const ctx = C;
+            if (ctx.workingTimer) { clearInterval(ctx.workingTimer); ctx.workingTimer = null; }
         }
 
         function hideWorkingStatus() {
+            const ctx = C;
             stopWorkingTimer();
             const el = workingEl();
             if (el) el.classList.add('hidden');
-            workingActive = false;
+            ctx.workingActive = false;
         }
 
         function cancelWorkingResume() {
-            if (workingResumeTimer) { clearTimeout(workingResumeTimer); workingResumeTimer = null; }
+            const ctx = C;
+            if (ctx.workingResumeTimer) { clearTimeout(ctx.workingResumeTimer); ctx.workingResumeTimer = null; }
         }
 
         function scheduleWorkingResume() {
+            const ctx = C;
             cancelWorkingResume();
-            workingResumeTimer = setTimeout(() => {
-                workingResumeTimer = null;
-                if (turnActive) showWorkingStatus();   // Guards in showWorkingStatus entscheiden (showStatus, workingActive, leaseWaitBubble)
+            ctx.workingResumeTimer = setTimeout(() => {
+                ctx.workingResumeTimer = null;
+                if (ctx.turnActive) showWorkingStatus();   // Guards in showWorkingStatus entscheiden (showStatus, workingActive, leaseWaitBubble)
             }, WORKING_RESUME_DELAY_MS);
         }
 
         function endWorkingTurn() {
-            turnActive = false;
+            const ctx = C;
+            ctx.turnActive = false;
             cancelWorkingResume();
             hideWorkingStatus();
             updateInterruptBtn();   // v0.0.175: Turn-Ende → Interrupt-Button dimmen
@@ -1660,25 +1718,25 @@
 
         // ============ session.interrupt (v0.0.175) ============
         // Stopp-Button unter Upload/Senden bricht den Turn der AKTIVEN Session ab.
-        // hermesSessionId = Live-ID, wird bei jedem create/resume aktualisiert und in
+        // liveSessionId = Live-ID, wird bei jedem create/resume aktualisiert und in
         // restartWS geleert → der Button wirkt nach Session-Wechsel automatisch auf die
-        // aktuelle Session (kein ID-Caching nötig).
-        let interruptRpcId = null;   // laufende session.interrupt-Anfrage (Doppel-Klick-Schutz)
-        let lastSubmitRpcId = null;  // v0.0.188: letzte prompt.submit-Request-ID — ersetzt turnActive-ACK bei Fehler zurück
-
+        // aktuelle Session (kein ID-Caching nötig). interruptRpcId/lastSubmitRpcId
+        // liegen seit v0.0.197 in der Session-Ctx.
         function interruptTurn() {
-            if (interruptRpcId !== null) return;      // Anfrage läuft bereits
-            if (!turnActive) return;                   // kein laufender Turn (Button ist dann disabled)
-            if (!hermesSessionId) { addMsg('system', '⚠️ Keine aktive Session'); return; }
-            if (!ws || ws.readyState !== WebSocket.OPEN) { addMsg('system', '⚠️ Nicht verbunden'); return; }
-            interruptRpcId = sendRpc('session.interrupt', { session_id: hermesSessionId });
+            const ctx = C;
+            if (ctx.interruptRpcId !== null) return;      // Anfrage läuft bereits
+            if (!ctx.turnActive) return;                   // kein laufender Turn (Button ist dann disabled)
+            if (!ctx.liveSessionId) { addMsg('system', '⚠️ Keine aktive Session'); return; }
+            if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) { addMsg('system', '⚠️ Nicht verbunden'); return; }
+            ctx.interruptRpcId = ctx.sendRpc('session.interrupt', { session_id: ctx.liveSessionId });
             updateInterruptBtn();
         }
 
         function updateInterruptBtn() {
             const btn = $('interruptBtn');
             if (!btn) return;
-            btn.disabled = !(interruptRpcId === null && turnActive && !!hermesSessionId && ws && ws.readyState === WebSocket.OPEN);
+            const ctx = C;
+            btn.disabled = !(ctx.interruptRpcId === null && ctx.turnActive && !!ctx.liveSessionId && ctx.ws && ctx.ws.readyState === WebSocket.OPEN);
         }
 
         // v0.0.188: Turn optimistisch als aktiv markieren, SOBALD prompt.submit gesendet
@@ -1686,28 +1744,30 @@
         // (WS-Reconnect-Fenster, halb-offene Verbindung), blieb der Stop-Button sonst
         // für den GESAMTEN Turn deaktiviert — App pollt keinen session.status nach.
         function markTurnActive() {
-            turnActive = true;
+            const ctx = C;
+            ctx.turnActive = true;
             showWorkingStatus();
             updateInterruptBtn();
         }
 
         function showWorkingStatus() {
+            const ctx = C;
             if (!showStatus) return;              // Nutzer-Setting respektieren
             // v0.0.145: KEIN bubble-Guard, kein Haltefenster — die Zeile darf IMMER
             // erscheinen, sobald der Turn läuft und gerade keine Message-Ausgabe fließt
             // (Nutzer-Wunsch 2026-08-23). Resume-Timer (~1 s) + thinking.delta holen sie
             // nach Text-Stille zurück; während fließender Streams stört sie nie.
-            if (workingActive || leaseWaitBubble) return;   // nichts überlagern
+            if (ctx.workingActive || ctx.leaseWaitBubble) return;   // nichts überlagern
             const el = workingEl();
             if (!el) return;
-            workingActive = true;
-            workingStart = Date.now();
+            ctx.workingActive = true;
+            ctx.workingStart = Date.now();
             el.classList.remove('hidden');
             el.textContent = 'Agent arbeitet…';
             stopWorkingTimer();
-            workingTimer = setInterval(() => {
-                if (!workingActive) { stopWorkingTimer(); return; }
-                const s = Math.round((Date.now() - workingStart) / 1000);
+            ctx.workingTimer = setInterval(() => {
+                if (!ctx.workingActive) { stopWorkingTimer(); return; }
+                const s = Math.round((Date.now() - ctx.workingStart) / 1000);
                 if (s >= 1) {
                     const el2 = workingEl();
                     if (el2) el2.textContent = 'Agent arbeitet… (seit ' + s + ' s)';
@@ -1715,65 +1775,118 @@
             }, 1000);
         }
 
-        function sendRpc(method, params) {
-            rpcId += 1;
-            ws.send(JSON.stringify({ jsonrpc: "2.0", id: rpcId, method: method, params: params || {} }));
-            return rpcId;
+        // v0.0.197: sendRpc lebt als Ctx-Methode (makeCtx); der globale sendRpc-Wrapper
+        // delegiert auf die aktive Ctx.
+
+        // v0.0.197: Session öffnen — eigene Ctx + eigene WS pro Session (parallele
+        // Session-Tabs „Tabs-light“). Bereits geöffnete Sessions werden beim Wechsel
+        // NICHT geschlossen: ihr Turn läuft serverseitig weiter, Live-Events fließen
+        // weiter in handleGatewayFrame(ctx, …). opts.force = harte Neuverbindung
+        // (Fehlerpfad, Migration): vorhandene WS der Ziel-Ctx wird geschlossen.
+        function openSession(storedId, opts) {
+            const key = storeKey(storedId);
+            let ctx = sessions.get(key);
+            if (!ctx) { ctx = makeCtx(storedId); sessions.set(key, ctx); }
+            if (pendingMigrateSeed) {   // v0.0.197: Kontext-Seed in die (frische) ZIEL-Ctx legen
+                ctx.pendingMessages.push(pendingMigrateSeed);
+                pendingMigrateSeed = null;
+            }
+            setActiveCtx(ctx);
+            if (opts && opts.force && ctx.ws) {
+                rejectCtxPending(ctx, 'Session gewechselt: ' + key);
+                ctx.interruptRpcId = null;
+                updateInterruptBtn();
+                try { ctx.ws.onclose = null; ctx.ws.close(); } catch (_) {}
+                ctx.ws = null;
+            }
+            if (!ctx.ws) connectCtx(ctx);   // v0.0.197: die ZIEL-Ctx verbinden (nicht die aktive)
+        }
+
+        // v0.0.197: Ctx zur sichtbaren Ansicht machen (Wechsel = nur View, keine WS-Close)
+        function setActiveCtx(ctx) {
+            C = ctx;
+            activeSessionId = ctx.storedId || null;
+        }
+
+        // v0.0.197: Harte Neuverbindung der AKTIVEN Session — View-Reset + Verbindungs-
+        // aufbau zum zuletzt gewählten Ziel (activeSessionId), auch wenn das eine ANDERE
+        // Ctx ist (Modal-Klick, Migration, Fehlerpfad). Die bisherige Ctx bleibt in der
+        // Registry am Leben (Task 2: ihr Turn läuft im Hintergrund weiter).
+        function restartWS() {
+            if (!C) return;
+            endWorkingTurn();        // v0.0.139/141: „Agent arbeitet…“-Zeile ausblenden, kein Resume
+            loadDisplaySettings();   // Anzeige-Einstellungen (Denken/Statuszeilen) frisch laden
+            openSession(activeSessionId || null, { force: true });
+            messagesDiv.innerHTML = '';   // v0.0.181: Sicht leeren — System-Meldungen danach addMsg im frischen Chat
         }
 
         function connectWS() {
-            if (ws) return;
+            if (C) connectCtx(C);
+        }
+        function connectCtx(ctx) {
+            if (!ctx || ctx.ws) return;
             // Reconnect limitieren (max 5 Versuche, sonst aufhören)
-            connectAttempts++;
-            if (connectAttempts > 5) {
+            ctx.connectAttempts++;
+            if (ctx.connectAttempts > 5) {
                 addMsg('system', '⚠️ Verbindung kann nicht hergestellt werden. Bitte Seite neu laden.');
                 return;
             }
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             console.log('[Atlas] WS connect to:', `${proto}//${location.host}/ws`);
-            ws = new WebSocket(`${proto}//${location.host}/ws`);
+            ctx.ws = new WebSocket(`${proto}//${location.host}/ws`);
 
-            ws.onopen = () => {
-                console.log('[Atlas] WS connected, attempt #' + connectAttempts);
-                connectAttempts = 0;  // Zähler zurücksetzen bei Erfolg
+            ctx.ws.onopen = () => {
+                console.log('[Atlas] WS connected, attempt #' + ctx.connectAttempts);
+                ctx.connectAttempts = 0;  // Zähler zurücksetzen bei Erfolg
                 statusDot.classList.add('online');
                 statusDot.classList.remove('offline');
                 // close_on_disconnect:false = Session überlebt Tab-Close → laufende
                 // Turns (und delegierte Hintergrund-Aufgaben) laufen serverseitig weiter;
                 // beim Wiederkommen holt session.resume Verlauf + Ergebnis zurück.
                 const p = { close_on_disconnect: false, source: 'webui' };
-                if (activeSessionId) {
-                    p.session_id = activeSessionId;
-                    console.log('[Atlas] session.resume(' + activeSessionId + ')');
+                if (ctx.storedId) {
+                    p.session_id = ctx.storedId;
+                    console.log('[Atlas] session.resume(' + ctx.storedId + ')');
                 } else {
                     console.log('[Atlas] session.create');
                 }
                 if (selectedProfile) p.profile = selectedProfile;
-                const reqId = sendRpc(activeSessionId ? 'session.resume' : 'session.create', p);
-                if (activeSessionId) resumeRpcId = reqId; else createRpcId = reqId;
+                const reqId = ctx.sendRpc(ctx.storedId ? 'session.resume' : 'session.create', p);
+                if (ctx.storedId) ctx.resumeRpcId = reqId; else ctx.createRpcId = reqId;
             };
-            ws.onclose = ev => {
+            ctx.ws.onclose = ev => {
                 statusDot.classList.add('offline');
                 statusDot.classList.remove('online');
-                rejectAllPendingRpc('Verbindung getrennt');   // v0.0.120: hängende fetchRpc auflösen
-                interruptRpcId = null;   // v0.0.184: Verbindung weg → session.interrupt-Antwort kommt nie → Doppel-Klick-Schutz freigeben (sonst Button dauerhaft disabled)
+                rejectCtxPending(ctx, 'Verbindung getrennt');   // v0.0.120: hängende fetchRpc auflösen (je Session)
+                ctx.interruptRpcId = null;   // v0.0.184: Verbindung weg → session.interrupt-Antwort kommt nie → Doppel-Klick-Schutz freigeben (sonst Button dauerhaft disabled)
                 updateInterruptBtn();
                 const isRateLimit = ev.reason && ev.reason.includes('429');
                 if (ev.reason && ev.reason !== '' && ev.reason !== 'Normal closure' && !ev.reason.startsWith('go away')) {
                     addMsg('system', '⚠️ Verbindung getrennt: ' + ev.reason);
                 }
-                ws = null;
+                ctx.ws = null;
                 // Bei Rate-Limit (429) nicht alle 3s reconnecten — das würde das
                 // Hermes-Login-Limit weiter anheizen. Stattdessen 30s warten.
+                // v0.0.197: IMMER die eigene Ctx reconnecten (nicht die aktive!).
                 const delay = isRateLimit ? 30000 : 3000;
-                setTimeout(connectWS, delay);
+                const ownCtx = ctx;
+                setTimeout(() => { if (ownCtx.ws === null) connectCtx(ownCtx); }, delay);
             };
-            ws.onerror = () => {
+            ctx.ws.onerror = () => {
                 console.log('[Atlas] WS error');
-                interruptRpcId = null;   // v0.0.188: onerror (halb-offene Verbindung) → session.interrupt-Antwort kommt nie → Doppel-Klick-Schutz freigeben (v0.0.184 deckte nur den sauberen onclose ab)
+                ctx.interruptRpcId = null;   // v0.0.188: onerror (halb-offene Verbindung) → session.interrupt-Antwort kommt nie → Doppel-Klick-Schutz freigeben (v0.0.184 deckte nur den sauberen onclose ab)
                 updateInterruptBtn();
             };
-            ws.onmessage = ev => {
+            // v0.0.197: Frames der EIGENEN Session verarbeiten — der komplette Handler
+            // arbeitet auf ctx.* statt der früheren Globals (parallele Session-Tabs).
+            ctx.ws.onmessage = ev => handleGatewayFrame(ctx, ev);
+        }
+
+        // v0.0.197: Gateway-Frames der Session-Ctx verarbeiten (parallele Session-Tabs
+        // „Tabs-light“). ctx = die Session, deren WS diesen Frame geliefert hat; alle
+        // RPC-/Turn-/Anzeige-Zustände liegen in der Ctx.
+        function handleGatewayFrame(ctx, ev) {
+            const isActive = (ctx === C);
                 let frame;
                 try { frame = JSON.parse(ev.data); } catch (_) { return; }
                 // v0.0.124: Debug-Log: Alle eingehenden WS-Nachrichten
@@ -1786,13 +1899,13 @@
                 // v0.0.128: Generic RPC response handler ZUERST (VOR den speziellen
                 // create/resume/history-Handlern). Die migrate-fetchRpc-Antworten
                 // (history/create) tragen id => '1000004' (String ab 1M) — sobald ein
-                // spezieller Handler (z.B. history: frame.id===historyRpcId, oder create:
+                // spezieller Handler (z.B. history: frame.id===ctx.historyRpcId, oder create:
                 // frame.result.session_id) die Antwort STILL verschluckt (return ohne
                 // Log), findet der Generic-Handler sie nie → 90s-Timeout trotz
                 // eingetroffener Antwort (Nutzer-Befund v0.0.127).
-                if (frame.id !== undefined && !frame.method && pendingRpcCallbacks[frame.id]) {
-                    const cb = pendingRpcCallbacks[frame.id];
-                    delete pendingRpcCallbacks[frame.id];
+                if (frame.id !== undefined && !frame.method && ctx.pendingRpcCallbacks[frame.id]) {
+                    const cb = ctx.pendingRpcCallbacks[frame.id];
+                    delete ctx.pendingRpcCallbacks[frame.id];
                     // v0.0.129: VOLLEN Frame übergeben (nicht frame.result!) — der fetchRpc-
                     // Wrapper prüft '' + frame.id === id (v0.0.124). cb(frame.result) hatte
                     // frame.id=undefined → Wrapper return → Promise hing bis zum 90s-Timeout
@@ -1803,8 +1916,8 @@
                 }
                 // v0.0.175: session.interrupt-Antwort — Doppel-Klick-Schutz freigeben + Feedback.
                 // MUSS vor dem RPC-response-captured-Block stehen (dessen return würde sie schlucken).
-                if (interruptRpcId !== null && String(frame.id) === String(interruptRpcId)) {
-                    interruptRpcId = null;
+                if (ctx.interruptRpcId !== null && String(frame.id) === String(ctx.interruptRpcId)) {
+                    ctx.interruptRpcId = null;
                     updateInterruptBtn();
                     if (frame.error) {
                         addMsg('system', '⚠️ Unterbrechen fehlgeschlagen: ' + (frame.error.message || 'unbekannter Fehler'));
@@ -1816,88 +1929,101 @@
                 }
                 // v0.0.128: RPC-Antwort OHNE Callback — beim nächsten Test sofort sichtbar,
                 // welche Antworten kein Ziel finden (Diagnose statt stillem Verlust).
-                if (frame.id !== undefined && !frame.method && frame.result && Object.keys(pendingRpcCallbacks).length > 0) {
-                    console.warn('[Atlas] RPC response ohne Callback: id=' + frame.id + ' (pending=' + Object.keys(pendingRpcCallbacks).length + ')');
+                if (frame.id !== undefined && !frame.method && frame.result && Object.keys(ctx.pendingRpcCallbacks).length > 0) {
+                    console.warn('[Atlas] RPC response ohne Callback: id=' + frame.id + ' (pending=' + Object.keys(ctx.pendingRpcCallbacks).length + ')');
                 }
 
                 // v0.0.124: Jeder Handler in try/catch — Exception darf Generic-Handler NICHT blockieren
                 try {
-                    if (createRpcId !== null && frame.id === createRpcId && frame.result && frame.result.session_id) {
+                    if (ctx.createRpcId !== null && frame.id === ctx.createRpcId && frame.result && frame.result.session_id) {
                     // session.create (Neue Unterhaltung)
-                    hermesSessionId = frame.result.session_id;
+                    ctx.liveSessionId = frame.result.session_id;
                     updateInterruptBtn();   // v0.0.175: Live-ID aktualisiert — Button-Zustand neu bewerten
-                    flushPendingMessages();  // gepufferte Nachrichten sofort senden
+                    flushPendingMessages(ctx);  // gepufferte Nachrichten sofort senden
                     messagesDiv.innerHTML = '';
                     endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
-                    activeSessionId = null;
-                    sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0; updateCtxWarning();
+                    // v0.0.197: '__new__'-Ctx registrieren — die neue Session bekommt ihre
+                    // echte stored-id (Sidebar/Reconnect sehen die echte Session).
+                    const storedNew2 = frame.result.stored_session_id || frame.result.session_id;
+                    if (storeKey(ctx.storedId) === storeKey(null) && ctx.storedId !== storedNew2) {
+                        sessions.delete(storeKey(null));
+                        ctx.storedId = storedNew2;
+                        sessions.set(storedNew2, ctx);
+                    }
+                    activeSessionId = storedNew2;   // v0.0.197: View folgt der neuen Session (vorher null — Reconnect eröffnete sonst eine NEUE Unterhaltung)
+                    ctx.sessionCtxPct = 0; ctx.sessionCtxMax = 0; ctx.sessionMsgCount = 0; updateCtxWarning();
                     updateTokenWidget();   // neue Session: Anzeige SOFORT zurücksetzen (v0.0.115)
                     refreshUsageGauge();   // v0.0.119: exakten Kontext-Stand sofort nachladen
                     // Neue Session als "letzte" merken (Persistenz über Tab-Close,
                     // damit Hintergrund-Ergebnisse in dieser Session landen).
                     const storedNew = frame.result.stored_session_id || frame.result.session_id;
                     localStorage.setItem('atlas_last_session', storedNew);
-                    createRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
+                    ctx.createRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     $('currentSessionLabel').classList.add('hidden');
                     addMsg('system', 'Verbunden mit Hermes-Instanz ✓');
                     return;
                 }
                 // Wenn resume fehlschlägt (Session existiert nicht mehr),
                 // automatisch fallback auf session.create statt stecken zu bleiben.
-                if (resumeRpcId !== null && frame.id === resumeRpcId && frame.error) {
+                if (ctx.resumeRpcId !== null && frame.id === ctx.resumeRpcId && frame.error) {
                     console.log('[Atlas] session.resume fehlgeschlagen (' + frame.error.message + '), fallback auf session.create');
-                    resumeRpcId = null;
+                    ctx.resumeRpcId = null;
                     localStorage.removeItem('atlas_last_session');
+                    // v0.0.197: tote Ctx aus der Registry lösen, damit die Sidebar
+                    // (Task 2) sie nicht mehr als offene Session führt.
+                    if (ctx.storedId) sessions.delete(storeKey(ctx.storedId));
+                    ctx.storedId = null;
+                    ctx.liveSessionId = null;
                     const p = { close_on_disconnect: false, source: 'webui' };
                     if (selectedProfile) p.profile = selectedProfile;
-                    createRpcId = sendRpc('session.create', p);
+                    ctx.createRpcId = ctx.sendRpc('session.create', p);
                     return;
                 }
-                if (resumeRpcId !== null && frame.id === resumeRpcId && frame.result && frame.result.session_id) {
+                if (ctx.resumeRpcId !== null && frame.id === ctx.resumeRpcId && frame.result && frame.result.session_id) {
                     // session.resume (alte Session fortsetzen): Hermes vergibt eine NEUE kurze
                     // Live-Session-ID (uuid4-hex8) in result.session_id — nur mit dieser ID
                     // findet prompt.submit die Session in der Live-Registry.
                     console.log('[Atlas] resume antwortet, Live-Session-ID = ' + frame.result.session_id);
-                    hermesSessionId = frame.result.session_id;
+                    ctx.liveSessionId = frame.result.session_id;
                     updateInterruptBtn();   // v0.0.175: Live-ID nach Session-Wechsel aktualisiert
-                    resumeRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
-                    flushPendingMessages();  // gepufferte Nachrichten sofort senden
+                    ctx.resumeRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
+                    flushPendingMessages(ctx);  // gepufferte Nachrichten sofort senden
                     // Fortgesetzte Session als "letzte" merken.
-                    localStorage.setItem('atlas_last_session', activeSessionId || frame.result.session_id);
-                    sessionCtxPct = 0; sessionCtxMax = 0;
+                    localStorage.setItem('atlas_last_session', ctx.storedId || frame.result.session_id);
+                    ctx.sessionCtxPct = 0; ctx.sessionCtxMax = 0;
                     // v0.0.117: Kontext-% SOFORT aus session.resume.info.usage übernehmen —
                     // Hermes 0.20.2 liefert context_percent/context_max bereits beim Resume
                     // (vorher nur aus message.complete → Prozentanzeige fehlte nach Neuanmeldung).
                     const ru = (frame.result.info && frame.result.info.usage) || {};
                     if (ru.context_percent != null) {
-                        sessionCtxPct = ru.context_percent;
-                        if (ru.context_max) sessionCtxMax = ru.context_max;
+                        ctx.sessionCtxPct = ru.context_percent;
+                        if (ru.context_max) ctx.sessionCtxMax = ru.context_max;
                         // v0.0.125: Wert SOFORT cachen — ctxCacheSave lief nur in
                         // refreshUsageGauge bei echtem session.usage-Wert, und den gibt es
                         // für kalte Sessions NIE → nach Session-Wechsel war der Cache leer
                         // und die Anzeige blieb für immer weg (auch nach Zurückwechseln).
                         ctxCacheSave();
                     }
-                    sessionMsgCount = frame.result.message_count || (frame.result.messages || []).length;
+                    ctx.sessionMsgCount = frame.result.message_count || (frame.result.messages || []).length;
                     // v0.0.125: Ersten bekannten Kontext-Stand anzeigen, wenn Hermes keinen
                     // echten Wert liefert (kalte Session, noch kein Turn gelaufen):
                     // Hermes liefert context_percent nur nach einem Turn (server.py:
                     // „leave it unknown otherwise“). Reihenfolge WICHTIG: Cache VOR
                     // updateCtxWarning/updateTokenWidget laden, sonst feuert die
-                    // Session-weiterführen-Warnung nie (sessionCtxPct noch 0).
-                    if (sessionCtxPct === 0) {
+                    // Session-weiterführen-Warnung nie (ctx.sessionCtxPct noch 0).
+                    if (ctx.sessionCtxPct === 0) {
                         const cc = ctxCacheLoad();
-                        if (cc) { sessionCtxPct = cc.pct; if (cc.max) sessionCtxMax = cc.max; }
+                        if (cc) { ctx.sessionCtxPct = cc.pct; if (cc.max) ctx.sessionCtxMax = cc.max; }
                     }
                     updateCtxWarning();
                     updateTokenWidget();   // Session-Wechsel: Anzeige SOFORT aktualisieren (v0.0.115)
                     refreshUsageGauge();   // v0.0.119: Kontext-% auch bei idle Session nachladen
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
-                    historyRpcId = sendRpc('session.history', { session_id: hermesSessionId });
+                    ctx.historyRpcId = sendRpc('session.history', { session_id: ctx.liveSessionId });
                     // Offene clarify-Frage aus dem resume-Result merken — die Karte
                     // wird NACH dem Verlaufs-Rendering eingehängt (sonst löscht
                     // messagesDiv.innerHTML sie wieder). (v0.0.136)
-                    pendingClarifyOnResume = frame.result.pending_clarify || null;
+                    ctx.pendingClarifyOnResume = frame.result.pending_clarify || null;
                     // ggf. mitgelieferte Verlaufsnachrichten direkt rendern (Live-Reuse-Pfad)
                     if (frame.result.messages && frame.result.messages.length) {
                         messagesDiv.innerHTML = '';
@@ -1938,23 +2064,23 @@
                         messagesDiv.scrollTop = messagesDiv.scrollHeight;
                         // Done-Elemente zusammenklappen (v0.0.158: fehlte in diesem Pfad!)
                         collapseDoneElements();
-                        // historyRpcId auflösen — wenn die session.history-Antwort
+                        // ctx.historyRpcId auflösen — wenn die session.history-Antwort
                         // später ankommt, darf sie den DOM NICHT nochmal löschen.
                         // (Zweipfad-Kollision: erster Pfad rendert, zweiter löscht alles.)
-                        historyRpcId = null;
+                        ctx.historyRpcId = null;
                     }
                     $('currentSessionLabel').textContent = activeSessionId;
                     $('currentSessionLabel').classList.remove('hidden');
                     return;
                 }
-                if (frame.id === historyRpcId && frame.result && frame.result.messages) {
+                if (frame.id === ctx.historyRpcId && frame.result && frame.result.messages) {
                     const msgs = frame.result.messages || [];
                     messagesDiv.innerHTML = '';
                     endWorkingTurn();   // History-Rebuild → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
                     // v0.0.115: echte Gesamtzahl (count) für die 📨-Anzeige übernehmen,
                     // nicht nur die gerenderten Nachrichten (msgs.length).
                     if (frame.result.count != null) {
-                        sessionMsgCount = frame.result.count;
+                        ctx.sessionMsgCount = frame.result.count;
                         updateTokenWidget();
                     }
                     msgs.forEach(m => {
@@ -1996,21 +2122,21 @@
                     // Session wurde geöffnet → bewusst ans Ende springen (neueste Nachricht)
                     messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     // Offene clarify-Frage nach Reconnect/Resume wiederherstellen (v0.0.136)
-                    if (pendingClarifyOnResume) {
-                        renderClarifyCard(pendingClarifyOnResume);
-                        pendingClarifyOnResume = null;
+                    if (ctx.pendingClarifyOnResume) {
+                        renderClarifyCard(ctx.pendingClarifyOnResume);
+                        ctx.pendingClarifyOnResume = null;
                     }
                     // Done-Elemente zusammenklappen (v0.0.155)
                     collapseDoneElements();
-                    historyRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
+                    ctx.historyRpcId = null;   // v0.0.122: Handler nach Erfolg freigeben (Kollisionsschutz)
                     return;
                 }
                 } catch (err) { console.error('[Atlas] onmessage handler exception:', err.message, err.stack); }
-                // Generic RPC response handler (v0.0.113 migration) — MUSS vor pendingAttachResponses
+                // Generic RPC response handler (v0.0.113 migration) — MUSS vor ctx.pendingAttachResponses
                 // weil session.history / session.create auch {id:X, result:{...}} ohne method haben.
-                if (frame.id && pendingRpcCallbacks[frame.id]) {
-                    const cb = pendingRpcCallbacks[frame.id];
-                    delete pendingRpcCallbacks[frame.id];
+                if (frame.id && ctx.pendingRpcCallbacks[frame.id]) {
+                    const cb = ctx.pendingRpcCallbacks[frame.id];
+                    delete ctx.pendingRpcCallbacks[frame.id];
                     // v0.0.129: vollen Frame übergeben (siehe Kommentar beim Generic ganz oben)
                     if (frame.error) cb({ id: frame.id, error: frame.error });
                     else cb(frame);
@@ -2021,7 +2147,7 @@
                                 // WICHTIG: image.attach_bytes/pdf.attach/file.attach antworten
                                 // mit {"id":X,"result":{...}} — kein method-Feld → würden sonst
                                 // bei 'frame.method !== event' verworfen und nie in
-                                // pendingAttachResponses landen → falscher Timeout im Frontend.
+                                // ctx.pendingAttachResponses landen → falscher Timeout im Frontend.
                                 if (frame.id !== undefined && !frame.method) {
                                     // v0.0.188: CRASH-FIX — bei error-Frames ist frame.result undefined;
                                     // JSON.stringify(undefined) === undefined → .substring crashte den ganzen
@@ -2033,24 +2159,24 @@
                                     // Turn läuft an, „Agent arbeitet…" sofort anzeigen (Feedback
                                     // während langer Denk-/Tool-Phasen, sonst wirkt es wie „hängt").
                                     if (frame.result && frame.result.status === 'streaming') {
-                                        turnActive = true;   // v0.0.141: Turn läuft — Resume-Timer darf später wieder einblenden
+                                        ctx.turnActive = true;   // v0.0.141: Turn läuft — Resume-Timer darf später wieder einblenden
                                         showWorkingStatus();
                                         updateInterruptBtn();   // v0.0.175: Turn aktiv → Stop-Button scharf
-                                        if (lastSubmitRpcId !== null && frame.id === lastSubmitRpcId) lastSubmitRpcId = null;   // v0.0.188: ACK erhalten
+                                        if (ctx.lastSubmitRpcId !== null && frame.id === ctx.lastSubmitRpcId) ctx.lastSubmitRpcId = null;   // v0.0.188: ACK erhalten
                                     }
-                                    // v0.0.188: prompt.submit abgelehnt (Error) → optimistisches turnActive zurücknehmen
-                                    if (lastSubmitRpcId !== null && frame.id === lastSubmitRpcId) {
-                                        lastSubmitRpcId = null;
+                                    // v0.0.188: prompt.submit abgelehnt (Error) → optimistisches ctx.turnActive zurücknehmen
+                                    if (ctx.lastSubmitRpcId !== null && frame.id === ctx.lastSubmitRpcId) {
+                                        ctx.lastSubmitRpcId = null;
                                         if (frame.error) {
-                                            turnActive = false;
+                                            ctx.turnActive = false;
                                             updateInterruptBtn();
                                         }
                                     }
                                     if (frame.error) {
-                                        pendingAttachResponses[frame.id] = { error: frame.error };
+                                        ctx.pendingAttachResponses[frame.id] = { error: frame.error };
                                     } else if (frame.result) {
-                                        pendingAttachResponses[frame.id] = frame.result;
-                                        console.log('[Atlas] Attached to pendingAttachResponses[' + frame.id + ']: ' + (frame.result.attached || 'no attached field'));
+                                        ctx.pendingAttachResponses[frame.id] = frame.result;
+                                        console.log('[Atlas] Attached to ctx.pendingAttachResponses[' + frame.id + ']: ' + (frame.result.attached || 'no attached field'));
                                     }
                                     return;
                                 }
@@ -2063,15 +2189,15 @@
                 // "Denken" des Agenten (Reasoning) — kompakte, gedimmte Box vor der Antwort.
                 // v0.0.142: reasoning.delta kommt bei Tool-Turns in MEHREREN Phasen (vor dem
                 // ersten Text UND nach message.delta, wenn der Agent nach Tool-Ende weiter
-                // arbeitet). Der alte `!bubble`-Guard verschluckte alle Reasoning-Boxen nach
+                // arbeitet). Der alte `!ctx.bubble`-Guard verschluckte alle Reasoning-Boxen nach
                 // dem ersten Text (Befund 2026-08-23: „…werden danach die Reasoning-Text auch
                 // nicht mehr angezeigt“). Fix: Denk-Box IMMER bauen/ergänzen — message.delta
                 // schließt sie je Runde ab.
                 if (p.type === 'reasoning.delta' && p.payload && p.payload.text && showReasoning) {
-                    if (!thinkingBubble) {
-                        thinkingBubble = addMsg('thinking', '💭 ' + p.payload.text);
+                    if (!ctx.thinkingBubble) {
+                        ctx.thinkingBubble = addMsg('thinking', '💭 ' + p.payload.text);
                     } else {
-                        const tbSpan = thinkingBubble.querySelector('span');
+                        const tbSpan = ctx.thinkingBubble.querySelector('span');
                         const tbRaw = tbSpan.dataset.raw || '';
                         const tbNext = tbRaw + p.payload.text;
                         tbSpan.dataset.raw = tbNext;
@@ -2089,7 +2215,7 @@
                     // die Zeile zeigt immer „Agent arbeitet… (seit N s)“. Stattdessen:
                     // Läuft der Turn und die Zeile ist gerade unsichtbar (z. B. nach
                     // Text-Ende), wird sie hier SOFORT wieder eingeblendet (kein 6-s-Timer).
-                    if (turnActive) showWorkingStatus();   // Guards entscheiden (showStatus, workingActive, leaseWaitBubble)
+                    if (ctx.turnActive) showWorkingStatus();   // Guards entscheiden (showStatus, workingActive, ctx.leaseWaitBubble)
                     return;
                 }
                 // Clarify-Frage des Agenten (v0.0.136): Karte mit Buttons + freiem
@@ -2113,29 +2239,29 @@
                     // Hermes sendet message.complete erst am Turnende — alle Textpassagen
                     // (vor/nach Tools) kämen sonst in EINE wachsende Bubble. Die History
                     // zeigt sie aber als getrennte Blöcke (Hermes speichert die Timeline
-                    // einzeln). Mit bubble=null beginnt der Text nach dem Tool eine NEUE
+                    // einzeln). Mit ctx.bubble=null beginnt der Text nach dem Tool eine NEUE
                     // Bubble → Live-Ansicht = Refresh-Ansicht (Befund 2026-08-23).
-                    if (bubble) {
-                        const bmeta = bubble.querySelector('.meta');
+                    if (ctx.bubble) {
+                        const bmeta = ctx.bubble.querySelector('.meta');
                         if (bmeta && !bmeta.textContent) {
                             bmeta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                         }
-                        bubble = null;
+                        ctx.bubble = null;
                     }
                     // Denk-Box (falls offen) als abgeschlossen markieren
-                    if (thinkingBubble) {
-                        thinkingBubble.classList.add('done');
-                        thinkingBubble = null;
+                    if (ctx.thinkingBubble) {
+                        ctx.thinkingBubble.classList.add('done');
+                        ctx.thinkingBubble = null;
                     }
-                    const ctx = p.payload.context
+                    const toolCtx = p.payload.context
                         || (p.payload.args && (p.payload.args.command || p.payload.args.url || p.payload.args.path || p.payload.args.query || ''))
                         || '';
                     const el = addMsg('system', '⚙️ Tool: ' + p.payload.name
-                        + (ctx ? ' — ' + String(ctx).split('\n')[0].slice(0, 80) : ''));
-                    if (p.payload.tool_id) activeToolEls[p.payload.tool_id] = el;
+                        + (toolCtx ? ' — ' + String(toolCtx).split('\n')[0].slice(0, 80) : ''));
+                    if (p.payload.tool_id) ctx.activeToolEls[p.payload.tool_id] = el;
                 }
                 if (p.type === 'tool.complete' && p.payload && p.payload.name) {
-                    const el = p.payload.tool_id ? activeToolEls[p.payload.tool_id] : null;
+                    const el = p.payload.tool_id ? ctx.activeToolEls[p.payload.tool_id] : null;
                     const res = p.payload.result || {};
                     const ds = p.payload.duration_s != null ? ' (' + p.payload.duration_s.toFixed(1) + ' s)' : '';
                     let suffix;
@@ -2147,22 +2273,22 @@
                     } else {
                         addMsg('system', '⚙️ Tool: ' + p.payload.name + ' — abgeschlossen' + suffix);
                     }
-                    if (p.payload.tool_id) delete activeToolEls[p.payload.tool_id];
+                    if (p.payload.tool_id) delete ctx.activeToolEls[p.payload.tool_id];
                 }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
                     // Antwort beginnt → Denk-Box abschließen, Statuszeile entfernen,
                     // Lease-Warte-Bubble (falls vorhanden) ebenfalls beenden
-                    if (leaseWaitBubble) clearLeaseWait();
+                    if (ctx.leaseWaitBubble) clearLeaseWait();
                     // v0.0.142: Denk-Box auch dann abschließen, wenn die Antwort-Bubble schon
-                    // existiert (2. Agenten-Runde nach Tool-Ende) — `!bubble`-Guard entfernt.
-                    if (thinkingBubble) {
-                        thinkingBubble.classList.add('done');
-                        thinkingBubble = null;
+                    // existiert (2. Agenten-Runde nach Tool-Ende) — `!ctx.bubble`-Guard entfernt.
+                    if (ctx.thinkingBubble) {
+                        ctx.thinkingBubble.classList.add('done');
+                        ctx.thinkingBubble = null;
                     }
-                    if (workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
+                    if (ctx.workingActive) hideWorkingStatus();   // v0.0.138/139: Zähler beenden, Zeile ausblenden
                     scheduleWorkingResume();   // v0.0.141: Text fließt → Resume-Timer neu; bei ≥6 s Pause (Tool-Phase) kehrt die Zeile zurück
-                    if (!bubble) bubble = addMsg('assistant', '');
-                    const liveSpan = bubble.querySelector('span');
+                    if (!ctx.bubble) ctx.bubble = addMsg('assistant', '');
+                    const liveSpan = ctx.bubble.querySelector('span');
                     const rawSoFar = liveSpan.dataset.raw || '';
                     const nextRaw = rawSoFar + p.payload.text;
                     liveSpan.dataset.raw = nextRaw;
@@ -2170,34 +2296,34 @@
                     followSticky();
                 }
                 if (p.type === 'message.complete') {
-                    if (leaseWaitBubble) clearLeaseWait();
-                    if (bubble) {
+                    if (ctx.leaseWaitBubble) clearLeaseWait();
+                    if (ctx.bubble) {
                         // MEDIA:-Tags der fertigen Antwort in Download-Buttons umwandeln
-                        const finalSpan = bubble.querySelector('span');
+                        const finalSpan = ctx.bubble.querySelector('span');
                         if (finalSpan && finalSpan.textContent && finalSpan.textContent.includes('MEDIA:')) {
-                            renderMediaDownloads(bubble, finalSpan.textContent);
+                            renderMediaDownloads(ctx.bubble, finalSpan.textContent);
                         }
-                        const meta = bubble.querySelector('.meta') || document.createElement('span');
+                        const meta = ctx.bubble.querySelector('.meta') || document.createElement('span');
                         meta.className = 'meta';
                         meta.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-                        bubble.appendChild(meta);
-                        bubble = null;
+                        ctx.bubble.appendChild(meta);
+                        ctx.bubble = null;
                     }
-                    if (thinkingBubble) {
-                        thinkingBubble.classList.add('done');
-                        thinkingBubble = null;
+                    if (ctx.thinkingBubble) {
+                        ctx.thinkingBubble.classList.add('done');
+                        ctx.thinkingBubble = null;
                     }
                     endWorkingTurn();   // v0.0.141: Turn-Ende — Zeile endgültig aus, kein Resume
                     const u = (p.payload && p.payload.usage) || {};
                     if (u.context_percent != null) {
-                        sessionCtxPct = u.context_percent;
-                        sessionCtxMax = u.context_max || sessionCtxMax;
-                        sessionMsgCount += 1;   // v0.0.115: Zähler hochzählen statt nullen
+                        ctx.sessionCtxPct = u.context_percent;
+                        ctx.sessionCtxMax = u.context_max || ctx.sessionCtxMax;
+                        ctx.sessionMsgCount += 1;   // v0.0.115: Zähler hochzählen statt nullen
                                                 // (message.complete hat kein message_count —
                                                 //  Nullen ließ die 📨-Anzeige nach Antwort verschwinden)
                         updateCtxWarning();
                     } else {
-                        sessionMsgCount += 1;   // v0.0.119: Zähler auch ohne context_percent hochzählen
+                        ctx.sessionMsgCount += 1;   // v0.0.119: Zähler auch ohne context_percent hochzählen
                     }
                     refreshUsageGauge();   // v0.0.119: exakten Kontext via session.usage nachladen
                     // Token-Anzeige nach jeder fertigen Antwort sofort aktualisieren
@@ -2219,7 +2345,7 @@
                         } else {
                             showLeaseWait(t);
                         }
-                    } else if (!bubble) {
+                    } else if (!ctx.bubble) {
                         showToast(t);
                     }
                 }
@@ -2228,9 +2354,8 @@
                 }
                 // RPC-Antworten für Attachments speichern
                 if (frame.id && frame.result) {
-                    pendingAttachResponses[frame.id] = frame.result;
+                    ctx.pendingAttachResponses[frame.id] = frame.result;
                 }
-            };
         }
 
         let isSending = false;
@@ -2247,14 +2372,15 @@
         }
 
         async function sendMessage(text) {
+            const ctx = C;   // v0.0.197: Senden passiert immer in der AKTIVEN Session
             if (isSending) return;
             if (!text.trim() && pendingFiles.length === 0) return;
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
+            if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) {
                 addMsg('system', 'Fehler: Nicht verbunden');
                 return;
             }
-            if (!hermesSessionId) {
-                pendingMessages.push(text);
+            if (!ctx.liveSessionId) {
+                ctx.pendingMessages.push(text);
                 return;
             }
             if (!confirmOversizedMessage(text)) return;   // v0.0.137: Riesen-Paste abbrechen (Text bleibt im Eingabefeld)
@@ -2324,7 +2450,7 @@
                     promptText += (promptText ? '\n' : '') + refTexts.join('\n');
                 }
             }
-            lastSubmitRpcId = sendRpc('prompt.submit', { session_id: hermesSessionId, text: promptText });
+            ctx.lastSubmitRpcId = ctx.sendRpc('prompt.submit', { session_id: ctx.liveSessionId, text: promptText });
             markTurnActive();   // v0.0.188: optimistisch scharf ab Senden — verlorenes streaming-ACK darf den Stop-Button nicht für den ganzen Turn deaktivieren
             // Persistenz VOR dem Leeren speichern (sonst ist pendingFiles leer!)
             saveAttachmentPreviews();
@@ -2349,11 +2475,13 @@
             });
         }
 
-        function flushPendingMessages() {
-            if (!hermesSessionId) return;
-            const msgs = pendingMessages.splice(0);
+        // v0.0.197: flusht die Warteschlange der Ctx (Aufrufer: Frame-Handler mit ctx)
+        function flushPendingMessages(ctx) {
+            if (!ctx) ctx = C;   // Rücksprung-Kompatibilität (Task 1: nur aktive Ctx)
+            if (!ctx.liveSessionId) return;
+            const msgs = ctx.pendingMessages.splice(0);
             for (const text of msgs) {
-                lastSubmitRpcId = sendRpc('prompt.submit', { session_id: hermesSessionId, text: text });
+                ctx.lastSubmitRpcId = ctx.sendRpc('prompt.submit', { session_id: ctx.liveSessionId, text: text });
                 markTurnActive();   // v0.0.188: wie beim Composer-Send — Button sofort scharf
             }
         }
@@ -2375,8 +2503,9 @@
         // Alle Dateien gehen über file.attach (kein pdf.attach mehr — pdftoppm oft nicht installiert).
         // Nur Bilder nutzen image.attach_bytes (für die Vision-Pipeline).
         async function attachFileToHermes(pf) {
+            const ctx = C;   // v0.0.197: Attach läuft in der AKTIVEN Session
             addMsg('system', '📎 Hänge Datei an Hermes an: ' + pf.name);
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
+            if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) {
                 addMsg('system', '❌ Keine Verbindung zu Hermes — Datei konnte nicht übertragen werden');
                 return false;
             }
@@ -2387,24 +2516,24 @@
             // einheitliches data_url ließ Hermes mit "content_base64 required"
             // abstürzen. Siehe Hermes tui_gateway/methods_prompt.py.
             const params = isImage
-                ? { session_id: hermesSessionId, content_base64: pf.base64Url }
-                : { session_id: hermesSessionId, data_url: pf.base64Url, name: pf.name };
+                ? { session_id: ctx.liveSessionId, content_base64: pf.base64Url }
+                : { session_id: ctx.liveSessionId, data_url: pf.base64Url, name: pf.name };
             console.log('[Atlas] Hermes attach:', method, pf.name);
             addMsg('system', '📤 Übertrage ' + pf.name + ' an Hermes (' + method + ') …');
             return new Promise((resolve) => {
-                const attachRpcId = sendRpc(method, params);
+                const attachRpcId = ctx.sendRpc(method, params);
                 let settled = false;  // verhindert doppeltes resolve + Timeout nach Erfolg
                 // Antwort wird von onmessage behandelt
                 // Wir warten kurz auf die Antwort
                 const checkAttach = setInterval(() => {
                     if (settled) return;
-                    if (pendingAttachResponses[attachRpcId]) {
+                    if (ctx.pendingAttachResponses[attachRpcId]) {
                         settled = true;
                         clearInterval(checkAttach);
                         clearTimeout(timeoutTimer);  // ← Timer stoppen, sonst kommt
                         // trotz Erfolg die Timeout-Meldung!
-                        const resp = pendingAttachResponses[attachRpcId];
-                        delete pendingAttachResponses[attachRpcId]; // aufräumen
+                        const resp = ctx.pendingAttachResponses[attachRpcId];
+                        delete ctx.pendingAttachResponses[attachRpcId]; // aufräumen
                         if (resp && (resp.attached || resp.count !== undefined)) {
                             addMsg('system', '✅ ' + pf.name + ' bei Hermes registriert');
                         } else {
@@ -2899,30 +3028,8 @@
         });
 
         // ---------------------------------------------------------------- Sessions
-        function restartWS() {
-            // Bestehende Verbindung sauber beenden, OHNE dass ihr onclose-Handler
-            // die neue Verbindung sabotiert (Race: alter onclose setzt ws=null
-            // und plant Reconnect, nachdem die neue Verbindung schon läuft)
-            if (ws) {
-                const old = ws;
-                ws = null;
-                old.onclose = null;   // alten Handler deaktivieren
-                old.onerror = null;
-                try { old.close(); } catch (_) {}
-            }
-            rejectAllPendingRpc('Session gewechselt');   // v0.0.120: hängende fetchRpc auflösen
-            interruptRpcId = null;   // v0.0.184: Interrupt-Anfrage gehört zur alten Verbindung — Antwort kommt nach close() nie → freigeben (sonst Button dauerhaft disabled)
-            updateInterruptBtn();
-            hermesSessionId = null;
-            messagesDiv.innerHTML = '';
-            bubble = null;
-            if (leaseWaitBubble) clearLeaseWait();   // Warte-Bubble beim Wechsel aufräumen
-            if (thinkingBubble) { thinkingBubble = null; }
-            endWorkingTurn();   // „Agent arbeitet…“-Zeile beim Session-Wechsel ausblenden, kein Resume (v0.0.139/141)
-            // Anzeige-Einstellungen (Denken/Statuszeilen) frisch laden — gilt auch nach Session-Wechsel
-            loadDisplaySettings();
-            connectWS();
-        }
+        // v0.0.197: restartWS ist oben definiert (openSession-basiert, harte Neuverbindung
+        // mit View-Reset). Die frühere Implementierung (WS-Close + Globals-Reset) entfällt.
 
         // ============ Done-Elemente zusammenklappen (v0.0.155, v0.0.157) ============
         function collapseDoneElements() {
@@ -3199,20 +3306,21 @@
         // Kontext-% aus sessionCtxPct — beim Resume aus info.usage (v0.0.117),
         // danach live aus message.complete. KEIN eigener RPC nötig.
         function ctxFillHtml() {
+            const ctx = C;   // v0.0.197: Anzeige zeigt die AKTIVE Session
             let parts = [];
-            if (sessionMsgCount > 0) {
-                parts.push('<span class="ctx-count" title="' + sessionMsgCount +
-                           ' Nachrichten in dieser Session">📨 ' + sessionMsgCount + '</span>');
+            if (ctx && ctx.sessionMsgCount > 0) {
+                parts.push('<span class="ctx-count" title="' + ctx.sessionMsgCount +
+                           ' Nachrichten in dieser Session">📨 ' + ctx.sessionMsgCount + '</span>');
             }
-            if (sessionCtxPct) {
+            if (ctx && ctx.sessionCtxPct) {
                 let cls = 'ctx-fill';
-                if (sessionCtxPct >= 80) cls += ' crit';
-                else if (sessionCtxPct >= CTX_WARN_PCT) cls += ' warn';
+                if (ctx.sessionCtxPct >= 80) cls += ' crit';
+                else if (ctx.sessionCtxPct >= CTX_WARN_PCT) cls += ' warn';
                 let maxTxt = '';
-                if (sessionCtxMax) maxTxt = ' / ' + Math.round(sessionCtxMax / 1000) + 'k';
-                parts.push('<span class="' + cls + '" title="Session-Kontext: ' + sessionCtxPct +
-                           '% von ' + (sessionCtxMax ? sessionCtxMax.toLocaleString('de-DE') : '?') +
-                           ' Tokens">🧠 Kontext ' + sessionCtxPct + '%' + maxTxt + '</span>');
+                if (ctx.sessionCtxMax) maxTxt = ' / ' + Math.round(ctx.sessionCtxMax / 1000) + 'k';
+                parts.push('<span class="' + cls + '" title="Session-Kontext: ' + ctx.sessionCtxPct +
+                           '% von ' + (ctx.sessionCtxMax ? ctx.sessionCtxMax.toLocaleString('de-DE') : '?') +
+                           ' Tokens">🧠 Kontext ' + ctx.sessionCtxPct + '%' + maxTxt + '</span>');
             }
             if (!parts.length) return '';
             // Gemeinsame Zeile über der Token-Tabelle: beide Werte nebeneinander (v0.0.116)
@@ -3245,7 +3353,8 @@
         }
         function ctxCacheSave() {
             try {
-                localStorage.setItem(ctxCacheKey(), JSON.stringify({ pct: sessionCtxPct, max: sessionCtxMax }));
+                const ctx = C;
+                localStorage.setItem(ctxCacheKey(), JSON.stringify({ pct: ctx ? ctx.sessionCtxPct : 0, max: ctx ? ctx.sessionCtxMax : 0 }));
             } catch (_) {}
         }
         function ctxCacheLoad() {
@@ -3256,25 +3365,25 @@
             return null;
         }
         async function refreshUsageGauge() {
-            if (!hermesSessionId || usageGaugePending) return;
+            if (!C || !C.liveSessionId || usageGaugePending) return;   // v0.0.197: akive Ctx statt global
             usageGaugePending = true;
             try {
-                const p = { session_id: hermesSessionId };
+                const p = { session_id: C.liveSessionId };
                 if (selectedProfile) p.profile = selectedProfile;
-                const u = await fetchRpc('session.usage', p);
+                const u = await C.fetchRpc('session.usage', p);
                 if (u && u.context_percent != null) {
-                    sessionCtxPct = u.context_percent;
-                    if (u.context_max) sessionCtxMax = u.context_max;
+                    C.sessionCtxPct = u.context_percent;
+                    if (u.context_max) C.sessionCtxMax = u.context_max;
                     updateCtxWarning();
                     updateTokenWidget();
                     ctxCacheSave();
-                } else if (!sessionCtxPct) {
+                } else if (!C.sessionCtxPct) {
                     // Kalte Session: Hermes hat (noch) keinen echten Wert →
                     // letzten bekannten Stand anzeigen statt die Anzeige zu verlieren.
                     const c = ctxCacheLoad();
                     if (c) {
-                        sessionCtxPct = c.pct;
-                        sessionCtxMax = c.max || sessionCtxMax;
+                        C.sessionCtxPct = c.pct;
+                        C.sessionCtxMax = c.max || C.sessionCtxMax;
                         updateCtxWarning();
                         updateTokenWidget();
                     }
@@ -3286,17 +3395,18 @@
         function updateCtxWarning() {
             const el = document.getElementById('ctxWarn');
             if (!el) return;
-            if (sessionCtxPct >= CTX_WARN_PCT) {
+            const ctx = C;
+            if (ctx && ctx.sessionCtxPct >= CTX_WARN_PCT) {
                 // Reine Warnmeldung (v0.0.177): der „Session weiterführen“-Button sitzt fest im
                 // Composer (#migrateBtn ▶) — die rote Meldung ist nur noch Hinweis.
-                el.innerHTML = '⚠️ Session-Kontext ~' + sessionCtxPct + '% voll — mit ▶ (Session weiterführen) in eine neue Session wechseln (komprimiert den Kontext).';
+                el.innerHTML = '⚠️ Session-Kontext ~' + ctx.sessionCtxPct + '% voll — mit ▶ (Session weiterführen) in eine neue Session wechseln (komprimiert den Kontext).';
                 el.classList.remove('hidden');
-            } else if (sessionCtxPct === 0 && sessionMsgCount >= CTX_WARN_MSGS) {
+            } else if (ctx && ctx.sessionCtxPct === 0 && ctx.sessionMsgCount >= CTX_WARN_MSGS) {
                 // v0.0.115: Trigger 2 (Nachrichtenzahl) NUR solange Kontext-% unbekannt
                 // (Resume-Fallback). Nach der ersten Antwort entscheidet nur noch der
                 // exakte context_percent — sonst bliebe das Banner bei 400+Nachrichten
                 // dauerhaft stehen, obwohl der Kontext nach Kompression wieder klein ist.
-                el.innerHTML = '⚠️ Session sehr groß (' + sessionMsgCount + ' Nachrichten) — mit ▶ (Session weiterführen) in eine neue Session wechseln (komprimiert den Kontext).';
+                el.innerHTML = '⚠️ Session sehr groß (' + ctx.sessionMsgCount + ' Nachrichten) — mit ▶ (Session weiterführen) in eine neue Session wechseln (komprimiert den Kontext).';
                 el.classList.remove('hidden');
             } else {
                 el.innerHTML = '';
@@ -3342,15 +3452,16 @@
             migrateBtnRpcId = 'migrating';
             updateMigrateBtn();
             try {
-                if (!hermesSessionId && !activeSessionId) throw new Error('Keine aktive Session');
+                const ctx = C;   // v0.0.197: Migration läuft in der AKTIVEN Session
+                if (!ctx.liveSessionId && !activeSessionId) throw new Error('Keine aktive Session');
                 // v0.0.183: Live-ID der ALTEN Session merken — für die Kontext-Übernahme
                 // (session.history auf der komprimierten Session, NUR live-id-fähig).
-                const prevLive = hermesSessionId || activeSessionId;
+                const prevLive = ctx.liveSessionId || activeSessionId;
 
                 // 1) Native Kompression anstoßen (LIVE-id, profile mitsenden — sonst wird
                 //    im falschen Profil komprimiert; v0.0.127-Lektion)
                 const compResult = await fetchRpc('session.compress', {
-                    session_id: hermesSessionId || activeSessionId,
+                    session_id: ctx.liveSessionId || activeSessionId,
                     ...(selectedProfile ? { profile: selectedProfile } : {})
                 }, 300000);   // v0.0.185: 90s-Default zu knapp — Kompression mit Aux-LLM-Summary + Fallback braucht real oft >90s (82s-Messung 26.08., Nutzer-Timeout bei v0.0.184)
                 if (!compResult || (compResult.status !== 'compressed' && compResult.status !== 'aborted')) {
@@ -3426,19 +3537,21 @@
                     // vom onopen-/resume-Pfad nach dem WS-Neustart als prompt.submit
                     // geflusht → der Agent übernimmt den Kontext und antwortet kurz.
                     if (contextSeed) {
-                        pendingMessages.push('📎 Kontextübernahme aus der vorherigen Session (Hermes-Kompression):\n\n' + contextSeed + '\n\nBehandle das als übernommenen Kontext; das Anliegen des Nutzers folgt in der nächsten Nachricht.');
+                        // v0.0.197: Seed-Puffer statt ctx.pendingMessages — die Ziel-Ctx
+                        // existiert hier noch nicht; openSession(restartWS) legt ihn dort ab.
+                        pendingMigrateSeed = '📎 Kontextübernahme aus der vorherigen Session (Hermes-Kompression):\n\n' + contextSeed + '\n\nBehandle das als übernommenen Kontext; das Anliegen des Nutzers folgt in der nächsten Nachricht.';
                     }
                 }
-                migratePending = { oldId: activeSessionId || hermesSessionId, newStored: targetStored, summary: migSummary };
+                migratePending = { oldId: activeSessionId || ctx.liveSessionId, newStored: targetStored, summary: migSummary };
 
                 // 3) Auf die (neue bzw. Fortsetzungs-)Session wechseln (restartWS → resume
                 //    macht der onopen-Pfad automatisch mit der neuen stored-id)
-                hermesSessionId = null;   // alte Live-id verwerfen
+                ctx.liveSessionId = null;   // alte Live-id verwerfen
                 activeSessionId = targetStored;
                 localStorage.setItem('atlas_last_session', targetStored);
                 messagesDiv.innerHTML = '';
                 endWorkingTurn();   // neue Session → Arbeitszeile ausblenden, kein Resume (v0.0.139/141)
-                sessionCtxPct = 0; sessionCtxMax = 0; sessionMsgCount = 0;
+                ctx.sessionCtxPct = 0; ctx.sessionCtxMax = 0; ctx.sessionMsgCount = 0;
                 updateCtxWarning();
                 updateTokenWidget();   // Migration: Anzeige SOFORT zurücksetzen (v0.0.115)
                 el.innerHTML = '';
@@ -3506,44 +3619,27 @@
         // v0.0.122: fetchRpc-IDs ab 1M — kollidieren NIE mit sendRpc-IDs (rpcId startet bei 0):
         // historyRpcId/resumeRpcId-Handler (die nach Erfolg NICHT genullt werden) würden sonst
         // die fetchRpc-Antwort verschlucken → 20s-Timeout (Root Cause v0.0.121-Test).
-        let fetchRpcSeq = 1000000; const FETCH_RPC_TIMEOUT_MS = 90000;  // v0.0.127: 20s war zu knapp (Antworten kamen nach >20s an)
-        const pendingRpcTimers = {};   // id -> setTimeout-Handle (v0.0.120)
-        function fetchRpc(method, params, timeoutMs = FETCH_RPC_TIMEOUT_MS) {
-            return new Promise((resolve, reject) => {
-                if (!ws || ws.readyState !== WebSocket.OPEN) { reject(new Error('WS nicht offen')); return; }
-                const id = '' + (++fetchRpcSeq);   // v0.0.124: STRING-ID — Gateway+Proxy konvertieren Zahlen oft zu Strings, ==-Match sonst fehlgeschlagen
-                const timer = setTimeout(() => {
-                    delete pendingRpcCallbacks[id];
-                    delete pendingRpcTimers[id];
-                    reject(new Error(method + ': Zeitüberschreitung nach ' + Math.round(timeoutMs / 1000) + 's'));
-                }, timeoutMs);
-                pendingRpcTimers[id] = timer;
-                const wrapper = (frame) => {
-                    // v0.0.124: String-Vergleich (id ist String, frame.id kann Zahl oder String sein)
-                    if ('' + frame.id !== id) return;
-                    delete pendingRpcCallbacks[id];
-                    if (pendingRpcTimers[id]) { clearTimeout(pendingRpcTimers[id]); delete pendingRpcTimers[id]; }
-                    if (frame.error) reject(new Error(frame.error.message || 'RPC error'));
-                    else resolve(frame.result);
-                };
-                pendingRpcCallbacks[id] = wrapper;
-                try { ws.send(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params })); }
-                catch (e) { delete pendingRpcCallbacks[id]; clearTimeout(timer); reject(e); }
-            });
+        // v0.0.197: fetchRpc lebt JE Ctx (parallele Session-Tabs). Globale Wrapper
+        // delegieren auf die aktive Ctx (Task 1: identisch — es gibt nur eine Ctx).
+        function fetchRpc(method, params, timeoutMs) {
+            if (!C) return Promise.reject(new Error('Keine aktive Session'));
+            return C.fetchRpc(method, params, timeoutMs);
         }
         // v0.0.120: Alle offenen fetchRpc-Promises bei Verbindungsende auflösen,
         // statt sie ewig hängen zu lassen (sonst Migration/Anzeige blockiert).
         // v0.0.124: rejectAllPendingRpc uebergibt jetzt {error, id} — der wrapper
         // (frame.id !== id) hatte sonst frame.id=undefined und wurde ignoriert,
         // Timer wurden gecleart, Promise wurde NIEMALS rejected — endlos hängend.
-        function rejectAllPendingRpc(reason) {
-            const callbacks = pendingRpcCallbacks;
-            pendingRpcCallbacks = {};
+        // v0.0.197: auf der AKTIVEN Ctx (bzw. übergebenen Ctx) statt global.
+        function rejectCtxPending(ctx, reason) {
+            const callbacks = ctx.pendingRpcCallbacks;
+            ctx.pendingRpcCallbacks = {};
             Object.keys(callbacks).forEach(k => {
                 try { callbacks[k]({ error: { message: reason }, id: k }); } catch (_) {}
             });
-            Object.keys(pendingRpcTimers).forEach(k => { clearTimeout(pendingRpcTimers[k]); delete pendingRpcTimers[k]; });
+            Object.keys(ctx.pendingRpcTimers).forEach(k => { clearTimeout(ctx.pendingRpcTimers[k]); delete ctx.pendingRpcTimers[k]; });
         }
+        function rejectAllPendingRpc(reason) { if (C) rejectCtxPending(C, reason); }
 </script>
 </body>
 </html>
