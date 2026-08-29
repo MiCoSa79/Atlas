@@ -389,8 +389,8 @@
            Icons: dezente Feather-SVG-Pfeile in Textfarbe, passend zur Iconsprache. */
         #fabBar {
             position: absolute;
-            right: 6px;
-            bottom: 96px;   /* Fallback; JS setzt exakte Composer-Höhe+Status+6px */
+            right: 12px;
+            bottom: 100px;   /* Fallback; JS setzt exakte Composer-Höhe+Status+12px */
             display: flex;
             align-items: center;
             gap: 8px;
@@ -969,7 +969,6 @@
         });
         // v0.0.132 (jetzt auf #fabBar innerhalb #chatPane): Position an Composer-Höhe
         // (+ workingStatus-Zeile) binden — nie auf statusBar/Eingabezeile (Nutzer-Befund).
-        // v0.0.217: 6px statt 12px Abstand → Bar sitzt enger in der Chat-Ecke unten rechts.
         function positionFabBar() {
             const bar = document.getElementById('fabBar');
             if (!bar) return;
@@ -977,7 +976,7 @@
             const wsEl = document.getElementById('workingStatus');
             let h = composer ? composer.getBoundingClientRect().height : 70;
             if (wsEl && !wsEl.classList.contains('hidden')) h += wsEl.getBoundingClientRect().height;
-            bar.style.bottom = (h + 6) + 'px';
+            bar.style.bottom = (h + 12) + 'px';
         }
         positionFabBar();
         if (window.ResizeObserver && document.getElementById('fabBar')) {
