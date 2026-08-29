@@ -389,8 +389,8 @@
            Icons: dezente Feather-SVG-Pfeile in Textfarbe, passend zur Iconsprache. */
         #fabBar {
             position: absolute;
-            right: 12px;
-            bottom: 100px;   /* Fallback; JS setzt exakte Composer-Höhe+Status+12px */
+            right: 6px;
+            bottom: 96px;   /* Fallback; JS setzt exakte Composer-Höhe+Status+6px */
             display: flex;
             align-items: center;
             gap: 8px;
@@ -421,6 +421,15 @@
             transition: opacity .18s ease, transform .18s ease;
         }
         #fabInputCount.visible { opacity: .92; transform: translateY(0); }
+
+        /* v0.0.217: Desktop (≥900px) kompaktere Jump-Bar — Nutzer: „Buttons etwas kleiner (PC)“.
+           Mobile (<900px) bleibt bei 42px Touch-Targets (Fingertipp). */
+        @media (min-width: 900px) {
+            #fabBar { gap: 6px; }
+            #fabBar button { width: 34px; height: 34px; }
+            #fabBar button svg { width: 16px; height: 16px; }
+            #fabInputCount { min-width: 30px; padding: 3px 6px; font-size: 11px; }
+        }
 
         /* 2FA-Pflicht-Overlay (nicht schließbar, nur per 2FA-Einrichtung) */
         .otp-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 25; align-items: center; justify-content: center; padding: 20px; }
@@ -960,6 +969,7 @@
         });
         // v0.0.132 (jetzt auf #fabBar innerhalb #chatPane): Position an Composer-Höhe
         // (+ workingStatus-Zeile) binden — nie auf statusBar/Eingabezeile (Nutzer-Befund).
+        // v0.0.217: 6px statt 12px Abstand → Bar sitzt enger in der Chat-Ecke unten rechts.
         function positionFabBar() {
             const bar = document.getElementById('fabBar');
             if (!bar) return;
@@ -967,7 +977,7 @@
             const wsEl = document.getElementById('workingStatus');
             let h = composer ? composer.getBoundingClientRect().height : 70;
             if (wsEl && !wsEl.classList.contains('hidden')) h += wsEl.getBoundingClientRect().height;
-            bar.style.bottom = (h + 12) + 'px';
+            bar.style.bottom = (h + 6) + 'px';
         }
         positionFabBar();
         if (window.ResizeObserver && document.getElementById('fabBar')) {
