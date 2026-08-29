@@ -147,7 +147,7 @@
            [Sidebar | Chat], Statusleiste unten volle Breite: Sidebar sitzt DAZWISCHEN */
         #appBody { display: flex; flex: 1; min-height: 0; }
         #app.sidebar-on { max-width: 1380px; margin: 0 auto; width: 100%; }
-        #chatPane { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; max-width: 1100px; margin: 0 auto; width: 100%; }
+        #chatPane { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; max-width: 1100px; margin: 0 auto; width: 100%; position: relative; }  /* v0.0.216: relative für die Jump-Bar INNERHALB des Chatfensters */
         #sessionSidebar {
             display: none;
             width: 260px; flex-shrink: 0; height: 100%;
@@ -283,7 +283,7 @@
         }
         #deleteBanner.on { display: flex; }
 
-        #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+        #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; position: relative; }  /* v0.0.216: relative → offsetTop der Nachrichten zählt ab #messages (Jump-Bar) */
         .msg { max-width: 84%; padding: 9px 13px; border-radius: var(--radius); font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
         .msg.user { align-self: flex-end; background: #20437f; border-bottom-right-radius: 4px; }
         .msg.assistant { align-self: flex-start; background: #1d232e; border-bottom-left-radius: 4px; }
@@ -381,24 +381,28 @@
         #composer .migrate-btn.inactive { opacity:.45; }
         #composer .migrate-btn:not(.inactive) { color:#e5484d; border-color:rgba(229,72,77,.5); }
         #composer .migrate-btn:not(.inactive):hover { background:rgba(229,72,77,.12); }
-        /* Scroll-to-Bottom-FAB (v0.0.131): erscheint nur, wenn der Nutzer nach oben
-           gescrollt hat (stickToBottom=false), führt per Klick ans Ende zurück.
-           v0.0.132: Position wird per ResizeObserver an die aktuelle Composer-Höhe
-           gebunden (liegt immer am unteren Rand des Nachrichtenbereichs, nie auf
-           statusBar/Eingabezeile); dezenter Feather-"arrow-down"-SVG-Pfeil in
-           Textfarbe statt Emoji, passend zur Iconsprache der Header-Buttons. */
-        #fabScrollBottom {
-            position: fixed;
-            right: 16px;
-            bottom: 100px;   /* Fallback; JS setzt exakte Composer-Höhe+8px */
-            width: 44px; height: 44px;
+        /* Jump-Bar (v0.0.216): „Zur letzten Eingabe“ + Eingabe-Stepper + „Zum Ende“
+           unten rechts IM Chatfenster. Position bottom wird per positionFabBar() an die
+           aktuelle Composer-Höhe (+ workingStatus) gebunden — liegt immer direkt über
+           der Eingabezeile, nie auf statusBar/Eingabezeile (v0.0.132-Verhalten, jetzt
+           absolute statt fixed → Nutzer-Befund „Button liegt außerhalb des Chatfensters“).
+           Icons: dezente Feather-SVG-Pfeile in Textfarbe, passend zur Iconsprache. */
+        #fabBar {
+            position: absolute;
+            right: 12px;
+            bottom: 100px;   /* Fallback; JS setzt exakte Composer-Höhe+Status+12px */
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 25;
+        }
+        #fabBar button {
+            width: 42px; height: 42px;
             border: 1px solid var(--border);
             border-radius: 50%;
             background: var(--panel);
             color: var(--text);
-            font-size: 18px;
             cursor: pointer;
-            z-index: 30;
             display: flex; align-items: center; justify-content: center;
             opacity: 0;
             transform: translateY(8px);
@@ -406,9 +410,17 @@
             transition: opacity .18s ease, transform .18s ease;
             box-shadow: 0 1px 6px rgba(0,0,0,.28);
         }
-        #fabScrollBottom svg { opacity: .75; }
-        #fabScrollBottom.visible { opacity: .92; transform: translateY(0); pointer-events: auto; }
-        #fabScrollBottom.visible:active { opacity: 1; transform: scale(.94); }
+        #fabBar button svg { opacity: .75; }
+        #fabBar button.visible { opacity: .92; transform: translateY(0); pointer-events: auto; }
+        #fabBar button.visible:active { opacity: 1; transform: scale(.94); }
+        #fabInputCount {
+            min-width: 36px; padding: 4px 8px; text-align: center;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+            color: var(--muted); font-size: 12px; box-shadow: 0 1px 6px rgba(0,0,0,.28);
+            opacity: 0; transform: translateY(8px); pointer-events: none;
+            transition: opacity .18s ease, transform .18s ease;
+        }
+        #fabInputCount.visible { opacity: .92; transform: translateY(0); }
 
         /* 2FA-Pflicht-Overlay (nicht schließbar, nur per 2FA-Einrichtung) */
         .otp-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 25; align-items: center; justify-content: center; padding: 20px; }
@@ -686,7 +698,16 @@
         <div id="deleteBanner" role="status" aria-live="polite"></div>
         <div id="messages"></div>
         <div id="workingStatus" class="hidden" role="status" aria-live="polite"></div>
-        <button id="fabScrollBottom" title="Zum Ende springen" aria-label="Zum Ende springen"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></button>
+        <!-- v0.0.216: Jump-Bar unten rechts IM Chatfenster (#chatPane position:relative) —
+             Nutzer-Befund: fabScrollBottom (position:fixed) lag außerhalb des Chatfensters.
+             Neu: ⬆ zur letzten Eingabe, ◀/▶-Stepper durch alle eigenen Eingaben, ⬇ ans Ende. -->
+        <div id="fabBar">
+            <button id="fabToInput" title="Zur letzten Eingabe springen" aria-label="Zur letzten Eingabe springen"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+            <button id="fabPrevInput" title="Vorherige Eingabe" aria-label="Vorherige Eingabe"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <span id="fabInputCount" aria-live="polite">1/1</span>
+            <button id="fabNextInput" title="Nächste Eingabe" aria-label="Nächste Eingabe"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg></button>
+            <button id="fabScrollBottom" title="Zum Ende springen" aria-label="Zum Ende springen"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></button>
+        </div>
         <div id="composer" style="flex-direction:column; padding: 10px; max-width:100%; box-sizing:border-box;">
             <!-- Datei-Vorschau -->
             <div id="filePreview" style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; max-width:100%;"></div>
@@ -875,41 +896,98 @@
         // (das alte "nach der Mutation messen" schlug fehl, weil die neue Zeile
         // + Abstand die 50-Px-Schwelle sofort überstieg).
         let stickToBottom = true;
-        // v0.0.131: Dynamischer Scroll-to-Bottom-Button — erscheint NUR, wenn der
-        // Nutzer nach oben gescrollt hat (Stick gelöst); Klick springt ans Ende
-        // und aktiviert den Stick wieder. Blinkt nicht: verschwindet sofort, sobald
-        // der Nutzer ans Ende zurückkehrt oder eine neue Nachricht nachscrollt.
+        // v0.0.216: Jump-Bar unten rechts IM Chatfenster — „Zur letzten Eingabe“ (⬆),
+        // Stepper durch ALLE eigenen Eingaben (◀/▶ + Zähler), „Zum Ende“ (⬇, v0.0.131).
+        // Sichtbarkeit: Eingabe-Steuerung erscheint, sobald die letzte eigene Eingabe
+        // außerhalb des Sichtbereichs liegt (langer Turn → viele Tool-Aktionen); der
+        // Ende-Button erscheint, sobald der Stick gelöst ist (wie bisher).
         const fabScroll = $('fabScrollBottom');
-        function updateFabScroll() {
+        const fabToInput = $('fabToInput');
+        const fabPrevInput = $('fabPrevInput');
+        const fabNextInput = $('fabNextInput');
+        const fabInputCount = $('fabInputCount');
+        let inputIdx = -1;   // aktuelle Position im Eingabe-Stepper
+        let prevUserCount = -1;   // v0.0.216: Eingaben-Count beim letzten Update (Stepper-Reset bei neuem Verlauf)
+        function collectUserMsgEls() {
+            return Array.from(messagesDiv.querySelectorAll('.msg.user'));
+        }
+        function isElVisible(el, c) {
+            if (!el) return false;
+            const cTop = c.scrollTop, cBot = cTop + c.clientHeight;
+            const eTop = el.offsetTop, eBot = eTop + el.offsetHeight;
+            return eBot > cTop + 4 && eTop < cBot - 4;
+        }
+        function jumpTo(el, offset = 10) {
+            if (!el) return;
+            const top = Math.max(0, el.offsetTop - offset);   // offsetTop relativ zu #messages (position:relative)
+            stickToBottom = false;
+            if (messagesDiv.scrollTo) messagesDiv.scrollTo({ top, behavior: 'smooth' });
+            else messagesDiv.scrollTop = top;
+            updateFabBar();
+        }
+        function updateFabBar() {
+            const users = collectUserMsgEls();
+            const lastEl = users[users.length - 1];
+            const showJump = !!lastEl && !isElVisible(lastEl, messagesDiv);
+            if (fabToInput) fabToInput.classList.toggle('visible', showJump);
+            if (fabPrevInput) fabPrevInput.classList.toggle('visible', showJump);
+            if (fabNextInput) fabNextInput.classList.toggle('visible', showJump);
+            if (fabInputCount) {
+                fabInputCount.classList.toggle('visible', showJump && users.length > 1);
+                if (inputIdx < 0 || inputIdx >= users.length || prevUserCount !== users.length) inputIdx = Math.max(0, users.length - 1);
+                fabInputCount.textContent = users.length ? (inputIdx + 1) + '/' + users.length : '1/1';
+                prevUserCount = users.length;
+            }
             if (fabScroll) fabScroll.classList.toggle('visible', !stickToBottom);
         }
-        // v0.0.132: Position an die aktuelle Composer-Höhe binden — der Button liegt
-        // immer MIT Abstand im Nachrichtenbereich (16 px über dem Composer, also nie
-        // auf statusBar/ctxWarn/Eingabezeile), auch wenn deren Höhe variiert.
-        // Vorher fest 76 px → lag auf Mobil auf der Token-Statuszeile (Nutzer-Befund).
-        function positionFabScroll() {
-            if (!fabScroll) return;
+        if (fabToInput) fabToInput.addEventListener('click', () => {
+            const users = collectUserMsgEls();
+            if (!users.length) return;
+            inputIdx = users.length - 1;
+            jumpTo(users[inputIdx], 0);
+        });
+        if (fabPrevInput) fabPrevInput.addEventListener('click', () => {
+            const users = collectUserMsgEls();
+            if (!users.length) return;
+            inputIdx = Math.max(0, (inputIdx < 0 ? users.length - 1 : inputIdx) - 1);
+            jumpTo(users[inputIdx], 0);
+        });
+        if (fabNextInput) fabNextInput.addEventListener('click', () => {
+            const users = collectUserMsgEls();
+            if (!users.length) return;
+            inputIdx = Math.min(users.length - 1, (inputIdx < 0 ? -1 : inputIdx) + 1);
+            jumpTo(users[inputIdx], 0);
+        });
+        // v0.0.132 (jetzt auf #fabBar innerhalb #chatPane): Position an Composer-Höhe
+        // (+ workingStatus-Zeile) binden — nie auf statusBar/Eingabezeile (Nutzer-Befund).
+        function positionFabBar() {
+            const bar = document.getElementById('fabBar');
+            if (!bar) return;
             const composer = document.getElementById('composer');
-            if (composer) fabScroll.style.bottom = (composer.getBoundingClientRect().height + 16) + 'px';
+            const wsEl = document.getElementById('workingStatus');
+            let h = composer ? composer.getBoundingClientRect().height : 70;
+            if (wsEl && !wsEl.classList.contains('hidden')) h += wsEl.getBoundingClientRect().height;
+            bar.style.bottom = (h + 12) + 'px';
         }
-        positionFabScroll();
-        if (window.ResizeObserver && fabScroll) {
+        positionFabBar();
+        if (window.ResizeObserver && document.getElementById('fabBar')) {
             const composerEl = document.getElementById('composer');
-            if (composerEl) new ResizeObserver(positionFabScroll).observe(composerEl);
+            if (composerEl) new ResizeObserver(positionFabBar).observe(composerEl);
         }
-        window.addEventListener('resize', positionFabScroll);   // Fallback (z.B. iOS-Tastatur)
+        window.addEventListener('resize', positionFabBar);   // Fallback (z.B. iOS-Tastatur)
         messagesDiv.addEventListener('scroll', () => {
             stickToBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 120;
-            updateFabScroll();
+            updateFabBar();
         }, { passive: true });
         if (fabScroll) fabScroll.addEventListener('click', () => {
             stickToBottom = true;
-            messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
-            updateFabScroll();
+            if (messagesDiv.scrollTo) messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+            else messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            updateFabBar();
         });
         function followSticky() {
             if (stickToBottom) messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            updateFabScroll();   // v0.0.131: Button-Zustand nach jedem Auto-Scroll aktualisieren
+            updateFabBar();   // v0.0.131: Button-Zustand nach jedem Auto-Scroll aktualisieren
         }
         const banner = $('setupBanner');
         // ---- v0.0.197: Session-Registry — jede offene Session hat ihre eigene
