@@ -2231,6 +2231,9 @@
                 if (delCtx.turnActive && delCtx.ws) interruptCtx(delCtx);   // interne Guards prüfen liveSessionId/OPEN
                 if (delCtx.ws) { try { delCtx.ws.onclose = null; delCtx.ws.close(); } catch (_) {} }
             }
+            // v0.0.213: Hermes gibt die Session erst nach ~20 s frei (Orphan-Reap,
+            // live gemessen) — das Backend pollt bis zu 30 s; Nutzer informieren.
+            showToast('⏳ Session wird gelöscht…');
             try {
                 const r = await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
                 const j = await r.json();

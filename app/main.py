@@ -1069,14 +1069,17 @@ async def api_delete_session(stored_session_id: str, request: Request):
                                      {"session_id": stored_session_id, "profile": profile}, profile)
     deleted = result.get("deleted")
     if not deleted:
-        # v0.0.212: Hermes blockt session.delete, solange die Session verbunden ist oder
-        # ein Turn-Lease läuft („Session … ist gerade aktiv (live im Chat)“). Das Frontend
-        # stoppt Turn + Verbindung VOR dem DELETE — hier zusätzlich ein Retry nach 1 s für
-        # die Lease-/Orphan-Freigabe im Gateway.
-        await asyncio.sleep(1.0)
-        result = await hermes_ws_request(hermes_url, hermes_auth, "session.delete",
-                                         {"session_id": stored_session_id, "profile": profile}, profile)
-        deleted = result.get("deleted")
+        # v0.0.213: Hermes blockt session.delete (4023 „cannot delete an active
+        # session“) ~20 s, solange die Session noch im Gateway-Cache steht — live
+        # gemessen am 29.08.: selbst nach session.interrupt + Verbindungsende
+        # (Frontend macht beides vor dem DELETE) dauert der Orphan-Reap ~20 s.
+        # Deshalb hier geduldig pollen (1,5-s-Takt, max. 30 s) statt 1-s-Retry.
+        deadline = time.monotonic() + 30
+        while not deleted and time.monotonic() < deadline:
+            await asyncio.sleep(1.5)
+            result = await hermes_ws_request(hermes_url, hermes_auth, "session.delete",
+                                             {"session_id": stored_session_id, "profile": profile}, profile)
+            deleted = result.get("deleted")
     if not deleted:
         # hermes_ws_request liefert {} wenn der Antwort-Frame ein error war (nur
         # 'result'-Frames werden gespeichert). Genauer Grund unbekannt → generisch melden.
