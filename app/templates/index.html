@@ -404,23 +404,25 @@
             color: var(--text);
             cursor: pointer;
             display: flex; align-items: center; justify-content: center;
-            opacity: 0;
-            transform: translateY(8px);
-            pointer-events: none;
+            opacity: .92;
+            transform: translateY(0);
+            pointer-events: auto;
             transition: opacity .18s ease, transform .18s ease;
             box-shadow: 0 1px 6px rgba(0,0,0,.28);
         }
         #fabBar button svg { opacity: .75; }
-        #fabBar button.visible { opacity: .92; transform: translateY(0); pointer-events: auto; }
-        #fabBar button.visible:active { opacity: 1; transform: scale(.94); }
+        /* v0.0.219: Jump-Bar IMMER sichtbar + klickbar (Nutzer-Befund: „Buttons werden
+           ausgeblendet, wenn ich an einer der Positionen angekommen bin“ und „Buttons
+           funktionieren nicht, während du denkst“ — ausgeblendet hieß pointer-events:none;
+           vorher: opacity 0 + pointer-events none bis .visible via scroll-Logik) */
+        #fabBar button:active { opacity: 1; transform: scale(.94); }
         #fabInputCount {
             min-width: 36px; padding: 4px 8px; text-align: center;
             background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
             color: var(--muted); font-size: 12px; box-shadow: 0 1px 6px rgba(0,0,0,.28);
-            opacity: 0; transform: translateY(8px); pointer-events: none;
+            opacity: .92; transform: translateY(0);
             transition: opacity .18s ease, transform .18s ease;
         }
-        #fabInputCount.visible { opacity: .92; transform: translateY(0); }
 
         /* v0.0.217: Desktop (≥900px) kompaktere Jump-Bar — Nutzer: „Buttons etwas kleiner (PC)“.
            Mobile (<900px) bleibt bei 42px Touch-Targets (Fingertipp). */
@@ -920,12 +922,6 @@
         function collectUserMsgEls() {
             return Array.from(messagesDiv.querySelectorAll('.msg.user'));
         }
-        function isElVisible(el, c) {
-            if (!el) return false;
-            const cTop = c.scrollTop, cBot = cTop + c.clientHeight;
-            const eTop = el.offsetTop, eBot = eTop + el.offsetHeight;
-            return eBot > cTop + 4 && eTop < cBot - 4;
-        }
         function jumpTo(el, offset = 10) {
             if (!el) return;
             const top = Math.max(0, el.offsetTop - offset);   // offsetTop relativ zu #messages (position:relative)
@@ -935,19 +931,21 @@
             updateFabBar();
         }
         function updateFabBar() {
+            // v0.0.219: KEIN Ausblenden mehr — die Bar bleibt IMMER sichtbar und klickbar
+            // (Nutzer-Befund: Buttons verschwanden an erreichten Positionen / beim aktiven
+            // Stick, z. B. während Hermes denkt — und waren dann via pointer-events:none
+            // nicht klickbar). Nur Zähler- und Stepper-Position werden noch gepflegt.
             const users = collectUserMsgEls();
-            const lastEl = users[users.length - 1];
-            const showJump = !!lastEl && !isElVisible(lastEl, messagesDiv);
-            if (fabToInput) fabToInput.classList.toggle('visible', showJump);
-            if (fabPrevInput) fabPrevInput.classList.toggle('visible', showJump);
-            if (fabNextInput) fabNextInput.classList.toggle('visible', showJump);
+            if (fabToInput) fabToInput.classList.add('visible');
+            if (fabPrevInput) fabPrevInput.classList.add('visible');
+            if (fabNextInput) fabNextInput.classList.add('visible');
             if (fabInputCount) {
-                fabInputCount.classList.toggle('visible', showJump && users.length > 1);
+                fabInputCount.classList.add('visible');
                 if (inputIdx < 0 || inputIdx >= users.length || prevUserCount !== users.length) inputIdx = Math.max(0, users.length - 1);
                 fabInputCount.textContent = users.length ? (inputIdx + 1) + '/' + users.length : '1/1';
                 prevUserCount = users.length;
             }
-            if (fabScroll) fabScroll.classList.toggle('visible', !stickToBottom);
+            if (fabScroll) fabScroll.classList.add('visible');
         }
         if (fabToInput) fabToInput.addEventListener('click', () => {
             const users = collectUserMsgEls();
