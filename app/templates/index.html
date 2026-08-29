@@ -160,8 +160,8 @@
         #sbBackdrop { display: none; }
         .sb-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px; }
         .sb-title { font-size: 13px; font-weight: 600; letter-spacing: .4px; color: var(--muted); text-transform: uppercase; }
-        #sbNewBtn { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: none; color: var(--text); cursor: pointer; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; }
-        #sbNewBtn:hover { border-color: var(--accent); color: var(--accent); }
+        #sbNewBtn { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; background: none; border: 1px solid transparent; border-radius: 50%; color: var(--muted); cursor: pointer; flex-shrink: 0; padding: 0; transition: color .15s, border-color .15s, background .15s; }
+        #sbNewBtn:hover { color: var(--accent); background: rgba(255,255,255,.07); border-color: var(--border); }
         .sb-list { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px 12px; }
         .sb-item {
             position: relative;
@@ -628,7 +628,9 @@
         <aside id="sessionSidebar" aria-label="Sessions">
             <div class="sb-head">
                 <span class="sb-title">Sessions</span>
-                <button id="sbNewBtn" class="icon-btn" title="Neue Unterhaltung" aria-label="Neue Unterhaltung">➕</button>
+                <button id="sbNewBtn" class="sb-new-btn" type="button" title="Neue Unterhaltung" aria-label="Neue Unterhaltung">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
             </div>
             <div id="sbList" class="sb-list"><div class="sb-name" style="padding:8px 10px;color:var(--muted);font-size:12px;">Sessions werden geladen…</div></div>
         </aside>
