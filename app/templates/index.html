@@ -1793,6 +1793,7 @@
             cancelWorkingResume(ctx);
             hideWorkingStatus(ctx);
             if (ctx === C) updateInterruptBtn();   // nur aktive Session → Button-Update
+            renderSidebarActive();   // v0.0.199: Sidebar-Arc/Dot erlischt sofort — auch für Hintergrund-Sessions
         }
 
         // ============ session.interrupt (v0.0.175) ============
@@ -1827,6 +1828,7 @@
             ctx.turnActive = true;
             showWorkingStatus(ctx);
             if (ctx === C) updateInterruptBtn();
+            renderSidebarActive();   // v0.0.199: Sidebar-Arc/Dot leuchtet sofort — auch für Hintergrund-Sessions
         }
 
         function showWorkingStatus(ctx) {
@@ -1955,6 +1957,7 @@
                 item.innerHTML = '<span class="sb-arc"></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
                 item.querySelector('.sb-name').textContent = sessionDisplayTitle(ctx);
                 item.querySelector('.sb-sub').textContent = ctx.storedId ? ((ctx.sessionMsgCount || 0) + ' Nachr.') : 'wird erstellt…';
+                if (ctx.turnActive) item.querySelector('.sb-dot').classList.add('working');   // v0.0.199: Leucht-Dot
                 frag.appendChild(item);
             });
             list.innerHTML = '';
@@ -1971,9 +1974,13 @@
                 if (ctx) {
                     it.classList.toggle('active', ctx === C);
                     it.dataset.working = ctx.turnActive ? '1' : '';
+                    const dot = it.querySelector('.sb-dot');
+                    if (dot) dot.classList.toggle('working', !!ctx.turnActive);   // v0.0.199: Leucht-Dot
                 } else {
                     it.classList.remove('active');
                     it.dataset.working = '';
+                    const dot = it.querySelector('.sb-dot');
+                    if (dot) dot.classList.remove('working');
                 }
             });
         }
