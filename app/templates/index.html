@@ -157,6 +157,9 @@
         }
         .sb-item:hover { background: rgba(127,127,127,.12); }
         .sb-item.active { background: rgba(127,127,127,.2); }
+        /* v0.0.200: noch nicht offene Bestands-Session — gedimmt, Dot dezent */
+        .sb-item.closed { opacity: .6; }
+        .sb-item.closed .sb-dot { background: #4a4a4a; }
         /* Arc-Animation (v0.0.197, wie Hermes-Desktop): arbeitende Session bekommt einen
            umlaufenden Randbogen — rein CSS, kein JS-Timer. data-working am .sb-item. */
         .sb-item[data-working="1"] .sb-arc {
@@ -1887,6 +1890,7 @@
         function setActiveCtx(ctx) {
             // 1) Knoten der bisherigen Ctx zurück in deren Surface (falls vorhanden)
             if (C && C !== ctx) {
+                C.draft = inputEl.value;   // v0.0.200: Composer-Entwurf pro Session merken
                 if (!C.surface) { C.surface = document.createElement('div'); C.surface.className = 'msg-surface'; }
                 if (C.surface && messagesDiv.children.length) {
                     C.surfaceScrollTop = messagesDiv.scrollTop;
@@ -1899,6 +1903,11 @@
             // sichtbare Session (nicht nur die zuletzt ERZEUGTE).
             if (ctx.storedId) localStorage.setItem('atlas_last_session', ctx.storedId);
             else localStorage.removeItem('atlas_last_session');
+            // v0.0.200: Composer-Entwurf der Ziel-Session wiederherstellen
+            if (inputEl && inputEl.value !== (ctx.draft || '')) {
+                inputEl.value = ctx.draft || '';
+                autoGrowInput();
+            }
             // 2) Knoten der neuen Ctx in #messages
             messagesDiv.innerHTML = '';
             if (ctx.surface && ctx.surface.children.length) {
@@ -1931,6 +1940,7 @@
         // Einträge kommen aus der Registry (sessions-Map); Klick = weicher Wechsel
         // (openSession ohne force → WS der Ziel-Ctx bleibt offen, nur View-Umtausch).
         const sessionTitles = {};   // Stored-ID -> Titel (Cache aus /api/sessions)
+        let serverSessions = [];    // v0.0.200: Bestandsliste aus /api/sessions (id/title/message_count/started_at)
 
         function sessionDisplayTitle(ctx) {
             if (!ctx.storedId) return 'Neue Unterhaltung';
@@ -1942,7 +1952,12 @@
         function renderSidebar() {
             const list = $('sbList');
             if (!list) return;
-            if (!sessions.size) {
+            // v0.0.200: Bestands-Sessions (noch NICHT offen) — Klick lädt sie als frische Ctx
+            const openStored = new Set();
+            sessions.forEach(ctx => { if (ctx.storedId) openStored.add(ctx.storedId); });
+            const closed = serverSessions.filter(s => s.id && !openStored.has(s.id))
+                .sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+            if (!sessions.size && !closed.length) {
                 list.innerHTML = '<div class="sb-name" style="padding:8px 10px;color:var(--muted);font-size:12px;">Noch keine Sessions offen</div>';
                 return;
             }
@@ -1958,6 +1973,17 @@
                 item.querySelector('.sb-name').textContent = sessionDisplayTitle(ctx);
                 item.querySelector('.sb-sub').textContent = ctx.storedId ? ((ctx.sessionMsgCount || 0) + ' Nachr.') : 'wird erstellt…';
                 if (ctx.turnActive) item.querySelector('.sb-dot').classList.add('working');   // v0.0.199: Leucht-Dot
+                frag.appendChild(item);
+            });
+            closed.forEach(s => {
+                const item = document.createElement('div');
+                item.className = 'sb-item closed';
+                item.dataset.key = 'srv:' + s.id;
+                item.setAttribute('role', 'button');
+                item.setAttribute('tabindex', '0');
+                item.innerHTML = '<span class="sb-arc"></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
+                item.querySelector('.sb-name').textContent = s.title || (s.id.length > 10 ? s.id.slice(0, 8) + '…' : s.id);
+                item.querySelector('.sb-sub').textContent = (s.message_count || 0) + ' Nachr.';
                 frag.appendChild(item);
             });
             list.innerHTML = '';
@@ -1991,6 +2017,7 @@
                 const r = await fetch('/api/sessions');
                 const j = await r.json();
                 if (j.status !== 'ok' || !j.sessions) return;
+                serverSessions = j.sessions.filter(s => s && s.id);   // v0.0.200: Bestand für die Sidebar
                 j.sessions.forEach(s => { if (s.id && s.title) sessionTitles[s.id] = s.title; });
                 renderSidebar();
             } catch (_) { /* Sidebar bleibt mit Kurz-IDs sichtbar */ }
@@ -1998,8 +2025,12 @@
 
         // Sidebar-Klick: weicher Wechsel zur Ziel-Ctx (WS bleibt offen). Delegiert
         // über den #sbList-Listener aus dem Init-Block (bindSidebarEvents).
+        // v0.0.200: 'srv:<id>' = noch nicht offene BESTANDS-Session -> openSession
+        // lädt sie als neue Ctx (resume-Pfad holt den Verlauf in die aktive Ansicht).
         function onSidebarClick(key) {
-            openSession(key === '__new__' ? null : key);
+            if (key === '__new__') { openSession(null); return; }
+            if (key && key.startsWith('srv:')) { openSession(key.slice(4)); return; }
+            openSession(key);
         }
 
         // v0.0.197: Harte Neuverbindung der AKTIVEN Session — View-Reset + Verbindungs-
@@ -3417,6 +3448,7 @@
                         }
                         // Aus der Liste entfernen
                         if (item) item.remove();
+                        serverSessions = serverSessions.filter(x => x.id !== id);   // v0.0.200: Sidebar-Bestand bereinigen
                         // v0.0.198: offene parallele Ctx (Tabs-light) lösen — WS schließen,
                         // Sidebar-Eintrag entfernen. Zeigt die gelöschte Session gerade die
                         // sichtbare Ansicht, wechselt Atlas in eine neue Unterhaltung.
