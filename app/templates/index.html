@@ -2006,6 +2006,16 @@
             refreshWorkingUI();
             // 4) Sidebar-Highlight aktualisieren
             renderSidebarActive();
+            // 4b) v0.0.210: Header-Session-ID bei JEDEM Wechsel aktualisieren — vorher
+            // stand sie nur nach einer history-Antwort; bei gefüllten Surfaces kam keine
+            // → die ID der vorherigen Session blieb im Header stehen.
+            {
+                const lbl = $('currentSessionLabel');
+                if (lbl) {
+                    if (ctx.storedId) { lbl.textContent = ctx.storedId; lbl.classList.remove('hidden'); }
+                    else lbl.classList.add('hidden');
+                }
+            }
             // 5) v0.0.209: Verlauf-Nachladen beim Wechsel — die Ansicht kann leer sein,
             // obwohl die Session viele Nachrichten hat. Gründe: die session.history-
             // Antwort ging verloren (Wechsel während des Ladens / Handler-Timing) oder
@@ -2156,6 +2166,8 @@
             const m = $('sbMenu'); if (!m) return;
             const ctx = sessions.get(key);
             const rows = [];
+            rows.push('<button type="button" class="sb-menu-item" data-action="copy-name"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Session Name kopieren</button>');
+            rows.push('<button type="button" class="sb-menu-item" data-action="copy-id"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Session-ID kopieren</button>');
             if (ctx && ctx.turnActive) {
                 rows.push('<button type="button" class="sb-menu-item" data-action="interrupt"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>Unterbrechen</button>');
             }
@@ -2170,6 +2182,25 @@
             if (top + mh > window.innerHeight) top = Math.max(8, (anchor ? anchor.top : 0) - mh - 6);
             m.style.left = left + 'px'; m.style.top = top + 'px';
             m.classList.add('open');
+        }
+        // v0.0.210: ⋮-Menü — „Session Name kopieren“ / „Session-ID kopieren“.
+        // Name = Anzeigetitel (sessionDisplayTitle bzw. srv-Titel), ID = storedId
+        // (frische, noch nicht gespeicherte Ctx: flüchtige Live-ID als Fallback).
+        function copySessionRow(storedId, ctx, copyName) {
+            let text = '';
+            if (copyName) {
+                if (ctx && ctx.storedId) text = sessionDisplayTitle(ctx);
+                else {
+                    const s = serverSessions.find(x => x.id === storedId);
+                    text = (s && s.title) ? s.title : (storedId ? (storedId.length > 10 ? storedId.slice(0, 8) + '…' : storedId) : '');
+                }
+            } else {
+                text = (ctx && ctx.storedId) ? ctx.storedId : (storedId || (ctx && ctx.liveSessionId) || '');
+            }
+            if (!text) { showToast(copyName ? '⚠ Kein Name für diese Session verfügbar' : '⚠ Keine Session-ID verfügbar'); return; }
+            copyTextToClipboard(text).then(ok => {
+                showToast(ok ? '✓ ' + (copyName ? 'Session-Name' : 'Session-ID') + ' kopiert' : '⚠ Kopieren fehlgeschlagen');
+            });
         }
         // v0.0.208: gemeinsame Lösch-Logik (⋮-Menü UND Sessions-Modal) — Server-DELETE,
         // offene Ctx lösen (WS schließen), Sidebar neu bauen, bei aktiver Ctx neue Unterhaltung.
@@ -2563,6 +2594,7 @@
                                         ctx.turnActive = true;   // v0.0.141: Turn läuft — Resume-Timer darf später wieder einblenden
                                         showWorkingStatus(ctx);
                                         updateInterruptBtn();   // v0.0.175: Turn aktiv → Stop-Button scharf
+                                        renderSidebarActive();   // v0.0.210: ACK kann auch für HINTERGRUND-Ctxs kommen (Wechsel vor dem ACK) → Dot/Spinner sofort
                                         if (ctx.lastSubmitRpcId !== null && frame.id === ctx.lastSubmitRpcId) ctx.lastSubmitRpcId = null;   // v0.0.188: ACK erhalten
                                     }
                                     // v0.0.188: prompt.submit abgelehnt (Error) → optimistisches ctx.turnActive zurücknehmen
@@ -2677,6 +2709,7 @@
                     if (p.payload.tool_id) delete ctx.activeToolEls[p.payload.tool_id];
                 }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
+                    if (!ctx.turnActive) markTurnActive(ctx);   // v0.0.210: Turn-Heilung — streamt eine Session weiter (langer Tool-Lauf, WS-Reconnect ohne neues ACK), aktiviert der Sidebar-Dot/Spinner wieder
                     // Antwort beginnt → Denk-Box abschließen, Statuszeile entfernen,
                     // Lease-Warte-Bubble (falls vorhanden) ebenfalls beenden
                     if (ctx.leaseWaitBubble) clearLeaseWait();
@@ -3570,7 +3603,10 @@
                 const isClosed = key.startsWith('srv:');
                 const ctx = sessions.get(key);
                 const storedId = isClosed ? key.slice(4) : (ctx ? ctx.storedId : null);
-                if (b.dataset.action === 'interrupt') {
+                if (b.dataset.action === 'copy-name' || b.dataset.action === 'copy-id') {
+                    closeSbMenu();
+                    copySessionRow(storedId, ctx, b.dataset.action === 'copy-name');
+                } else if (b.dataset.action === 'interrupt') {
                     closeSbMenu();
                     interruptCtx(ctx);
                 } else if (b.dataset.action === 'delete') {
