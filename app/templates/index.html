@@ -272,6 +272,17 @@
         .banner { background: #2b2a17; color: #d8c96a; font-size: 13px; text-align: center; padding: 8px 14px; }
         .banner a { color: #e8dc8a; font-weight: 600; cursor: pointer; text-decoration: underline; }
 
+        /* v0.0.214: Persistente Lösch-Anzeige im Chat-Fenster — bleibt sichtbar,
+           bis der Server-DELETE abgeschlossen ist (Hermes blockt ~20 s, Backend pollt). */
+        #deleteBanner {
+            display: none; align-items: center; justify-content: center;
+            margin: 8px 14px 0; padding: 8px 14px;
+            background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+            color: var(--accent); font-size: 13px; text-align: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .25);
+        }
+        #deleteBanner.on { display: flex; }
+
         #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
         .msg { max-width: 84%; padding: 9px 13px; border-radius: var(--radius); font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
         .msg.user { align-self: flex-end; background: #20437f; border-bottom-right-radius: 4px; }
@@ -664,6 +675,7 @@
         <div id="sbBackdrop"></div>
         <div id="chatPane">
         <div id="setupBanner" class="banner hidden">⚠️ Noch keine Hermes-Instanz verbunden — bitte in den <a id="bannerLink">Einstellungen</a> einrichten.</div>
+        <div id="deleteBanner" role="status" aria-live="polite"></div>
         <div id="messages"></div>
         <div id="workingStatus" class="hidden" role="status" aria-live="polite"></div>
         <button id="fabScrollBottom" title="Zum Ende springen" aria-label="Zum Ende springen"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></button>
@@ -2217,6 +2229,15 @@
                 showToast(ok ? '✓ ' + (copyName ? 'Session-Name' : 'Session-ID') + ' kopiert' : '⚠ Kopieren fehlgeschlagen');
             });
         }
+        // v0.0.214: persistente Lösch-Anzeige im Chat-Fenster — bleibt sichtbar, bis der
+        // Server-DELETE abgeschlossen ist (Hermes blockt ~20 s, das Backend pollt bis 30 s).
+        function setDeleteBanner(show, label) {
+            const el = document.getElementById('deleteBanner');
+            if (!el) return;
+            if (show) el.textContent = label || '⏳ Session wird gelöscht…';
+            el.classList.toggle('on', !!show);
+        }
+
         // v0.0.208: gemeinsame Lösch-Logik (⋮-Menü UND Sessions-Modal) — Server-DELETE,
         // offene Ctx lösen (WS schließen), Sidebar neu bauen, bei aktiver Ctx neue Unterhaltung.
         async function deleteSessionById(id) {
@@ -2231,9 +2252,13 @@
                 if (delCtx.turnActive && delCtx.ws) interruptCtx(delCtx);   // interne Guards prüfen liveSessionId/OPEN
                 if (delCtx.ws) { try { delCtx.ws.onclose = null; delCtx.ws.close(); } catch (_) {} }
             }
-            // v0.0.213: Hermes gibt die Session erst nach ~20 s frei (Orphan-Reap,
-            // live gemessen) — das Backend pollt bis zu 30 s; Nutzer informieren.
-            showToast('⏳ Session wird gelöscht…');
+            // v0.0.214: Anzeige im Chat-Fenster (statt Kurz-Toast) — es dauert ~20 s,
+            // bis Hermes die Session freigibt (Orphan-Reap); das Banner bleibt, bis
+            // der DELETE abgeschlossen ist (Erfolg: Fenster wechselt auf neue Session,
+            // Fehler: zurück in den Normalzustand).
+            const delTitle = delCtx ? (sessionDisplayTitle(delCtx) || id)
+                                    : ((serverSessions.find(x => x.id === id) || {}).title || id);
+            setDeleteBanner(true, '⏳ Session „' + delTitle + '“ wird gelöscht…');
             try {
                 const r = await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
                 const j = await r.json();
@@ -2258,6 +2283,8 @@
                 }
             } catch (err) {
                 alert('Fehler beim Löschen: ' + err.message);
+            } finally {
+                setDeleteBanner(false);
             }
         }
 
