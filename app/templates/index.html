@@ -440,6 +440,11 @@
             #fabBar button { width: 34px; height: 34px; }
             #fabBar button svg { width: 16px; height: 16px; }
             #fabInputCount { min-width: 30px; padding: 3px 6px; font-size: 11px; }
+            /* v0.0.227: Desktop braucht den Mobile-Kollaps nicht — volle Bar bleibt.
+               ⋮-Trigger (v0.0.222, globales HTML) hier ausblenden: unnötig und schob
+               die Buttons nach links (Nutzer-Befund 29.08.);
+               Spezifität: #fabBar button#fabToggle (2 IDs) schlägt #fabBar button (1 ID, display:flex). */
+            #fabBar button#fabToggle { display: none; }
         }
 
         /* v0.0.226: Pulse-Feedback — Sprungziel ist bereits erreicht („⬆ am Ziel“) */
