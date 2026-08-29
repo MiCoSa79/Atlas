@@ -197,10 +197,36 @@
         .sb-item[data-working="1"] { background: rgba(127,127,127,.1); }
         .sb-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; flex-shrink: 0; }
         .sb-dot.working { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+        /* ⋮-Session-Menü (v0.0.208): drei Punkte je Eintrag, Dropdown im App-Design */
+        .sb-menu-btn {
+            position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+            width: 26px; height: 26px; display: none; align-items: center; justify-content: center;
+            background: none; border: none; border-radius: 6px; color: var(--muted);
+            cursor: pointer; padding: 0;
+        }
+        .sb-item:hover .sb-menu-btn, .sb-item:focus-within .sb-menu-btn, .sb-item.active .sb-menu-btn { display: flex; }
+        .sb-menu-btn:hover { background: rgba(127,127,127,.18); color: var(--text); }
+        @media (max-width: 899.98px) { .sb-menu-btn { display: flex; } }   /* Touch: ohne Hover immer sichtbar */
+        #sbMenu {
+            position: fixed; z-index: 400; min-width: 185px; box-sizing: border-box;
+            background: var(--bg2, #17171c); border: 1px solid var(--border); border-radius: 10px;
+            box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px;
+            display: none; flex-direction: column; gap: 1px;
+        }
+        #sbMenu.open { display: flex; animation: sb-menu-in .12s ease-out; }
+        @keyframes sb-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+        .sb-menu-item {
+            display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+            padding: 9px 12px; border: none; background: none; border-radius: 7px;
+            color: var(--text); font-size: 14px; cursor: pointer;
+        }
+        .sb-menu-item:hover { background: rgba(127,127,127,.12); }
+        .sb-menu-item.danger { color: #e5484d; }
+        .sb-menu-item.danger:hover { background: rgba(229,72,77,.12); }
         .sb-dot.stalled { background: #e5a53d; }
         .sb-dot.needs-input { background: #e5484d; }
         .sb-dot.unread { background: #4ade80; }
-        .sb-meta { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+        .sb-meta { display: flex; flex-direction: column; min-width: 0; overflow: hidden; padding-right: 26px; }
         .sb-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .sb-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         @media (max-width: 899.98px) {
@@ -633,6 +659,7 @@
                 </button>
             </div>
             <div id="sbList" class="sb-list"><div class="sb-name" style="padding:8px 10px;color:var(--muted);font-size:12px;">Sessions werden geladen…</div></div>
+            <div id="sbMenu" role="menu" aria-label="Session-Aktionen"></div>
         </aside>
         <div id="sbBackdrop"></div>
         <div id="chatPane">
@@ -1857,16 +1884,21 @@
         // Stopp-Button unter Upload/Senden bricht den Turn der AKTIVEN Session ab.
         // liveSessionId = Live-ID, wird bei jedem create/resume aktualisiert und in
         // restartWS geleert → der Button wirkt nach Session-Wechsel automatisch auf die
-        // aktuelle Session (kein ID-Caching nötig). interruptRpcId/lastSubmitRpcId
-        // liegen seit v0.0.197 in der Session-Ctx.
+        // v0.0.175: interrupt auf die AKTIVE Session; v0.0.208: Logik in interruptCtx
+        // generalisiert — das ⋮-Menü kann damit auch HINTERGRUND-Sessions unterbrechen
+        // (Antwort läuft über deren eigene WS in denselben handler, Meldung in deren Surface).
         function interruptTurn() {
-            const ctx = C;
+            interruptCtx(C);
+        }
+
+        function interruptCtx(ctx) {
+            if (!ctx) return;
             if (ctx.interruptRpcId !== null) return;      // Anfrage läuft bereits
             if (!ctx.turnActive) return;                   // kein laufender Turn (Button ist dann disabled)
-            if (!ctx.liveSessionId) { addMsg('system', '⚠️ Keine aktive Session'); return; }
-            if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) { addMsg('system', '⚠️ Nicht verbunden'); return; }
+            if (!ctx.liveSessionId) { if (ctx === C) addMsg('system', '⚠️ Keine aktive Session'); return; }
+            if (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN) { if (ctx === C) addMsg('system', '⚠️ Nicht verbunden'); return; }
             ctx.interruptRpcId = ctx.sendRpc('session.interrupt', { session_id: ctx.liveSessionId });
-            updateInterruptBtn();
+            if (ctx === C) updateInterruptBtn();
         }
 
         function updateInterruptBtn() {
@@ -2006,6 +2038,7 @@
         function renderSidebar() {
             const list = $('sbList');
             if (!list) return;
+            closeSbMenu();   // v0.0.208: Menü-Anker sind nach einem Rebuild stale
             // v0.0.200: Bestands-Sessions (noch NICHT offen) — Klick lädt sie als frische Ctx
             const openStored = new Set();
             sessions.forEach(ctx => { if (ctx.storedId) openStored.add(ctx.storedId); });
@@ -2023,7 +2056,7 @@
                 item.dataset.key = key;
                 item.setAttribute('role', 'button');
                 item.setAttribute('tabindex', '0');
-                item.innerHTML = '<span class="sb-arc"><i></i><i></i><i></i></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
+                item.innerHTML = '<span class="sb-arc"><i></i><i></i><i></i></span><span class="sb-dot"></span><button class="sb-menu-btn" type="button" tabindex="-1" aria-label="Session-Aktionen"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
                 item.querySelector('.sb-name').textContent = sessionDisplayTitle(ctx);
                 item.querySelector('.sb-sub').textContent = ctx.storedId ? ((ctx.sessionMsgCount || 0) + ' Nachr.') : 'wird erstellt…';
                 if (ctx.turnActive) item.querySelector('.sb-dot').classList.add('working');   // v0.0.199: Leucht-Dot
@@ -2035,7 +2068,7 @@
                 item.dataset.key = 'srv:' + s.id;
                 item.setAttribute('role', 'button');
                 item.setAttribute('tabindex', '0');
-                item.innerHTML = '<span class="sb-arc"><i></i><i></i><i></i></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
+                item.innerHTML = '<span class="sb-arc"><i></i><i></i><i></i></span><span class="sb-dot"></span><button class="sb-menu-btn" type="button" tabindex="-1" aria-label="Session-Aktionen"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
                 item.querySelector('.sb-name').textContent = s.title || (s.id.length > 10 ? s.id.slice(0, 8) + '…' : s.id);
                 item.querySelector('.sb-sub').textContent = (s.message_count || 0) + ' Nachr.';
                 frag.appendChild(item);
@@ -2091,6 +2124,66 @@
         // (Desktop ≥900px ist der Aufruf ein No-op).
         function closeDrawerIfMobile() {
             if (window.innerWidth < 900) setMobileSidebar(false);
+        }
+
+        // v0.0.208: ⋮-Menü je Session — „Session löschen" immer, „Unterbrechen" nur bei
+        // laufendem Turn der offenen Ctx. Ein einziges Dropdown-Element (#sbMenu),
+        // position:fixed über #sbList (deren overflow-y:auto würde es sonst clippen).
+        let sbMenuKey = null;
+        function closeSbMenu() {
+            sbMenuKey = null;
+            const m = $('sbMenu'); if (!m) return;
+            m.classList.remove('open'); m.innerHTML = '';
+        }
+        function openSbMenu(key, anchor) {
+            const m = $('sbMenu'); if (!m) return;
+            const ctx = sessions.get(key);
+            const rows = [];
+            if (ctx && ctx.turnActive) {
+                rows.push('<button type="button" class="sb-menu-item" data-action="interrupt"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>Unterbrechen</button>');
+            }
+            rows.push('<button type="button" class="sb-menu-item danger" data-action="delete"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Session löschen</button>');
+            m.innerHTML = rows.join('');
+            sbMenuKey = key;
+            const bw = 185;
+            const mh = m.offsetHeight || (rows.length * 41 + 9);
+            let left = (anchor ? anchor.right : 0) - bw;
+            if (left < 8) left = 8;
+            let top = (anchor ? anchor.bottom : 0) + 6;
+            if (top + mh > window.innerHeight) top = Math.max(8, (anchor ? anchor.top : 0) - mh - 6);
+            m.style.left = left + 'px'; m.style.top = top + 'px';
+            m.classList.add('open');
+        }
+        // v0.0.208: gemeinsame Lösch-Logik (⋮-Menü UND Sessions-Modal) — Server-DELETE,
+        // offene Ctx lösen (WS schließen), Sidebar neu bauen, bei aktiver Ctx neue Unterhaltung.
+        async function deleteSessionById(id) {
+            try {
+                const r = await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+                const j = await r.json();
+                if (j.status !== 'ok') {
+                    alert('Löschen fehlgeschlagen: ' + (j.message || 'Unbekannter Fehler'));
+                    return;
+                }
+                serverSessions = serverSessions.filter(x => x.id !== id);   // v0.0.200: Sidebar-Bestand bereinigen
+                if (sessions.has(id)) {
+                    const ctx = sessions.get(id);
+                    if (ctx.ws) { try { ctx.ws.onclose = null; ctx.ws.close(); } catch (_) {} }
+                    sessions.delete(id);
+                    if (C === ctx) {
+                        activeSessionId = null;
+                        localStorage.removeItem('atlas_last_session');
+                        openSession(null, { force: true });
+                    }
+                }
+                renderSidebar();
+                // Falls die gelöschte Session die aktuelle war: neue leere Session
+                if (id === activeSessionId || id === localStorage.getItem('atlas_last_session')) {
+                    activeSessionId = null;
+                    localStorage.removeItem('atlas_last_session');
+                }
+            } catch (err) {
+                alert('Fehler beim Löschen: ' + err.message);
+            }
         }
 
         // v0.0.197: Harte Neuverbindung der AKTIVEN Session — View-Reset + Verbindungs-
@@ -3430,14 +3523,52 @@
             loadSessions();
         });
         $('sbList').addEventListener('click', (e) => {
+            // v0.0.208: ⋮-Button zuerst — öffnet/schließt das Session-Menü statt zu wechseln
+            const btn = e.target.closest('.sb-menu-btn');
+            if (btn) {
+                const item = btn.closest('.sb-item');
+                if (!item) return;
+                if (sbMenuKey === item.dataset.key) closeSbMenu();
+                else openSbMenu(item.dataset.key, btn.getBoundingClientRect());
+                return;
+            }
+            closeSbMenu();
             const item = e.target.closest('.sb-item');
             if (!item) return;
             onSidebarClick(item.dataset.key);
         });
         $('sbList').addEventListener('keydown', (e) => {
+            if (e.target.closest('.sb-menu-btn')) return;   // Tastatur des ⋮ behandelt der Button selbst
             const item = e.target.closest('.sb-item');
             if (!item) return;
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSidebarClick(item.dataset.key); }
+        });
+        // v0.0.208: ⋮-Menü — Aktionen + Schließen (Klick außen, Escape, erneuter ⋮-Klick)
+        const sbMenuEl = $('sbMenu');
+        if (sbMenuEl) {
+            sbMenuEl.addEventListener('click', (e) => {
+                const b = e.target.closest('.sb-menu-item');
+                if (!b || sbMenuKey === null) return;
+                const key = sbMenuKey;
+                const isClosed = key.startsWith('srv:');
+                const ctx = sessions.get(key);
+                const storedId = isClosed ? key.slice(4) : (ctx ? ctx.storedId : null);
+                if (b.dataset.action === 'interrupt') {
+                    closeSbMenu();
+                    interruptCtx(ctx);
+                } else if (b.dataset.action === 'delete') {
+                    closeSbMenu();
+                    if (!storedId) return;
+                    if (!confirm('Diese Session wirklich löschen?')) return;
+                    deleteSessionById(storedId);
+                }
+            });
+        }
+        document.addEventListener('click', (e) => {
+            if (sbMenuKey !== null && !e.target.closest('#sbMenu') && !e.target.closest('.sb-menu-btn')) closeSbMenu();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && sbMenuKey !== null) closeSbMenu();
         });
         // v0.0.201 (Mobile-Drawer): Pfeil-Button blendet die Sidebar von links ein,
         // Backdrop-Tap / Escape schließen sie wieder (Auswahl/➕ schließen automatisch
@@ -3504,44 +3635,15 @@
                 box.querySelectorAll('.session-item').forEach(b => b.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); b.click(); }
                 }));
-                // Delete-Handler: einzelne Session löschen
+                // Delete-Handler: einzelne Session löschen (gemeinsame Logik mit dem ⋮-Menü, v0.0.208)
                 box.querySelectorAll('.session-del-btn').forEach(b => b.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     const id = b.dataset.id;
                     const item = b.closest('.session-item');
                     if (!confirm('Diese Session wirklich löschen?')) return;
-                    try {
-                        const r = await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
-                        const j = await r.json();
-                        if (j.status !== 'ok') {
-                            alert('Löschen fehlgeschlagen: ' + (j.message || 'Unbekannter Fehler'));
-                            return;
-                        }
-                        // Aus der Liste entfernen
-                        if (item) item.remove();
-                        serverSessions = serverSessions.filter(x => x.id !== id);   // v0.0.200: Sidebar-Bestand bereinigen
-                        // v0.0.198: offene parallele Ctx (Tabs-light) lösen — WS schließen,
-                        // Sidebar-Eintrag entfernen. Zeigt die gelöschte Session gerade die
-                        // sichtbare Ansicht, wechselt Atlas in eine neue Unterhaltung.
-                        if (sessions.has(id)) {
-                            const ctx = sessions.get(id);
-                            if (ctx.ws) { try { ctx.ws.onclose = null; ctx.ws.close(); } catch (_) {} }
-                            sessions.delete(id);
-                            renderSidebar();
-                            if (C === ctx) {
-                                activeSessionId = null;
-                                localStorage.removeItem('atlas_last_session');
-                                openSession(null, { force: true });
-                            }
-                        }
-                        // Falls die gelöschte Session die aktuelle war: neue leere Session
-                        if (id === activeSessionId || id === localStorage.getItem('atlas_last_session')) {
-                            activeSessionId = null;
-                            localStorage.removeItem('atlas_last_session');
-                        }
-                    } catch (err) {
-                        alert('Fehler beim Löschen: ' + err.message);
-                    }
+                    await deleteSessionById(id);
+                    // Aus der Liste entfernen
+                    if (item) item.remove();
                 }));
             } catch (e) {
                 box.innerHTML = '<p style="color:#e5534b;text-align:center;">Fehler beim Laden</p>';
