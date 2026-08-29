@@ -2220,6 +2220,17 @@
         // v0.0.208: gemeinsame Lösch-Logik (⋮-Menü UND Sessions-Modal) — Server-DELETE,
         // offene Ctx lösen (WS schließen), Sidebar neu bauen, bei aktiver Ctx neue Unterhaltung.
         async function deleteSessionById(id) {
+            // v0.0.212: ZIEL-Session ERST inaktiv setzen — seit „Tabs-light“ bleiben die
+            // WS-Verbindungen offener Sessions bestehen; Hermes blockt session.delete für
+            // verbundene/aktive Sessions („… ist gerade aktiv (live im Chat)“). Erst den
+            // laufenden Turn stoppen (Ctx-eigene WS), dann die Verbindung lösen — DANACH
+            // löschen. Schlägt der Server-DELETE wider Erwarten fehl, verbindet der nächste
+            // Klick die Session wieder (setActiveCtx/v0.0.209-Heilung).
+            const delCtx = sessions.get(id);
+            if (delCtx) {
+                if (delCtx.turnActive && delCtx.ws) interruptCtx(delCtx);   // interne Guards prüfen liveSessionId/OPEN
+                if (delCtx.ws) { try { delCtx.ws.onclose = null; delCtx.ws.close(); } catch (_) {} }
+            }
             try {
                 const r = await fetch('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
                 const j = await r.json();
@@ -2229,10 +2240,8 @@
                 }
                 serverSessions = serverSessions.filter(x => x.id !== id);   // v0.0.200: Sidebar-Bestand bereinigen
                 if (sessions.has(id)) {
-                    const ctx = sessions.get(id);
-                    if (ctx.ws) { try { ctx.ws.onclose = null; ctx.ws.close(); } catch (_) {} }
                     sessions.delete(id);
-                    if (C === ctx) {
+                    if (C === delCtx) {
                         activeSessionId = null;
                         localStorage.removeItem('atlas_last_session');
                         openSession(null, { force: true });

@@ -1069,6 +1069,15 @@ async def api_delete_session(stored_session_id: str, request: Request):
                                      {"session_id": stored_session_id, "profile": profile}, profile)
     deleted = result.get("deleted")
     if not deleted:
+        # v0.0.212: Hermes blockt session.delete, solange die Session verbunden ist oder
+        # ein Turn-Lease läuft („Session … ist gerade aktiv (live im Chat)“). Das Frontend
+        # stoppt Turn + Verbindung VOR dem DELETE — hier zusätzlich ein Retry nach 1 s für
+        # die Lease-/Orphan-Freigabe im Gateway.
+        await asyncio.sleep(1.0)
+        result = await hermes_ws_request(hermes_url, hermes_auth, "session.delete",
+                                         {"session_id": stored_session_id, "profile": profile}, profile)
+        deleted = result.get("deleted")
+    if not deleted:
         # hermes_ws_request liefert {} wenn der Antwort-Frame ein error war (nur
         # 'result'-Frames werden gespeichert). Genauer Grund unbekannt → generisch melden.
         return JSONResponse({"status": "error", "message": "session.delete fehlgeschlagen — Session existiert nicht oder ist gerade aktiv (live im Chat)"}, status_code=404)
