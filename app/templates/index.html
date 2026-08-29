@@ -943,19 +943,29 @@
         function jumpTo(el, offset = 10) {
             if (!el) return;
             const top = Math.max(0, el.offsetTop - offset);   // offsetTop relativ zu #messages (position:relative)
+            const s = messagesDiv;
+            const startTop = s.scrollTop;
             stickToBottom = false;
             // v0.0.224: User-Sprung sperrt den Stick — sonst dreht der scroll-Listener das Flag
             // in der <120px-Zone (Startbereich nahe am Ende) sofort wieder auf true und ein
             // laufendes Streaming (followSticky via message.delta/complete) zieht die Ansicht
             // direkt zurück ans Ende → „⬆ springt nur beim ersten Mal“ (Befund iPhone 29.08.).
             jumpPending = true;
-            if (messagesDiv.scrollTo) messagesDiv.scrollTo({ top, behavior: 'smooth' });
-            else messagesDiv.scrollTop = top;
-            if ('scrollend' in window && messagesDiv.addEventListener) {
+            if (s.scrollTo) s.scrollTo({ top, behavior: 'smooth' });
+            else s.scrollTop = top;
+            if ('scrollend' in window && s.addEventListener) {
                 // iOS 16.4+/Chromium/Firefox: exakt bei Ankunft lösen
-                messagesDiv.addEventListener('scrollend', () => { jumpPending = false; }, { once: true });
+                s.addEventListener('scrollend', () => { jumpPending = false; }, { once: true });
             }
             setTimeout(() => { jumpPending = false; }, 1200);   // Fallback (alte Browser / kein scrollend)
+            // v0.0.225: Sicherheitsnetz — Safari/WKWebView bricht smooth-Scrolls ab, wenn sich
+            // während der Animation das Layout ändert (bekannter Bug). Passiert das, bewegt sich
+            // scrollTop nicht Richtung Ziel → hart nachsetzen (instant, kann nicht blockiert werden).
+            setTimeout(() => {
+                const now = s.scrollTop;
+                const progress = (now - startTop) * (top - startTop);
+                if (progress <= 0 && Math.abs(now - top) > 2) s.scrollTop = top;
+            }, 500);
             updateFabBar();
         }
         function updateFabBar() {
@@ -979,8 +989,11 @@
             const users = collectUserMsgEls();
             if (!users.length) return;
             inputIdx = users.length - 1;
+            // v0.0.225: ERST Stack schließen, DANN springen — Safari bricht smooth-Scrolls ab,
+            // wenn während der Animation das Layout wechselt (verschwindende Buttons stören die
+            // Animation); Chromium ist tolerant (per Playwright-Repro bewiesen), iOS nicht.
+            if (isMobileView()) setFabOpen(false);
             jumpTo(users[inputIdx], 0);
-            if (isMobileView()) setFabOpen(false);   // v0.0.222: Sprung klappt den Stack wieder ein
         });
         if (fabPrevInput) fabPrevInput.addEventListener('click', () => {
             const users = collectUserMsgEls();
@@ -1000,10 +1013,10 @@
         });
         if (fabScroll) fabScroll.addEventListener('click', () => {
             stickToBottom = true;
+            if (isMobileView()) setFabOpen(false);   // v0.0.225: erst schließen (Layout stabil), dann scrollen (Safari)
             if (messagesDiv.scrollTo) messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
             else messagesDiv.scrollTop = messagesDiv.scrollHeight;
             updateFabBar();
-            if (isMobileView()) setFabOpen(false);   // v0.0.222: „Zum Ende“ klappt den Stack ein
         });
         // v0.0.222: Stack schließen — Klick außerhalb (außer auf die Bar selbst), Escape, ≥900px
         document.addEventListener('click', (e) => {
