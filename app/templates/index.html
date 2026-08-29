@@ -442,6 +442,13 @@
             #fabInputCount { min-width: 30px; padding: 3px 6px; font-size: 11px; }
         }
 
+        /* v0.0.226: Pulse-Feedback — Sprungziel ist bereits erreicht („⬆ am Ziel“) */
+        .jump-pulse { animation: jumpPulse .8s ease; }
+        @keyframes jumpPulse {
+            0%   { box-shadow: inset 0 0 0 0 var(--accent); }
+            35%  { box-shadow: inset 0 0 0 2px var(--accent); }
+            100% { box-shadow: inset 0 0 0 0 var(--accent); }
+        }
         /* 2FA-Pflicht-Overlay (nicht schließbar, nur per 2FA-Einrichtung) */
         .otp-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 25; align-items: center; justify-content: center; padding: 20px; }
         .otp-overlay.active { display: flex; }
@@ -945,6 +952,15 @@
             const top = Math.max(0, el.offsetTop - offset);   // offsetTop relativ zu #messages (position:relative)
             const s = messagesDiv;
             const startTop = s.scrollTop;
+            // v0.0.226: Befund „⬆ funktioniert nur beim ersten Mal“ (iPhone 29.08.) — zweiter
+            // Klick zielte auf die EIGENE Position (Nutzer steht nach dem 1. Sprung bereits an
+            // der letzten Eingabe) → scrollTo(Gleiches Ziel) = No-Op, wirkte wie „kaputt“.
+            // Statt toter Reaktion: sichtbares Pulse-Feedback auf dem Ziel + Hinweis-Toast.
+            if (Math.abs(top - startTop) < 2) {
+                pulseTarget(el);
+                showToast('Bereits an dieser Eingabe');
+                return;
+            }
             stickToBottom = false;
             // v0.0.224: User-Sprung sperrt den Stick — sonst dreht der scroll-Listener das Flag
             // in der <120px-Zone (Startbereich nahe am Ende) sofort wieder auf true und ein
@@ -967,6 +983,12 @@
                 if (progress <= 0 && Math.abs(now - top) > 2) s.scrollTop = top;
             }, 500);
             updateFabBar();
+        }
+        function pulseTarget(el) {   // v0.0.226: kurze Akzent-Pulsmarkierung (App-Farbe)
+            el.classList.remove('jump-pulse');
+            void el.offsetWidth;    // Reflow → Animation lässt sich erneut starten
+            el.classList.add('jump-pulse');
+            setTimeout(() => el.classList.remove('jump-pulse'), 800);
         }
         function updateFabBar() {
             // v0.0.219: KEIN Ausblenden mehr — die Bar bleibt IMMER sichtbar und klickbar
