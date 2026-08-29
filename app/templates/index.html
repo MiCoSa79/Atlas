@@ -61,6 +61,18 @@
             }
             #sessionsList::-webkit-scrollbar-thumb:hover { background: var(--muted); }
             #sessionsList::-webkit-scrollbar-thumb:active { background: var(--accent); }
+            /* Session-Sidebar (Tabs-light): exakt dasselbe Design wie Chat-Fenster/Eingabefeld */
+            #sessionSidebar { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+            #sessionSidebar::-webkit-scrollbar { width: 8px; display: block; }
+            #sessionSidebar::-webkit-scrollbar-track { background: transparent; }
+            #sessionSidebar::-webkit-scrollbar-thumb {
+                background: var(--border);
+                border-radius: 4px;
+                border: 2px solid transparent;
+                background-clip: padding-box;
+            }
+            #sessionSidebar::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+            #sessionSidebar::-webkit-scrollbar-thumb:active { background: var(--accent); }
             /* Eingabefeld: exakt dasselbe Design wie Chat-Fenster */
             #input { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
             #input::-webkit-scrollbar { width: 8px; display: block; }
