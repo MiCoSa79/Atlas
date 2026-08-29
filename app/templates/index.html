@@ -175,18 +175,23 @@
         /* v0.0.200: noch nicht offene Bestands-Session — gedimmt, Dot dezent */
         .sb-item.closed { opacity: .6; }
         .sb-item.closed .sb-dot { background: #4a4a4a; }
-        /* Arc-Animation (v0.0.197, wie Hermes-Desktop): arbeitende Session bekommt einen
-           umlaufenden Randbogen — rein CSS, kein JS-Timer. data-working am .sb-item. */
-        .sb-item[data-working="1"] .sb-arc {
-            position: absolute; inset: 0; border-radius: 8px; pointer-events: none;
-            border: 2px solid transparent;
-            background: conic-gradient(from 0deg, transparent 0 82%, var(--accent) 87% 94%, transparent 100%) border-box;
-            -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
-            -webkit-mask-composite: xor; mask-composite: exclude;
-            animation: sb-arc-spin 1.1s linear infinite;
-            transition: opacity .2s;
+        /* Spinner-Animation (v0.0.204): arbeitende Session zeigt 3 kreisend rotierende
+           Punkte statt des rausragenden Randbogens — Kapsel 14px = in der Zeilenhöhe,
+           kein Overlay über die Box (Nutzer-Befund 29.08.: Arc ragte heraus). */
+        .sb-arc {
+            position: relative; width: 14px; height: 14px; flex-shrink: 0;
+            display: none;
         }
-        @keyframes sb-arc-spin { to { transform: rotate(360deg); } }
+        .sb-item[data-working="1"] .sb-arc { display: block; animation: sb-dots-spin 1.1s linear infinite; }
+        .sb-arc i {
+            position: absolute; left: 5px; top: 5px;
+            width: 4px; height: 4px; border-radius: 50%;
+            background: var(--accent);
+        }
+        .sb-arc i:nth-child(1) { transform: translate(5px, 0); }
+        .sb-arc i:nth-child(2) { transform: rotate(120deg) translate(5px, 0); }
+        .sb-arc i:nth-child(3) { transform: rotate(240deg) translate(5px, 0); }
+        @keyframes sb-dots-spin { to { transform: rotate(360deg); } }
         .sb-item[data-working="1"] { background: rgba(127,127,127,.1); }
         .sb-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; flex-shrink: 0; }
         .sb-dot.working { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
@@ -2012,7 +2017,7 @@
                 item.dataset.key = key;
                 item.setAttribute('role', 'button');
                 item.setAttribute('tabindex', '0');
-                item.innerHTML = '<span class="sb-arc"></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
+                item.innerHTML = '<span class="sb-arc"><i></i><i></i><i></i></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
                 item.querySelector('.sb-name').textContent = sessionDisplayTitle(ctx);
                 item.querySelector('.sb-sub').textContent = ctx.storedId ? ((ctx.sessionMsgCount || 0) + ' Nachr.') : 'wird erstellt…';
                 if (ctx.turnActive) item.querySelector('.sb-dot').classList.add('working');   // v0.0.199: Leucht-Dot
@@ -2024,7 +2029,7 @@
                 item.dataset.key = 'srv:' + s.id;
                 item.setAttribute('role', 'button');
                 item.setAttribute('tabindex', '0');
-                item.innerHTML = '<span class="sb-arc"></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
+                item.innerHTML = '<span class="sb-arc"><i></i><i></i><i></i></span><span class="sb-dot"></span><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
                 item.querySelector('.sb-name').textContent = s.title || (s.id.length > 10 ? s.id.slice(0, 8) + '…' : s.id);
                 item.querySelector('.sb-sub').textContent = (s.message_count || 0) + ' Nachr.';
                 frag.appendChild(item);
