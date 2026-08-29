@@ -919,6 +919,7 @@
         // (das alte "nach der Mutation messen" schlug fehl, weil die neue Zeile
         // + Abstand die 50-Px-Schwelle sofort überstieg).
         let stickToBottom = true;
+        let jumpPending = false;   // v0.0.224: aktiver Sprung (⬆/◀/▶) — scroll-Listener dreht stickToBottom nicht zurück
         // v0.0.216: Jump-Bar unten rechts IM Chatfenster — „Zur letzten Eingabe“ (⬆),
         // Stepper durch ALLE eigenen Eingaben (◀/▶ + Zähler), „Zum Ende“ (⬇, v0.0.131).
         // Sichtbarkeit: Eingabe-Steuerung erscheint, sobald die letzte eigene Eingabe
@@ -943,8 +944,18 @@
             if (!el) return;
             const top = Math.max(0, el.offsetTop - offset);   // offsetTop relativ zu #messages (position:relative)
             stickToBottom = false;
+            // v0.0.224: User-Sprung sperrt den Stick — sonst dreht der scroll-Listener das Flag
+            // in der <120px-Zone (Startbereich nahe am Ende) sofort wieder auf true und ein
+            // laufendes Streaming (followSticky via message.delta/complete) zieht die Ansicht
+            // direkt zurück ans Ende → „⬆ springt nur beim ersten Mal“ (Befund iPhone 29.08.).
+            jumpPending = true;
             if (messagesDiv.scrollTo) messagesDiv.scrollTo({ top, behavior: 'smooth' });
             else messagesDiv.scrollTop = top;
+            if ('scrollend' in window && messagesDiv.addEventListener) {
+                // iOS 16.4+/Chromium/Firefox: exakt bei Ankunft lösen
+                messagesDiv.addEventListener('scrollend', () => { jumpPending = false; }, { once: true });
+            }
+            setTimeout(() => { jumpPending = false; }, 1200);   // Fallback (alte Browser / kein scrollend)
             updateFabBar();
         }
         function updateFabBar() {
@@ -1019,7 +1030,7 @@
         }
         window.addEventListener('resize', () => { positionFabBar(); if (window.innerWidth >= 900) setFabOpen(false); });   // Fallback (z.B. iOS-Tastatur)
         messagesDiv.addEventListener('scroll', () => {
-            stickToBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 120;
+            stickToBottom = !jumpPending && (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 120);   // v0.0.224: während eines Sprungs nicht anziehen
             updateFabBar();
         }, { passive: true });
         function followSticky() {
