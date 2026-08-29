@@ -1953,7 +1953,17 @@
         function openSession(storedId, opts) {
             const key = storeKey(storedId);
             let ctx = sessions.get(key);
-            if (!ctx) { ctx = makeCtx(storedId); sessions.set(key, ctx); }
+            if (!ctx) {
+                ctx = makeCtx(storedId);
+                sessions.set(key, ctx);
+                // v0.0.211: bekannte Server-Daten sofort übernehmen — beim ERSTMALIGEN
+                // Öffnen einer Bestands-Session (srv-Klick) zeigte die Sidebar sonst
+                // „0 Nachr.“, bis (wenn überhaupt) das resume-Frame message_count liefert.
+                if (ctx.storedId) {
+                    const sInfo = serverSessions.find(x => x.id === ctx.storedId);
+                    if (sInfo && sInfo.message_count != null) ctx.sessionMsgCount = sInfo.message_count;
+                }
+            }
             if (pendingMigrateSeed) {   // v0.0.197: Kontext-Seed in die (frische) ZIEL-Ctx legen
                 ctx.pendingMessages.push(pendingMigrateSeed);
                 pendingMigrateSeed = null;
@@ -2085,7 +2095,12 @@
                 item.setAttribute('tabindex', '0');
                 item.innerHTML = '<span class="sb-arc"><i></i><i></i><i></i></span><span class="sb-dot"></span><button class="sb-menu-btn" type="button" tabindex="-1" aria-label="Session-Aktionen"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button><div class="sb-meta"><span class="sb-name"></span><span class="sb-sub"></span></div>';
                 item.querySelector('.sb-name').textContent = sessionDisplayTitle(ctx);
-                item.querySelector('.sb-sub').textContent = ctx.storedId ? ((ctx.sessionMsgCount || 0) + ' Nachr.') : 'wird erstellt…';
+                let sMsg = ctx.sessionMsgCount || 0;
+                if (ctx.storedId && !sMsg) {   // v0.0.211: Fallback auf den Server-Bestand (z. B. Ctxs, die schon vor dem Titel-Load offen waren)
+                    const sInfo = serverSessions.find(x => x.id === ctx.storedId);
+                    sMsg = (sInfo && sInfo.message_count) || 0;
+                }
+                item.querySelector('.sb-sub').textContent = ctx.storedId ? (sMsg + ' Nachr.') : 'wird erstellt…';
                 if (ctx.turnActive) item.querySelector('.sb-dot').classList.add('working');   // v0.0.199: Leucht-Dot
                 frag.appendChild(item);
             });
