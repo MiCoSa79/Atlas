@@ -432,6 +432,14 @@
         .modal-card .status-ok { color: #3fb950; font-size: 13px; text-align: center; min-height: 16px; margin-top: 8px; }
         .modal-card .error-msg { margin-top: 8px; }
 
+        /* v0.0.215: Bestätigungs-Modal (ersetzt natives confirm beim Session-Löschen) */
+        #confirmModal .modal-card { max-width: 380px; text-align: center; }
+        #confirmModal .modal-card p { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0 0 18px; }
+        #confirmModal .modal-card .btn-row { display: flex; gap: 10px; }
+        #confirmModal .modal-card .btn-row button { flex: 1; margin-top: 0; }
+        #confirmModal .modal-card #confirmCancel { background: none; border: 1px solid var(--border); color: var(--muted); }
+        #confirmModal .modal-card #confirmOk.danger { background: #e5484d; }
+
         #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); background: #2b3340; color: var(--text); padding: 9px 16px; border-radius: 20px; font-size: 13.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 20; transition: opacity .25s; }
         #toast.hidden { display: none; }
     
@@ -804,6 +812,18 @@
             <p class="hint" style="margin:0 0 12px; font-size:12px;">Nur Sessions des in den Einstellungen gewählten Hermes-Profils.</p>
             <div id="sessionsList" style="max-height:50vh;overflow-y:auto;margin:8px 0;"></div>
             <button id="closeSessions" class="ghost">Schließen</button>
+        </div>
+    </div>
+
+    <!-- v0.0.215: Bestätigungs-Modal im App-Design (ersetzt natives confirm beim Session-Löschen) -->
+    <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="modal-card">
+            <h2 id="confirmTitle">Bestätigung</h2>
+            <p id="confirmText"></p>
+            <div class="btn-row">
+                <button id="confirmCancel" type="button">Abbrechen</button>
+                <button id="confirmOk" type="button">OK</button>
+            </div>
         </div>
     </div>
 
@@ -2229,6 +2249,32 @@
                 showToast(ok ? '✓ ' + (copyName ? 'Session-Name' : 'Session-ID') + ' kopiert' : '⚠ Kopieren fehlgeschlagen');
             });
         }
+        // v0.0.215: Bestätigungs-Modal im App-Design (ersetzt natives confirm beim
+        // Session-Löschen) — Promise-basiert: showConfirm(text, {title, confirmLabel, danger})
+        let confirmResolve = null;
+        function showConfirm(text, opts = {}) {
+            return new Promise(resolve => {
+                confirmResolve = resolve;
+                $('confirmTitle').textContent = opts.title || 'Bestätigung';
+                $('confirmText').textContent = text;
+                const okBtn = $('confirmOk');
+                okBtn.textContent = opts.confirmLabel || 'OK';
+                okBtn.classList.toggle('danger', !!opts.danger);
+                $('confirmModal').classList.add('active');
+                okBtn.focus();
+            });
+        }
+        function closeConfirm(result) {
+            $('confirmModal').classList.remove('active');
+            if (confirmResolve) { confirmResolve(result); confirmResolve = null; }
+        }
+        $('confirmOk').addEventListener('click', () => closeConfirm(true));
+        $('confirmCancel').addEventListener('click', () => closeConfirm(false));
+        $('confirmModal').addEventListener('click', e => { if (e.target === $('confirmModal')) closeConfirm(false); });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && $('confirmModal').classList.contains('active')) closeConfirm(false);
+        });
+
         // v0.0.214: persistente Lösch-Anzeige im Chat-Fenster — bleibt sichtbar, bis der
         // Server-DELETE abgeschlossen ist (Hermes blockt ~20 s, das Backend pollt bis 30 s).
         function setDeleteBanner(show, label) {
@@ -3666,8 +3712,9 @@
                 } else if (b.dataset.action === 'delete') {
                     closeSbMenu();
                     if (!storedId) return;
-                    if (!confirm('Diese Session wirklich löschen?')) return;
-                    deleteSessionById(storedId);
+                    showConfirm('Diese Session wirklich löschen?', { title: 'Session löschen', confirmLabel: 'Session löschen', danger: true }).then(ok => {
+                        if (ok) deleteSessionById(storedId);
+                    });
                 }
             });
         }
@@ -3747,7 +3794,7 @@
                     e.stopPropagation();
                     const id = b.dataset.id;
                     const item = b.closest('.session-item');
-                    if (!confirm('Diese Session wirklich löschen?')) return;
+                    if (!await showConfirm('Diese Session wirklich löschen?', { title: 'Session löschen', confirmLabel: 'Session löschen', danger: true })) return;
                     await deleteSessionById(id);
                     // Aus der Liste entfernen
                     if (item) item.remove();
