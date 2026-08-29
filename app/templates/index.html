@@ -173,7 +173,7 @@
             min-width: 0;
         }
         .sb-item:hover { background: rgba(127,127,127,.12); }
-        .sb-item.active { background: rgba(127,127,127,.2); }
+        .sb-item.active { background: rgba(127,127,127,.2); box-shadow: inset 0 0 0 1.5px var(--accent); }  /* v0.0.209: dezenter Accent-Rahmen um die im Chat angezeigte Session */
         /* v0.0.200: noch nicht offene Bestands-Session — gedimmt, Dot dezent */
         .sb-item.closed { opacity: .6; }
         .sb-item.closed .sb-dot { background: #4a4a4a; }
@@ -2006,6 +2006,23 @@
             refreshWorkingUI();
             // 4) Sidebar-Highlight aktualisieren
             renderSidebarActive();
+            // 5) v0.0.209: Verlauf-Nachladen beim Wechsel — die Ansicht kann leer sein,
+            // obwohl die Session viele Nachrichten hat. Gründe: die session.history-
+            // Antwort ging verloren (Wechsel während des Ladens / Handler-Timing) oder
+            // die WS der Ctx ist zwischenzeitlich tot (Reconnect-Limit ausgeschöpft).
+            // Ursachenheilung beim HINWECHSELN statt im onopen versteckt:
+            //   a) WS offen + Live-ID → session.history erneut anfragen (die Antwort
+            //      rendert via addMsgTo in #messages/der Surface je nach Aktivität);
+            //   b) keine offene WS + storedId → Ctx neu verbinden — der onopen-Pfad
+            //      macht session.resume und der Resume-Handler stößt history selbst an.
+            if (messagesDiv && !messagesDiv.children.length) {
+                if (ctx.liveSessionId && ctx.ws && ctx.ws.readyState === WebSocket.OPEN && ctx.historyRpcId === null) {
+                    ctx.historyRpcId = ctx.sendRpc('session.history', { session_id: ctx.liveSessionId });
+                } else if (ctx.storedId && (!ctx.ws || ctx.ws.readyState !== WebSocket.OPEN)) {
+                    ctx.connectAttempts = 0;   // Reconnect-Limit resetten — der Nutzer will die Session jetzt
+                    connectCtx(ctx);
+                }
+            }
         }
 
         function refreshWorkingUI() {
