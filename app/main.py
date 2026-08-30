@@ -1171,9 +1171,25 @@ async def api_profile_models_get(request: Request):
     profile = db_user.get("hermes_profile") or ""
     path = _hermes_aux_config_path(profile)
     if not path:
+        # v0.0.237: DB-Fallback, wenn der Container keinen Hermes-Config-Zugriff hat
+        # (ATLAS_HERMES_CONFIG_PATH/DIR nicht gesetzt) — zuletzt gespeicherte Werte
+        # aus der Atlas-DB zurueckgeben, damit die UI die Auswahl nicht zuruecksetzt.
+        dbv = get_user_by_id(user["user_id"]) or {}
+        main = {
+            "model": dbv.get("model") or "",
+            "provider": dbv.get("provider") or "",
+            "reasoning_effort": dbv.get("reasoning_effort") or "",
+            "fast_mode": dbv.get("fast_mode") or "",
+        }
+        aux = {}
+        try:
+            aux = json.loads(dbv.get("aux_models") or "{}")
+        except Exception:
+            aux = {}
+        if not isinstance(aux, dict):
+            aux = {}
         return JSONResponse({"status": "ok", "profile": profile, "config_access": False,
-                             "main": {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""},
-                             "aux": {}})
+                             "fallback": "db", "main": main, "aux": aux})
     main, aux = _parse_config_main(path)
     return JSONResponse({"status": "ok", "profile": profile, "config_access": True, "main": main, "aux": aux})
 
@@ -1235,6 +1251,36 @@ async def api_profile_models_save(request: Request,
         parsed_aux = normalized
     if not partial and parsed_aux is None:
         return JSONResponse({"status": "error", "message": "Nichts zu speichern"}, status_code=400)
+    path = _hermes_aux_config_path(profile)
+    if not path:
+        # v0.0.237: Kein Hermes-Config-Zugriff -> Atlas-DB als Fallback-Speicher.
+        # So bleibt der Save persistent (UI setzt die Auswahl nicht zurueck) und die
+        # Warnung macht transparent, dass die echte config.yaml nicht erreicht wurde.
+        conn = get_db()
+        if parsed_aux is not None:
+            conn.execute("UPDATE users SET aux_models = ? WHERE id = ?",
+                         (json.dumps(parsed_aux, ensure_ascii=False), user["user_id"]))
+            hidden = {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""}
+        else:
+            hidden = {}
+            if "provider" in partial:
+                hidden["provider"] = partial["provider"]
+            if "model" in partial:
+                hidden["model"] = partial["model"]
+            if "reasoning_effort" in partial:
+                hidden["reasoning_effort"] = partial["reasoning_effort"]
+            if "fast_mode" in partial:
+                hidden["fast_mode"] = partial["fast_mode"]
+            conn.execute(
+                "UPDATE users SET provider=?, model=?, reasoning_effort=?, fast_mode=? WHERE id = ?",
+                (hidden.get("provider", ""), hidden.get("model", ""),
+                 hidden.get("reasoning_effort", ""), hidden.get("fast_mode", ""),
+                 user["user_id"]))
+        conn.commit()
+        conn.close()
+        return JSONResponse({"status": "ok", "profile": profile, "main": partial, "aux": parsed_aux,
+                             "config_written": False, "fallback": "db",
+                             "config_message": "In Atlas-DB gespeichert (Fallback) — Hermes-config.yaml nicht erreichbar (ATLAS_HERMES_CONFIG_PATH oder ATLAS_HERMES_CONFIG_DIR + Profil setzen)"})
     ok1 = ok2 = True
     msg1 = msg2 = ""
     if partial:
