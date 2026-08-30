@@ -2689,10 +2689,13 @@
             }
             const meta = document.createElement('span');
             meta.className = 'meta';
-            // System-Nachrichten (Tool-Start/Ende, Session-Meldungen usw.) bekommen
-            // sofort einen Zeitstempel, sonst bleiben sie leer bis zum Seiten-Refresh
-            if (role === 'system') {
-                meta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            // v0.0.248: Sofort-Zeitstempel (HH:MM) für User- und System-Nachrichten.
+            // User-Bubbles blieben bisher bis zum Seiten-Refresh leer, System-Nachrichten
+            // zeigten Sekunden (14:32:05). Assistant-Bubbles bekommen ihre Zeit erst bei
+            // message.complete (Ende-Zeit), Thinking-Boxen gar keine — konsistent mit dem
+            // History-Rendering, das nur user/assistant mit der Server-Zeit versorgt.
+            if (role === 'user' || role === 'system') {
+                meta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
             }
             m.appendChild(meta);
             container.appendChild(m);
@@ -3699,6 +3702,15 @@
                                 if (m.role === 'user' && !internal && m.text && /\[[^\]]+\]/.test(m.text)) {
                                     restoreAttachmentPreview(mm, m.text);
                                 }
+                                // v0.0.248: Server-Zeit (HH:MM) aus m.timestamp nachziehen — der
+                                // historyRpcId-Pfad (Z. 3771) macht das bereits; ohne diesen
+                                // Override blieben assistant-Nachrichten nach dem Öffnen einer
+                                // Session ohne Zeitstempel (addMsgIn setzt nur user/system).
+                                const t = mm.querySelector('.meta');
+                                if (m.timestamp) {
+                                    const d = new Date(m.timestamp * 1000);
+                                    t.textContent = ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                                }
                             } else if (m.role === 'tool') {
                                 const toolCard = addMsgTo(ctx, 'system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
                                 attachToolDetail(toolCard, toolArgsFullText((m.args || {})), '');
@@ -3908,7 +3920,8 @@
                     if (ctx.bubble) {
                         const bmeta = ctx.bubble.querySelector('.meta');
                         if (bmeta && !bmeta.textContent) {
-                            bmeta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                            // v0.0.248: HH:MM statt HH:MM:SS — einheitliches Format
+                            bmeta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
                         }
                         ctx.bubble = null;
                     }
@@ -3983,7 +3996,11 @@
                         }
                         const meta = ctx.bubble.querySelector('.meta') || document.createElement('span');
                         meta.className = 'meta';
-                        meta.textContent = '✓ ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                        // v0.0.248: Zeit ohne „✓“-Präfix und nur, wenn noch keine da ist —
+                        // die Anzeige soll nach Reload (Server-Zeit) identisch aussehen.
+                        if (!meta.textContent) {
+                            meta.textContent = ' ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                        }
                         ctx.bubble.appendChild(meta);
                         ctx.bubble = null;
                     }
