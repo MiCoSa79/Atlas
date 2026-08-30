@@ -1027,7 +1027,7 @@ def _write_hermes_aux(aux: dict, profile: str = ""):
             block.append(f"  {task}: {{provider: auto, model: ''}}")
     idx = None
     for i, ln in enumerate(lines):
-        if ln.strip() == "auxiliary:" and (i == 0 or lines[i - 1].strip() == "" or not lines[i - 1][:1].isspace()):
+        if ln.strip() == "auxiliary:" and not ln[:1].isspace():
             idx = i
             break
     if idx is not None:
@@ -1091,8 +1091,14 @@ MAIN_FIELDS = ("model", "provider", "reasoning_effort", "fast_mode")
 def _parse_config_main(path):
     """Liest Hauptmodell/Provider/Reasoning/Schnellmodus + auxiliary aus der HERMES-Profil-config (Text).
 
-    Die config.yaml des Hermes-Profils ist die Quelle (wie Desktop-App): top-level
-    model/provider/reasoning_effort/fast_mode UND ein 'auxiliary:'-Block mit 11 Tasks.
+    Die config.yaml des Hermes-Profils ist die Quelle (wie Desktop-App): das
+    top-level 'model:'-MAPPING (eingerückte provider/default) bzw. ältere
+    Flach-Formen (top-level 'model:' als String + 'provider:') UND ein
+    'auxiliary:'-Block mit 11 Tasks.
+    v0.0.241: NUR Top-Level-Zeilen zählen als Konfigurationswerte — eingerückte
+    (untergeordnete, z. B. 'memory: ... provider: holographic') Zeilen werden
+    niemals als Hauptmodell gelesen (vorher überschrieb der Gedächtnis-Provider
+    'holographic' das echte Hauptmodell; letzter Treffer gewann).
     Rückgabe: (main-dict mit leeren Defaults, aux-dict {task: {provider, model}}).
     """
     main = {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""}
@@ -1102,14 +1108,28 @@ def _parse_config_main(path):
             lines = f.read().splitlines()
     except OSError:
         return main, aux
+    in_model_block = False
     for ln in lines:
         s = ln.strip()
         if not s or s.startswith("#"):
+            if not s:
+                in_model_block = False
             continue
+        if ln[:1].isspace():
+            # Nur die Kinder eines top-level 'model:'-Blocks (provider/default) zählen.
+            if in_model_block:
+                m = re.match(r'^(provider|default):\s*(.*?)\s*$', s)
+                if m:
+                    v = m.group(2).strip().strip('"').strip("'")
+                    main["provider" if m.group(1) == "provider" else "model"] = v
+            continue
+        in_model_block = False
         m = re.match(r'^(model|provider|reasoning_effort|fast_mode):\s*(.*?)\s*$', s)
         if m:
             v = m.group(2).strip().strip('"').strip("'")
             main[m.group(1)] = v
+            if m.group(1) == "model" and v == "":
+                in_model_block = True
             continue
         m2 = re.match(r'^([a-z_0-9]+):\s*\{provider:\s*(.+?),\s*model:\s*(.*?)\s*\}\s*$', s)
         if m2 and m2.group(1) in AUX_TASKS:
@@ -1120,11 +1140,18 @@ def _parse_config_main(path):
 
 
 def _write_hermes_main(main: dict, profile: str = ""):
-    """Schreibt top-level model/provider/reasoning_effort/fast_mode in die config.yaml des Profils.
+    """Schreibt Hauptmodell/Provider/Reasoning/Schnellmodus in die config.yaml des Profils.
 
-    Nur MAIN_FIELDS-Keys werden angefasst; ein leerer String LÖSCHT die Zeile („Standard"
-    = Hermes-Default); fehlende Keys bleiben unverändert. Kommentare/Bestand bleiben erhalten.
-    Rückgabe: (ok, message)
+    v0.0.241: model/provider wandern in den top-level 'model:'-BLOCK (eingerückt als
+    'provider:' + 'default:') — das native Hermes-Format, das auch die Profil-config.yaml
+    und die Desktop-App verwenden. Vorher schrieb Atlas top-level 'model:'/'provider:'
+    als Flach-Strings: Der bestehende 'model:'-Block wurde dabei zerstört (seine
+    eingerückten Zeilen blieben als YAML-Waisen hängen — Muster in
+    config.yaml.corrupt.20260830-163119.bak) und das top-level 'provider:' liest Hermes
+    nicht als Hauptmodell-Provider. Ein vorhandener kaputter Alt-Bestand wird dabei
+    geheilt. reasoning_effort/fast_mode bleiben top-level (Hermes-Format).
+    Leere Werte LÖSCHEN die Zeilen („Standard" = Hermes-Default); Reset entfernt den
+    ganzen model:-Block. Rückgabe: (ok, message)
     """
     path = _hermes_aux_config_path(profile)
     if not path:
@@ -1136,24 +1163,62 @@ def _write_hermes_main(main: dict, profile: str = ""):
         lines = f.read().splitlines()
     idx = None
     for i, ln in enumerate(lines):
-        stripped = ln.strip()
-        if stripped == "auxiliary:" and (i == 0 or lines[i - 1].strip() == "" or not lines[i - 1][:1].isspace()):
+        if ln.strip() == "auxiliary:" and not ln[:1].isspace():
             idx = i
             break
     head = lines[:idx] if idx is not None else lines
     tail = lines[idx:] if idx is not None else []
+
+    kept = head
+    new_block = None
+    block_start = None
+    if "provider" in clean or "model" in clean:
+        # Alten model:-Block lokalisieren (Header MIT evtl. Alt-String + eingerückte Zeilen)
+        block_start = None
+        block_end = None
+        for i, ln in enumerate(head):
+            stripped = ln.strip()
+            if not stripped or ln[:1].isspace():
+                continue
+            if re.match(r'^model:', ln):
+                block_start = i
+                break
+        if block_start is not None:
+            block_end = block_start + 1
+            while block_end < len(head) and (head[block_end].strip() == "" or head[block_end][:1].isspace()):
+                block_end += 1
+        # Alle top-level model:/provider:-Zeilen + den alten Block entfernen
+        drop = set()
+        for i, ln in enumerate(head):
+            if ln.strip() and not ln[:1].isspace() and re.match(r'^(model|provider):', ln):
+                drop.add(i)
+        if block_start is not None and block_end is not None:
+            drop.update(range(block_start, block_end))
+        kept = [ln for i, ln in enumerate(head) if i not in drop]
+        kids = []
+        if clean.get("provider"):
+            kids.append(f"  provider: {_yq(clean['provider'])}")
+        if clean.get("model"):
+            kids.append(f"  default: {_yq(clean['model'])}")
+        if block_start is not None and not kids:
+            new_block = None  # Reset: Block komplett entfernen (Hermes-Default)
+        elif block_start is not None or kids:
+            new_block = ["model:"] + kids
+
     out = []
-    replaced = set()
-    for ln in head:
-        m = re.match(r'^(model|provider|reasoning_effort|fast_mode):\s*(.*)$', ln)
+    replaced_top = set()
+    for ln in kept:
+        m = re.match(r'^(reasoning_effort|fast_mode):\s*(.*)$', ln)
         if m and m.group(1) in clean:
             if clean[m.group(1)]:
                 out.append(f"{m.group(1)}: {_yq(clean[m.group(1)])}")
-            replaced.add(m.group(1))
+            replaced_top.add(m.group(1))
         else:
             out.append(ln)
-    for k in MAIN_FIELDS:
-        if k in clean and k not in replaced and clean[k]:
+    if new_block:
+        out += new_block
+    for k in ("reasoning_effort", "fast_mode"):
+        if k in clean and k not in replaced_top and clean[k]:
             out.append(f"{k}: {_yq(clean[k])}")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out + tail).rstrip() + "\n")

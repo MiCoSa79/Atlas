@@ -12,6 +12,7 @@ import asyncio
 import http.cookiejar
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -775,13 +776,21 @@ def main():
     if not cleared:
         failures.append("models_db_cleared")
 
-    # c) Config-Text-Patch: top-level model/provider/reasoning_effort/fast_mode
+    # c) Config-Text-Patch: model:-BLOCK (eingerückt provider/default, v0.0.241) + top-level reasoning/fast
     if cfg_path and os.path.exists(cfg_path):
         with open(cfg_path, encoding="utf-8") as f:
             cfg_txt = f.read()
-        has_main = ('model: "Qwen3"' in cfg_txt and 'provider: "custom:test-prov"' in cfg_txt
+        cfg_lines = cfg_txt.splitlines()
+        block_ok = ('  provider: "custom:test-prov"' in cfg_txt and '  default: "Qwen3"' in cfg_txt
                     and 'reasoning_effort: "high"' in cfg_txt and 'fast_mode: "fast"' in cfg_txt)
-        print("22c) Config-Main-Patch:", "OK" if has_main else "FEHLT")
+        # v0.0.241: KEINE Flach-Form (top-level 'model:'/'provider:' mit Wert) mehr —
+        # die zerstörte früher den model:-Block (config.yaml.corrupt-Falle)
+        flat_ok = not any(
+            re.match(r'^(model|provider):\s*\S', ln) for ln in cfg_lines
+            if ln.strip() and not ln[:1].isspace())
+        has_main = block_ok and flat_ok
+        print("22c) Config-Main-Patch:", "OK" if has_main else "FEHLT",
+              "| block:", block_ok, "| flat-form:", "weg" if flat_ok else "BLEIBT")
         if not has_main:
             failures.append("models_config_main")
 
@@ -800,7 +809,7 @@ def main():
     if cfg_path and os.path.exists(cfg_path):
         with open(cfg_path, encoding="utf-8") as f:
             cfg_txt = f.read()
-        ok = 'reasoning_effort: "low"' in cfg_txt and 'model: "Qwen3"' in cfg_txt
+        ok = 'reasoning_effort: "low"' in cfg_txt and 'default: "Qwen3"' in cfg_txt
         print("22e) Teilweise (nur Reasoning):", "OK" if ok else "FEHLT")
         if not ok:
             failures.append("models_partial")
@@ -812,14 +821,15 @@ def main():
     if bs != 400 or bs2 != 400:
         failures.append("models_validation")
 
-    # g) Reset: alle Bereiche leer -> Zeilen entfernt (Hermes-Default)
+    # g) Reset: alle Bereiche leer -> Zeilen/Block entfernt (Hermes-Default)
     st, _ = models_save({"scope": "main", "main_provider": "", "main_model": ""})
     st, _ = models_save({"scope": "reasoning", "reasoning_effort": ""})
     st, _ = models_save({"scope": "fast", "fast_mode": ""})
     if cfg_path and os.path.exists(cfg_path):
         with open(cfg_path, encoding="utf-8") as f:
             cfg_txt = f.read()
-        reset_ok = 'model: "Qwen3"' not in cfg_txt and 'reasoning_effort:' not in cfg_txt and 'fast_mode:' not in cfg_txt
+        reset_ok = ('default: "Qwen3"' not in cfg_txt and 'provider: "custom:test-prov"' not in cfg_txt
+                    and 'reasoning_effort:' not in cfg_txt and 'fast_mode:' not in cfg_txt)
         print("22g) Config-Reset:", "OK" if reset_ok else "FEHLT")
         if not reset_ok:
             failures.append("models_reset")
