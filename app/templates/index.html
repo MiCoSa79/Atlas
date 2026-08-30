@@ -3159,15 +3159,53 @@
         }
 
         // Titel-Cache aus der Server-Sessionliste (Bestands-Sessions nach Reload).
+        // v0.0.246: Selbstheilung — Hermes generiert Session-Titel ASYNC nach dem ersten
+        // Turn (title_generation-Aux im Turn-Prolog). Neue Sessions (➕ oder ▶-Migration)
+        // hatten deshalb live nie einen Titel in der Sidebar (nur die gekürzte Session-ID),
+        // bis ein Reload loadSessionTitles erneut auslöste (Nutzer-Befund 30.08.).
+        let titlePollTimer = null;   // Poll-Timer: offene Sessions ohne Titel nachladen
+        let titlePollTries = 0;      // Abbruch nach ~2 min (Titel-Generierung dauert nie länger)
+        const TITLE_POLL_MAX = 16;   // 16 × 8 s ≈ 2 min
         async function loadSessionTitles() {
             try {
                 const r = await fetch('/api/sessions');
                 const j = await r.json();
                 if (j.status !== 'ok' || !j.sessions) return;
+                // v0.0.246: Signatur-Vergleich — Sidebar nur bei echter Änderung neu bauen,
+                // sonst schließt jeder Nachlade-Load ein offenes ⋮-Menü (renderSidebar → closeSbMenu).
+                const sig = JSON.stringify([...j.sessions].filter(s => s && s.id)
+                    .map(s => [s.id, s.title || '', s.message_count || 0, s.started_at || 0]));
+                const prev = JSON.stringify(serverSessions
+                    .map(s => [s.id, s.title || '', s.message_count || 0, s.started_at || 0]));
                 serverSessions = j.sessions.filter(s => s && s.id);   // v0.0.200: Bestand für die Sidebar
                 j.sessions.forEach(s => { if (s.id && s.title) sessionTitles[s.id] = s.title; });
-                renderSidebar();
+                if (sig !== prev) renderSidebar();
             } catch (_) { /* Sidebar bleibt mit Kurz-IDs sichtbar */ }
+            // v0.0.246: Selbstheilung — solange offene Sessions ohne Titel existieren, regelmäßig
+            // nachladen (Hermes persistiert den generierten Titel wenige Sekunden nach dem Turn).
+            // Sobald alle Titel da sind, wird ein noch laufender Timer sofort beendet.
+            const untitled = hasUntitledOpenCtx();
+            if (untitled && titlePollTimer === null && titlePollTries < TITLE_POLL_MAX) {
+                titlePollTimer = setTimeout(() => {
+                    titlePollTimer = null;
+                    titlePollTries += 1;
+                    loadSessionTitles();
+                }, 8000);
+            } else if (!untitled && titlePollTimer !== null) {
+                clearTimeout(titlePollTimer);
+                titlePollTimer = null;
+            }
+        }
+        // v0.0.246: Titel-Nachladen bei Ereignissen (create/resume/message.complete) —
+        // neue Chance für die Selbstheilung (frisch generierte Hermes-Titel einsammeln).
+        function refreshTitles() {
+            titlePollTries = 0;
+            loadSessionTitles();
+        }
+        function hasUntitledOpenCtx() {
+            let has = false;
+            sessions.forEach(ctx => { if (ctx.storedId && !sessionTitles[ctx.storedId]) has = true; });
+            return has;
         }
 
         // Sidebar-Klick: weicher Wechsel zur Ziel-Ctx (WS bleibt offen). Delegiert
@@ -3469,6 +3507,7 @@
                     }
                     activeSessionId = storedNew2;   // v0.0.197: View folgt der neuen Session (vorher null — Reconnect eröffnete sonst eine NEUE Unterhaltung)
                     renderSidebar();   // v0.0.198: '__new__'-Ctx ist jetzt die echte Session — Sidebar neu aufbauen
+                    refreshTitles();   // v0.0.246: Titel der neuen Session live nachladen (Hermes generiert sie async)
                     ctx.sessionCtxPct = 0; ctx.sessionCtxMax = 0; ctx.sessionMsgCount = 0; if (ctx === C) updateCtxWarning();
                     if (ctx === C) updateTokenWidget();   // neue Session: Anzeige SOFORT zurücksetzen (v0.0.115)
                     if (ctx === C) refreshUsageGauge();   // v0.0.119: exakten Kontext-Stand sofort nachladen
@@ -3539,6 +3578,7 @@
                     if (ctx === C) refreshUsageGauge();   // v0.0.119: Kontext-% auch bei idle Session nachladen
                     // Verlauf laden (history antwortet auf der von sendRpc vergebenen ID)
                     ctx.historyRpcId = sendRpc('session.history', { session_id: ctx.liveSessionId });
+                    refreshTitles();   // v0.0.246: Titel nach Resume nachladen (Bestands-Sessions bekommen sofort ihren Titel)
                     // Offene clarify-Frage aus dem resume-Result merken — die Karte
                     // wird NACH dem Verlaufs-Rendering eingehängt (sonst löscht
                     // messagesDiv.innerHTML sie wieder). (v0.0.136)
@@ -3868,6 +3908,7 @@
                     if (ctx === C) updateTokenWidget();
                     // Done-Elemente (Denk-Boxen, Tool-Karten) zusammenklappen (v0.0.155)
                     collapseDoneElements(ctx === C ? null : (ctx.surface || null));
+                    refreshTitles();   // v0.0.246: Turn-Ende — der async generierte Hermes-Titel ist da bzw. kommt gleich; nachladen
                 }
                 if (p.type === 'status.update' && p.payload && p.payload.text) {
                     const t = p.payload.text;
