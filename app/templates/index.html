@@ -4647,12 +4647,18 @@
                 }
                 list.innerHTML = d.passkeys.map(p => {
                     const used = p.last_used_at ? (' · zuletzt ' + (p.last_used_at || '').replace('T', ' ').slice(0, 16)) : '';
+                    /* v0.0.231: Block-Zeilen statt nowrap-Span+<br> — WebKit (iOS) brach den
+                       erzwungenen Umbruch nicht zuverlässig -> Name/Meta verschwanden hinter
+                       overflow:hidden, übrig blieb nur der Entfernen-Button (Nutzer-Befund) */
                     return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">' +
-                        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;color:var(--muted);"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>' +
-                        '<b>' + escHtml(p.device_name || 'Unbenanntes Gerät') + '</b><br>' +
-                        '<span style="color:var(--muted);font-size:11px;">registriert ' + (p.created_at || '').replace('T', ' ').slice(0, 16) + used + '</span></span>' +
-                        '<button type="button" data-pkdel="' + p.id + '" style="padding:6px 12px;font-size:12px;background:none;border:1px solid #e5534b;border-radius:8px;color:#e5534b;cursor:pointer;flex-shrink:0;">Entfernen</button></div>';
+                        '<div style="flex:1 1 auto;min-width:0;">' +
+                        '<div style="display:flex;align-items:center;min-width:0;">' +
+                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-right:6px;color:var(--muted);"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>' +
+                        '<b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(p.device_name || 'Unbenanntes Gerät') + '</b>' +
+                        '</div>' +
+                        '<div style="color:var(--muted);font-size:11px;margin-top:2px;">registriert ' + (p.created_at || '').replace('T', ' ').slice(0, 16) + used + '</div>' +
+                        '</div>' +
+                        '<button type="button" data-pkdel="' + p.id + '" style="width:auto;margin:0;padding:6px 12px;font-size:12px;background:none;border:1px solid #e5534b;border-radius:8px;color:#e5534b;cursor:pointer;flex-shrink:0;box-shadow:none;font-weight:400;">Entfernen</button></div>';
                 }).join('');
             } catch (_) {}
         }
