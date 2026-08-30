@@ -277,6 +277,25 @@
         header .status-dot.offline { background: #e5534b; }
         header .icon-btn { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 6px; border-radius: 8px; flex-shrink: 0; }
         header .icon-btn:hover { background: var(--bg); color: var(--text); }
+        /* v0.0.228: Handy (<900px) — Benutzername + Session-ID weg, Build nur Versionsnummer */
+        @media (max-width: 899px) {
+            header .user-tag { display: none; }
+            header .build-label, header .build-date { display: none; }
+        }
+        /* v0.0.228: Profil-Button + Dropdown (ganz rechts) */
+        .profile-wrap { position: relative; flex-shrink: 0; }
+        .profile-btn { display: flex; align-items: center; justify-content: center; }
+        .profile-menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 240px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.4); padding: 6px; z-index: 140; }
+        .profile-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: none; background: none; color: var(--text); font-size: 14px; text-align: left; cursor: pointer; border-radius: 8px; }
+        .profile-menu-item svg { flex-shrink: 0; }
+        .profile-menu-item:hover { background: var(--bg); }
+        .profile-menu-item.danger { color: #e5534b; }
+        .profile-menu-item.danger:hover { background: rgba(229, 83, 75, .12); }
+        /* v0.0.228: Passkey-Login-Karte */
+        .pk-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; color: var(--muted); font-size: 12px; }
+        .pk-divider::before, .pk-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+        .pk-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 15px; cursor: pointer; }
+        .pk-btn:hover { border-color: var(--accent); color: var(--accent); }
 
         .banner { background: #2b2a17; color: #d8c96a; font-size: 13px; text-align: center; padding: 8px 14px; }
         .banner a { color: #e8dc8a; font-weight: 600; cursor: pointer; text-decoration: underline; }
@@ -679,6 +698,15 @@
                 <button type="submit">Bestätigen</button>
             </form>
             <button id="backToLogin2fa" class="ghost hidden" style="width:100%;margin-top:8px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;">← Zurück zum Login</button>
+            <!-- v0.0.228: Passkey-Login (Keepass/Bitwarden/Windows Hello/iCloud) — Sichtbarkeit per /api/config -->
+            <div id="passkeyCard" class="hidden">
+                <div class="pk-divider"><span>oder</span></div>
+                <button type="button" id="passkeyBtn" class="pk-btn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                    Mit Passkey anmelden
+                </button>
+                <p class="error-msg hidden" id="passkeyError"></p>
+            </div>
             <button id="toggleRegister" class="ghost" style="width:100%;margin-top:12px;background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;">Noch kein Konto? Registrieren</button>
             <form id="registerForm" class="hidden">
                 <label for="r_username">Benutzername</label>
@@ -704,13 +732,27 @@
             <span id="currentSessionLabel" class="user-tag hidden" style="max-width:180px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
             <span id="statusDot" class="status-dot"></span>
             <span class="build-info" title="Build-Nummer"><span class="build-label">Build </span><span class="build-ver">{{ BUILD_VERSION }}</span><span class="build-date"> · {{ BUILD_DATE }}</span></span>
-            <button id="sessionsBtn" class="icon-btn" title="Frühere Chat-Sessions" style="display:none;">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-            </button>
-            <button id="settingsBtn" class="icon-btn" title="Einstellungen">⚙️</button>
-            <button id="logoutBtn" class="icon-btn" title="Abmelden">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-            </button>
+            <!-- v0.0.228: Profil-Button (ganz rechts) — Dropdown: Profil / Administration (nur Admins) / Abmelden.
+                 Sessions-⚙️- und Logout-Buttons wurden entfernt; Session-Liste lebt links (PC) bzw. Drawer (Handy). -->
+            <div class="profile-wrap">
+                <button id="profileBtn" class="icon-btn profile-btn" title="Profil" aria-label="Profil">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </button>
+                <div id="profileMenu" class="profile-menu hidden" role="menu" aria-label="Profil-Menü">
+                    <button type="button" class="profile-menu-item" data-action="profile" role="menuitem">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        Profil — Einstellungen
+                    </button>
+                    <button type="button" class="profile-menu-item hidden" id="profileAdminItem" data-action="admin" role="menuitem">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15v2m-6 4h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2zm10-10V7a4 4 0 0 0-8 0v4h8z"/></svg>
+                        Administration
+                    </button>
+                    <button type="button" class="profile-menu-item danger" data-action="logout" role="menuitem">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        Abmelden
+                    </button>
+                </div>
+            </div>
         </header>
         <div id="appBody">
         <!-- v0.0.197: Session-Sidebar links (Desktop ≥900px; auf schmalen Screens ausgeblendet) -->
@@ -823,6 +865,20 @@
                     <button id="cancelOtpBtn" class="ghost">Abbrechen</button>
                     <p class="error-msg" id="otpError"></p>
                 </div>
+            </div>
+            <!-- Passkeys (v0.0.228) — Keepass/KeepassXC, Bitwarden, Windows Hello, iCloud-Keychain -->
+            <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;" id="pkSection">
+                <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">🔑 Passkeys</h3>
+                <p class="hint" style="margin:0 0 10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Mit einem Passkey meldest du dich passwortlos an — über Keepass, Bitwarden, Windows Hello, Face ID oder den iCloud-Schlüsselbund.</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+                    <input type="text" id="pkDeviceName" placeholder="Gerätename (z. B. iPhone 15)" maxlength="60" autocomplete="off" style="flex:1;min-width:160px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;">
+                    <button id="addPasskeyBtn" style="width:auto;padding:8px 16px;font-size:13px;">+ Passkey hinzufügen</button>
+                </div>
+                <div id="pkList" style="font-size:13px;color:var(--text);"></div>
+                <p class="error-msg" id="pkMsg"></p>
+                <p class="hint hidden" id="pkIosTip" style="margin-top:8px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;">
+                    <b>Falls es auf dem iPhone scheitert:</b> iCloud-Schlüsselbund (Einstellungen → Passwörter) und Face ID müssen aktiv sein; nicht im privaten Safari-Modus testen; iOS ≥ 16.3.
+                </p>
             </div>
             <!-- Admin-Einstellungen (nur Admin) -->
             <div id="adminSettingsPanel" class="hidden" style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
@@ -1189,12 +1245,9 @@
             // Profil merken (für session.create und Modal)
             selectedProfile = user.hermes_profile || '';
             isAdminUser = !!user.is_admin;
-            // Sessions-Button nur zeigen, wenn Hermes verbunden ist
-            if (user && user.hermes_configured) {
-                $('sessionsBtn').style.display = '';
-            } else {
-                $('sessionsBtn').style.display = 'none';
-            }
+            // v0.0.228: Administration-Menüpunkt nur für Admins sichtbar
+            const pAdminItem = $('profileAdminItem');
+            if (pAdminItem) pAdminItem.classList.toggle('hidden', !isAdminUser);
             // Banner: unterscheiden, was genau fehlt
             const banner = $('setupBanner');
             if (user && !user.hermes_configured) {
@@ -1229,8 +1282,9 @@
             const r = await fetch('/api/setup', { method: 'POST', body: d });
             const j = await r.json().catch(() => ({}));
             if (r.ok) {
-                showChat({ username: $('s_username').value.trim(), hermes_configured: false });
-                openSettings();
+                // v0.0.228: Reload statt minimalem showChat — /api/session liefert danach
+                // is_admin/otp_*-Zustände korrekt (Setup-User ist Admin → Administration sichtbar)
+                location.reload();
             } else {
                 $('authError').textContent = j.message || 'Setup fehlgeschlagen';
             }
@@ -1345,11 +1399,12 @@
                 })
                 .catch(() => {});
         }
-        function openSettings() {
+        function openSettings(showAdmin = false) {
             $('profileStatus').textContent = '';
             $('profileError').textContent = '';
             const adminPanel = $('adminSettingsPanel');
-            if (isAdminUser) {
+            // v0.0.228: Admin-Panel NUR über Profil-Dropdown → „Administration" (Trennung Profil/Admin)
+            if (isAdminUser && showAdmin) {
                 adminPanel.classList.remove('hidden');
                 // Admin-Einstellungen laden
                 fetch('/api/admin/settings')
@@ -1402,10 +1457,38 @@
             loadOtpStatus();  // 2FA-Status immer beim Öffnen laden
         }
 
-        $('settingsBtn').addEventListener('click', openSettings);
-        $('logoutBtn').addEventListener('click', async () => {
-            try { await fetch('/api/logout', { method: 'POST' }); } catch (_) {}
-            location.reload();
+        // v0.0.228: Profil-Dropdown (ersetzt ⚙️- und Logout-Buttons im Header)
+        const profileBtnEl = $('profileBtn');
+        const profileMenuEl = $('profileMenu');
+        function setProfileMenu(open) {
+            if (!profileMenuEl) return;
+            profileMenuEl.classList.toggle('hidden', !open);
+        }
+        if (profileBtnEl) profileBtnEl.addEventListener('click', e => {
+            e.stopPropagation();
+            setProfileMenu(profileMenuEl.classList.contains('hidden'));
+        });
+        if (profileMenuEl) profileMenuEl.addEventListener('click', async e => {
+            const item = e.target.closest('.profile-menu-item');
+            if (!item) return;
+            setProfileMenu(false);
+            const act = item.dataset.action;
+            if (act === 'profile') {
+                openSettings(false);          // nur Benutzer-Einstellungen
+            } else if (act === 'admin') {
+                openSettings(true);           // + Admin-Bereich (nur für Admins sichtbar)
+            } else if (act === 'logout') {
+                try { await fetch('/api/logout', { method: 'POST' }); } catch (_) {}
+                location.reload();
+            }
+        });
+        document.addEventListener('click', e => {
+            if (!profileMenuEl || profileMenuEl.classList.contains('hidden')) return;
+            if (e.target.closest('.profile-wrap')) return;
+            setProfileMenu(false);
+        });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') setProfileMenu(false);
         });
         $('closeSettings').addEventListener('click', () => $('settingsModal').classList.remove('active'));
         $('settingsModal').addEventListener('click', e => {
@@ -3834,10 +3917,8 @@
             flushRun();
         }
 
-        $('sessionsBtn').addEventListener('click', () => {
-            $('sessionsModal').classList.add('active');
-            loadSessions();
-        });
+        // v0.0.228: sessionsBtn-Listener entfernt (Header-Button gibt es nicht mehr —
+        // Session-Liste lebt links in der Sidebar bzw. mobil im Drawer).
         $('sbList').addEventListener('click', (e) => {
             // v0.0.208: ⋮-Button zuerst — öffnet/schließt das Session-Menü statt zu wechseln
             const btn = e.target.closest('.sb-menu-btn');
@@ -4398,6 +4479,196 @@
             Object.keys(ctx.pendingRpcTimers).forEach(k => { clearTimeout(ctx.pendingRpcTimers[k]); delete ctx.pendingRpcTimers[k]; });
         }
         function rejectAllPendingRpc(reason) { if (C) rejectCtxPending(C, reason); }
+
+        
+        
+        // =================================================== v0.0.228: Passkeys (WebAuthn)
+        // Port aus Starface-WebApp (F58): Keepass/KeepassXC, Bitwarden, Windows Hello, Face ID,
+        // iCloud-Keychain. Kompatibilitäts-Erfahrungen: explizite Feld-Whitelist (iOS ignoriert
+        // unbekannte Felder NICHT), zusätzliche Base64-Helfer (atob kann keine URL-safe-Varianten),
+        // kein navigator.credentials beim Boot (jsdom-freundlich, erst bei Klick/Autofill).
+
+        function pkB64ToBytes(b64) {
+            const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+            return Uint8Array.from(bin, c => c.charCodeAt(0));
+        }
+        function pkB64(b64) {
+            return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+        function abToB64u(ab) {
+            // ArrayBuffer/TypedArray -> URL-safe Base64 (View-sicher, wie Starface F58)
+            const bytes = new Uint8Array(ab);
+            let s = '';
+            for (const b of bytes) s += String.fromCharCode(b);
+            return pkB64(btoa(s));
+        }
+        function pkCredToJson(cred) {
+            // Registrierung (attestationObject) UND Login (authenticatorData/signature) — Starface-F58-Muster
+            const r = cred.response || {};
+            return {
+                type: 'public-key',
+                id: cred.id,
+                rawId: abToB64u(cred.rawId),
+                response: {
+                    clientDataJSON: abToB64u(r.clientDataJSON),
+                    attestationObject: r.attestationObject ? abToB64u(r.attestationObject) : undefined,
+                    authenticatorData: r.authenticatorData ? abToB64u(r.authenticatorData) : undefined,
+                    signature: r.signature ? abToB64u(r.signature) : undefined,
+                    userHandle: r.userHandle ? abToB64u(r.userHandle) : undefined,
+                    transports: r.getTransports ? r.getTransports() : undefined,
+                },
+            };
+        }
+        function pkB64Pako(bytes) {
+            let s = '';
+            for (const b of bytes) s += String.fromCharCode(b);
+            return pkB64(btoa(s));
+        }
+        function pkShowError(id, msg) {
+            const el = $(id);
+            if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+        }
+
+        let pkEnabled = false;
+        function initPasskeyUI() {
+            // Login-Karte nur zeigen, wenn Backend Passkeys konfiguriert hat (WEBAUTHN_RP_ID/ORIGIN)
+            fetch('/api/config').then(r => r.json()).then(d => {
+                pkEnabled = !!(d && d.passkey_enabled);
+                const card = $('passkeyCard');
+                if (card) card.classList.toggle('hidden', !pkEnabled);
+                const pkSec = $('pkSection');
+                if (pkSec) pkSec.style.display = pkEnabled ? '' : 'none';
+                if (pkEnabled) loadPasskeys();
+            }).catch(() => {});
+        }
+        function setPkBusy(busy) {
+            ['passkeyBtn', 'addPasskeyBtn'].forEach(id => {
+                const el = $(id);
+                if (el) el.style.opacity = busy ? '.5' : '1';
+            });
+        }
+        async function pkApi(path, body, setBusy) {
+            try {
+                const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+                return await r.json();
+            } catch (_) {
+                return { status: 'error', message: 'Netzwerkfehler — Verbindung prüfen.' };
+            } finally {
+                if (setBusy) setPkBusy(false);
+            }
+        }
+        // ---- Login (Karte auf der Auth-Seite) ----
+        async function passkeyLogin() {
+            setPkBusy(true);
+            const d = await pkApi('/api/passkey/login/options', {}, true);
+            if (d.status === 'error' || !d.challenge) { pkShowError('passkeyError', d.message || 'Start fehlgeschlagen.'); return; }
+            const options = {
+                challenge: pkB64ToBytes(d.challenge),
+                rpId: d.rpId,
+                timeout: d.timeout || 180000,
+                userVerification: d.userVerification || 'required',
+                // conditional: false — expliziter Button (Keepass/Bitwarden/iOS-Keychain)
+            };
+            if (!window.PublicKeyCredential) { pkShowError('passkeyError', 'Dieser Browser unterstützt keine Passkeys.'); return; }
+            try {
+                const cred = await navigator.credentials.get({ publicKey: options });
+                if (!cred) { setPkBusy(false); return; }
+                const v = await pkApi('/api/passkey/login/verify', { credential: pkCredToJson(cred) }, false);
+                setPkBusy(false);
+                if (v.status === 'ok') {
+                    location.reload();
+                } else {
+                    pkShowError('passkeyError', v.message || 'Passkey-Überprüfung fehlgeschlagen.');
+                }
+            } catch (err) {
+                setPkBusy(false);
+                if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) return; // Nutzer-Abbruch
+                pkShowError('passkeyError', 'Passkey-Login fehlgeschlagen: ' + (err && err.message ? err.message : 'unbekannter Fehler'));
+            }
+        }
+        // ---- Registrierung (Einstellungen → Passkeys) ----
+        async function passkeyRegister() {
+            setPkBusy(true);
+            const deviceName = ($('pkDeviceName') ? $('pkDeviceName').value.trim() : '') || 'Unbenanntes Gerät';
+            const d = await pkApi('/api/passkey/register/options', {}, false);
+            if (d.status === 'error' || !d.challenge) { pkShowError('pkMsg', d.message || 'Start fehlgeschlagen.'); return; }
+            const options = {
+                challenge: pkB64ToBytes(d.challenge),
+                rp: d.rp,
+                user: { id: pkB64ToBytes(d.user.id), name: d.user.name, displayName: d.user.displayName },
+                pubKeyCredParams: d.pubKeyCredParams,
+                authenticatorSelection: d.authenticatorSelection,
+                attestation: d.attestation,
+                timeout: d.timeout || 180000
+            };
+            try {
+                const cred = await navigator.credentials.create({ publicKey: options });
+                if (!cred) { setPkBusy(false); return; }
+                const v = await pkApi('/api/passkey/register/verify', { credential: pkCredToJson(cred), device_name: deviceName }, false);
+                setPkBusy(false);
+                if (v.status === 'ok') {
+                    const statusEl = $('pkMsg');
+                    if (statusEl) { statusEl.textContent = ''; }
+                    const nameEl = $('pkDeviceName');
+                    if (nameEl) nameEl.value = '';
+                    const tip = $('pkIosTip');
+                    if (tip) tip.classList.add('hidden');
+                    loadPasskeys();
+                    showToast('✓ Passkey registriert');
+                } else {
+                    pkShowError('pkMsg', v.message || 'Registrierung fehlgeschlagen.');
+                }
+            } catch (err) {
+                setPkBusy(false);
+                if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) return; // Nutzer-Abbruch
+                pkShowError('pkMsg', 'Registrierung fehlgeschlagen: ' + (err && err.message ? err.message : 'unbekannter Fehler'));
+            }
+        }
+        // ---- Verwaltung (Liste + Entfernen) ----
+        async function loadPasskeys() {
+            try {
+                const r = await fetch('/api/passkey/list');
+                if (!r.ok) return;
+                const d = await r.json();
+                const list = $('pkList');
+                if (!list) return;
+                if (!d.passkeys || !d.passkeys.length) {
+                    list.innerHTML = '<p style="color:var(--muted);margin:0;">Noch keine Passkeys registriert.</p>';
+                    return;
+                }
+                list.innerHTML = d.passkeys.map(p => {
+                    const used = p.last_used_at ? (' · zuletzt ' + (p.last_used_at || '').replace('T', ' ').slice(0, 16)) : '';
+                    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">' +
+                        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;color:var(--muted);"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>' +
+                        '<b>' + escHtml(p.device_name || 'Unbenanntes Gerät') + '</b><br>' +
+                        '<span style="color:var(--muted);font-size:11px;">registriert ' + (p.created_at || '').replace('T', ' ').slice(0, 16) + used + '</span></span>' +
+                        '<button type="button" data-pkdel="' + p.id + '" style="padding:6px 12px;font-size:12px;background:none;border:1px solid #e5534b;border-radius:8px;color:#e5534b;cursor:pointer;flex-shrink:0;">Entfernen</button></div>';
+                }).join('');
+            } catch (_) {}
+        }
+        async function deletePasskey(id) {
+            const v = await pkApi('/api/passkey/delete', { id: id }, true);
+            if (v.status === 'ok') {
+                loadPasskeys();
+                showToast('✓ Passkey entfernt');
+            } else {
+                pkShowError('pkMsg', v.message || 'Entfernen fehlgeschlagen.');
+            }
+        }
+        // ---- Verdrahtung ----
+        const passkeyBtnEl = $('passkeyBtn');
+        if (passkeyBtnEl) passkeyBtnEl.addEventListener('click', passkeyLogin);
+        const addPasskeyBtnEl = $('addPasskeyBtn');
+        if (addPasskeyBtnEl) addPasskeyBtnEl.addEventListener('click', passkeyRegister);
+        const pkListEl = $('pkList');
+        if (pkListEl) pkListEl.addEventListener('click', e => {
+            const btn = e.target.closest('button[data-pkdel]');
+            if (btn) deletePasskey(parseInt(btn.dataset.pkdel, 10));
+        });
+        // Erweiterte Registrierung ist ein eingeloggter Vorgang — Sektion erst nach Login laden
+        initPasskeyUI();
+
 </script>
 </body>
 </html>

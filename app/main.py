@@ -28,6 +28,9 @@ import qrcode
 from qrcode.image.svg import SvgPathImage
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
 from cryptography.fernet import Fernet
+from fido2.server import Fido2Server
+from fido2.webauthn import AttestedCredentialData, PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity
+import cbor2  # noqa: E402
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -36,6 +39,56 @@ from fastapi.templating import Jinja2Templates
 DB_PATH = os.environ.get("ATLAS_DB", "/data/atlas.db")
 UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")
 SESSION_COOKIE = "atlas_session"
+# ------------------------------------------------ Passkeys / WebAuthn (v0.0.228 — Port aus Starface-F58)
+# Konfiguration über Env (Docker-Compose). Ohne RP_ID/ORIGIN sind Passkeys deaktiviert
+# (Routen 503, Login-Button ausgeblendet) — Container-Start bleibt sicher.
+WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID", "")
+WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "Atlas")
+WEBAUTHN_ORIGIN = os.environ.get("WEBAUTHN_ORIGIN", "")
+PENDING_PASSKEY_TTL = 300
+PENDING_PASSKEY: dict = {}
+
+
+def _b64u(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _b64u_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _raw_to_der_b64(sig_b64u: str) -> str:
+    """WebAuthn-ES256-Signatur -> DER (normalisiert). Chrome/Windows/FIDO liefern RAW
+    (r||s, 64 B), Bitwarden/Keepass liefern bereits ASN.1-DER. fido2 2.2 erwartet DER."""
+    from cryptography.hazmat.primitives.asymmetric import utils
+    raw = _b64u_decode(sig_b64u)
+    if len(raw) == 64:
+        r = int.from_bytes(raw[:32], "big")
+        s = int.from_bytes(raw[32:], "big")
+    else:
+        try:
+            r, s = utils.decode_dss_signature(raw)
+        except Exception:
+            raise ValueError(f"ES256-Signatur muss 64 Bytes (r||s) oder DER sein, war: {len(raw)}")
+    return _b64u(utils.encode_dss_signature(r, s))
+
+
+def _passkey_enabled() -> bool:
+    return bool(WEBAUTHN_RP_ID and WEBAUTHN_ORIGIN)
+
+
+def _fido2_server():
+    return Fido2Server(
+        PublicKeyCredentialRpEntity(id=WEBAUTHN_RP_ID, name=WEBAUTHN_RP_NAME),
+        attestation="none",
+        verify_origin=lambda origin: origin == WEBAUTHN_ORIGIN,
+    )
+
+
+def _clean_pending_passkey():
+    now = time.time()
+    for key in [k for k, v in PENDING_PASSKEY.items() if v["expires"] < now]:
+        PENDING_PASSKEY.pop(key, None)
 # ---------------------------------------------------------------- Zugangsdaten-Verschlüsselung (v0.0.73)
 # Hermes-Zugangsdaten (hermes_auth = "user:pass") werden mit Fernet (AES-128-CBC)
 # verschlüsselt in der DB gespeichert. Der Schlüssel liegt NEBEN der DB
@@ -190,6 +243,18 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN otp_confirmed INTEGER DEFAULT 0")
     except Exception:
         pass
+    # Passkeys (WebAuthn, v0.0.228)
+    conn.execute("""CREATE TABLE IF NOT EXISTS passkeys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        credential_id TEXT UNIQUE NOT NULL,
+        public_key TEXT NOT NULL,
+        sign_count INTEGER DEFAULT 0,
+        device_name TEXT,
+        transports TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TEXT
+    )""")
     conn.commit()
     conn.close()
 
@@ -755,6 +820,7 @@ async def api_config():
     return JSONResponse({
         "setup": user_count() == 0,
         "allow_registration": allow_reg,
+        "passkey_enabled": _passkey_enabled(),
     })
 
 
@@ -1468,3 +1534,318 @@ async def websocket_proxy(ws: WebSocket):
                     t.cancel()
     except Exception as e:
         await ws.close(code=4002, reason=str(e))
+
+# ---------------------------------------------------------------- Passkeys / WebAuthn (v0.0.228)
+# Port aus Starface-WebApp (F58): Keepass/KeepassXC, Bitwarden, Windows Hello, iCloud-Keychain,
+# iOS Face ID — identische Kompatibilitäts-Fixes (DER/RAW-Signaturen, resident+UV required).
+
+
+@app.post("/api/passkey/login/options")
+async def passkey_login_options():
+    if not _passkey_enabled():
+        return JSONResponse({"status": "error", "message": "Passkeys sind nicht konfiguriert."}, status_code=503)
+    _clean_pending_passkey()
+    server = _fido2_server()
+    challenge = secrets.token_bytes(32)
+    _options, state = server.authenticate_begin(user_verification="required", challenge=challenge)
+    PENDING_PASSKEY[state["challenge"]] = {
+        "state": state,
+        "user_id": None,
+        "expires": time.time() + PENDING_PASSKEY_TTL,
+    }
+    return JSONResponse({
+        "challenge": state["challenge"],
+        "rpId": WEBAUTHN_RP_ID,
+        "userVerification": "required",
+        "timeout": 180000,
+    })
+
+
+@app.post("/api/passkey/login/verify")
+async def passkey_login_verify(request: Request):
+    if not _passkey_enabled():
+        return JSONResponse({"status": "error", "message": "Passkeys sind nicht konfiguriert."}, status_code=503)
+    try:
+        body = await request.json()
+        credential = body.get("credential") or {}
+        response = credential.get("response") or {}
+        if not isinstance(response, dict) or not response.get("clientDataJSON"):
+            print(f"[Passkey] Login: response ohne clientDataJSON — response-Keys: {list(response.keys()) if isinstance(response, dict) else type(response).__name__}, credential-Keys: {list(credential.keys())}")
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Ungültige Anfrage."}, status_code=400)
+
+    try:
+        challenge = json.loads(_b64u_decode(str(response.get("clientDataJSON", ""))))["challenge"]
+        pend = PENDING_PASSKEY.get(challenge)
+        if not pend or pend["expires"] < time.time():
+            print("[Passkey] Login: challenge abgelaufen/unbekannt")
+            return JSONResponse({"status": "error", "message": "Challenge abgelaufen oder unbekannt."}, status_code=401)
+        PENDING_PASSKEY.pop(challenge, None)
+        credential["response"]["signature"] = _raw_to_der_b64(response.get("signature", ""))
+
+        db = get_db()
+        try:
+            row = db.execute(
+                "SELECT user_id, public_key, sign_count FROM passkeys WHERE credential_id = ?",
+                (_b64u(_b64u_decode(str(credential.get("rawId", "")))),),
+            ).fetchone()
+        finally:
+            db.close()
+        if not row:
+            print("[Passkey] Login: row nicht gefunden (credential_id nicht registriert)")
+            return JSONResponse({"status": "error", "message": "Kein Passkey für dieses Gerät registriert."}, status_code=401)
+        cred_id = _b64u_decode(str(credential.get("rawId", "")))
+        # Signatur RAW(r||s) → DER normalisieren (Chrome/Windows raw, Bitwarden/Keepass DER)
+        credential["response"]["signature"] = _raw_to_der_b64(response.get("signature", ""))
+        pk_cbor = _b64u_decode(row["public_key"])
+        acd = AttestedCredentialData(b"\x00" * 16 + len(cred_id).to_bytes(2, "big") + cred_id + pk_cbor)
+
+        server = _fido2_server()
+        server.authenticate_complete(pend["state"], [acd], credential)
+
+        from fido2.webauthn import AuthenticationResponse
+        new_count = AuthenticationResponse.from_dict(credential).response.authenticator_data.counter
+        if new_count > 0 and row["sign_count"] > 0 and new_count <= row["sign_count"]:
+            return JSONResponse({"status": "error", "message": "Passkey-Wiederverwendung erkannt."}, status_code=401)
+
+        db_user = get_user_by_id(row["user_id"])
+        if not db_user:
+            return JSONResponse({"status": "error", "message": "Benutzer existiert nicht mehr."}, status_code=401)
+        if not db_user.get("is_active"):
+            return JSONResponse({"status": "error", "message": "Dein Konto ist deaktiviert"}, status_code=403)
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE passkeys SET sign_count = ?, last_used_at = datetime('now') WHERE credential_id = ?",
+                (new_count, _b64u(cred_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        sid = start_session(db_user)
+        resp = JSONResponse({"status": "ok", "is_admin": bool(db_user.get("is_admin"))})
+        resp.set_cookie(SESSION_COOKIE, sid, httponly=True, samesite="lax")
+        return resp
+    except ValueError:
+        print("[Passkey] Login-Verify: ValueError")
+        return JSONResponse({"status": "error", "message": "Passkey-Überprüfung fehlgeschlagen."}, status_code=401)
+    except Exception:
+        print("[Passkey] Login-Verify fehlgeschlagen")
+        return JSONResponse({"status": "error", "message": "Passkey-Überprüfung fehlgeschlagen."}, status_code=401)
+
+
+@app.post("/api/passkey/register/options")
+async def passkey_register_options(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet."}, status_code=401)
+    if not _passkey_enabled():
+        return JSONResponse({"status": "error", "message": "Passkeys sind nicht konfiguriert."}, status_code=503)
+    _clean_pending_passkey()
+    server = _fido2_server()
+    user_id_bytes = f"u{user['user_id']}".encode()
+    user_entity = PublicKeyCredentialUserEntity(
+        id=user_id_bytes, name=user["username"], display_name=user["username"]
+    )
+    challenge = secrets.token_bytes(32)
+    _options, state = server.register_begin(
+        user_entity, challenge=challenge, resident_key_requirement="required",
+        user_verification="required",
+    )
+    PENDING_PASSKEY[state["challenge"]] = {
+        "state": state,
+        "user_id": user["user_id"],
+        "expires": time.time() + PENDING_PASSKEY_TTL,
+    }
+    return JSONResponse({
+        "challenge": state["challenge"],
+        "rp": {"id": WEBAUTHN_RP_ID, "name": WEBAUTHN_RP_NAME},
+        "user": {
+            "id": _b64u(user_id_bytes),
+            "name": user["username"],
+            "displayName": user["username"],
+        },
+        "pubKeyCredParams": [
+            {"type": "public-key", "alg": -7},
+            {"type": "public-key", "alg": -257},
+        ],
+        "authenticatorSelection": {"residentKey": "required", "userVerification": "required"},
+        "attestation": "none",
+        "timeout": 180000,
+    })
+
+
+@app.post("/api/passkey/register/verify")
+async def passkey_register_verify(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet."}, status_code=401)
+    if not _passkey_enabled():
+        return JSONResponse({"status": "error", "message": "Passkeys sind nicht konfiguriert."}, status_code=503)
+    try:
+        body = await request.json()
+        credential = body.get("credential") or {}
+        response = credential.get("response") or {}
+        if not isinstance(response, dict) or not response.get("clientDataJSON"):
+            print(f"[Passkey] Registrierung: response ohne clientDataJSON — response-Keys: {list(response.keys()) if isinstance(response, dict) else type(response).__name__}, credential-Keys: {list(credential.keys())}")
+        device_name = (body.get("device_name") or "Unbenanntes Gerät").strip()[:60]
+        challenge = json.loads(_b64u_decode(str(response.get("clientDataJSON", ""))))["challenge"]
+        pend = PENDING_PASSKEY.get(challenge)
+        if not pend or pend["expires"] < time.time() or pend["user_id"] != user["user_id"]:
+            return JSONResponse({"status": "error", "message": "Challenge abgelaufen oder unbekannt."}, status_code=401)
+        PENDING_PASSKEY.pop(challenge, None)
+
+        server = _fido2_server()
+        auth_data = server.register_complete(pend["state"], credential)
+        cred_data = auth_data.credential_data
+        try:
+            pk_cbor = cred_data.public_key.cbor
+        except AttributeError:
+            pk_cbor = cbor2.dumps(cred_data.public_key)
+        conn = get_db()
+        try:
+            conn.execute(
+                "INSERT INTO passkeys (user_id, credential_id, public_key, sign_count, device_name, transports) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user["user_id"], _b64u(cred_data.credential_id), _b64u(pk_cbor), auth_data.counter,
+                 device_name, json.dumps(credential.get("transports") or [])),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return JSONResponse({"status": "ok", "credential_id": _b64u(cred_data.credential_id)})
+    except ValueError:
+        print("[Passkey] Registrierung abgelehnt (ValueError)")
+        return JSONResponse({"status": "error", "message": "Registrierung fehlgeschlagen."}, status_code=400)
+    except sqlite3.IntegrityError:
+        print("[Passkey] Registrierung: Duplikat (IntegrityError)")
+        return JSONResponse({"status": "error", "message": "Dieser Passkey ist bereits registriert."}, status_code=409)
+    except Exception:
+        print("[Passkey] Registrierung fehlgeschlagen")
+        return JSONResponse({"status": "error", "message": "Registrierung fehlgeschlagen."}, status_code=400)
+
+
+@app.get("/api/passkey/list")
+async def passkey_list(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet."}, status_code=401)
+    db = get_db()
+    try:
+        rows = db.execute(
+            "SELECT id, device_name, created_at, last_used_at FROM passkeys WHERE user_id = ? ORDER BY id",
+            (user["user_id"],),
+        ).fetchall()
+    finally:
+        db.close()
+    return JSONResponse({"passkeys": [dict(r) for r in rows]})
+
+
+@app.post("/api/passkey/delete")
+async def passkey_delete(request: Request):
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet."}, status_code=401)
+    try:
+        body = await request.json()
+        pk_id = int(body.get("id") or 0)
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Ungültige Anfrage."}, status_code=400)
+    db = get_db()
+    try:
+        cur = db.execute("DELETE FROM passkeys WHERE id = ? AND user_id = ?", (pk_id, user["user_id"]))
+        db.commit()
+    finally:
+        db.close()
+    if cur.rowcount == 0:
+        return JSONResponse({"status": "error", "message": "Passkey nicht gefunden."}, status_code=404)
+    return JSONResponse({"status": "ok"})
+
+
+# ---------------------------------------------------------------- Admin-API (v0.0.228)
+# Profil-Dropdown -> Administration: Benutzerverwaltung (nur is_admin).
+
+
+def _require_admin(request: Request):
+    """Gibt (db_user, 200) oder (None, 401/403) zurück."""
+    user = session_from_request(request)
+    if not user:
+        return None, 401
+    db_user = get_user_by_id(user["user_id"])
+    if not db_user or not db_user.get("is_admin"):
+        return None, 403
+    return db_user, 200
+
+
+# GET/POST /api/admin/users existieren bereits vor v0.0.228 (adminUsersModal, Z ~981)
+# → hier nur die Mutations-Endpunkte role/active/password (neu in v0.0.228).
+
+
+@app.post("/api/admin/users/{user_id}/role")
+async def admin_user_role(user_id: int, request: Request):
+    admin, err = _require_admin(request)
+    if err != 200 or admin is None:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet oder keine Admin-Rechte."}, status_code=err)
+    try:
+        body = await request.json()
+        is_admin = bool(body.get("is_admin"))
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Ungültige Anfrage."}, status_code=400)
+    if user_id == admin["id"] and not is_admin:
+        return JSONResponse({"status": "error", "message": "Du kannst dir selbst die Admin-Rechte nicht entziehen."}, status_code=400)
+    db = get_db()
+    try:
+        cur = db.execute("UPDATE users SET is_admin = ? WHERE id = ?", (1 if is_admin else 0, user_id))
+        db.commit()
+    finally:
+        db.close()
+    if cur.rowcount == 0:
+        return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden."}, status_code=404)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/api/admin/users/{user_id}/active")
+async def admin_user_active(user_id: int, request: Request):
+    admin, err = _require_admin(request)
+    if err != 200 or admin is None:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet oder keine Admin-Rechte."}, status_code=err)
+    try:
+        body = await request.json()
+        is_active = bool(body.get("is_active"))
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Ungültige Anfrage."}, status_code=400)
+    if user_id == admin["id"] and not is_active:
+        return JSONResponse({"status": "error", "message": "Du kannst dich nicht selbst deaktivieren."}, status_code=400)
+    db = get_db()
+    try:
+        cur = db.execute("UPDATE users SET is_active = ? WHERE id = ?", (1 if is_active else 0, user_id))
+        db.commit()
+    finally:
+        db.close()
+    if cur.rowcount == 0:
+        return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden."}, status_code=404)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/api/admin/users/{user_id}/password")
+async def admin_user_password(user_id: int, request: Request):
+    admin, err = _require_admin(request)
+    if err != 200 or admin is None:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet oder keine Admin-Rechte."}, status_code=err)
+    try:
+        body = await request.json()
+        password = str(body.get("password") or "")
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Ungültige Anfrage."}, status_code=400)
+    if len(password) < 6:
+        return JSONResponse({"status": "error", "message": "Passwort braucht mindestens 6 Zeichen."}, status_code=400)
+    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    db = get_db()
+    try:
+        cur = db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hashed, user_id))
+        db.commit()
+    finally:
+        db.close()
+    if cur.rowcount == 0:
+        return JSONResponse({"status": "error", "message": "Benutzer nicht gefunden."}, status_code=404)
+    return JSONResponse({"status": "ok", "message": "Passwort zurückgesetzt."})
