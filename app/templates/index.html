@@ -2937,6 +2937,17 @@
             } else {
                 messagesDiv.scrollTop = 0;
             }
+            // 2b) v0.0.244: Offene clarify-Frage der sichtbar gewordenen Ctx rendern.
+            // clarify.request kam, während die Ctx im HINTERGRUND war (Live-Handler
+            // rendert nur bei ctx === C und merkt die Frage unter pendingClarifyOnResume;
+            // resume-/history-Handler greifen beim reinen View-Wechsel nicht, weil die
+            // Session verbunden bleibt). NUR bei gefüllter Ansicht — bei LEERER Ansicht
+            // läuft unten der Nachlade-Pfad (session.history), dessen Handler die Karte
+            // selbst NACH dem Verlaufs-Rendering einhängt (sonst löscht innerHTML sie).
+            if (ctx.pendingClarifyOnResume && messagesDiv.children.length) {
+                renderClarifyCard(ctx.pendingClarifyOnResume);
+                ctx.pendingClarifyOnResume = null;
+            }
             // 3) Working-UI für die neue Ctx aktualisieren
             refreshWorkingUI();
             // 4) Sidebar-Highlight aktualisieren
