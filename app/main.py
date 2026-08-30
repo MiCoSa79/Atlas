@@ -984,10 +984,12 @@ async def api_profile_save(request: Request,
 
 # ---------------------------------------------------------------- Modell & Reasoning (v0.0.234)
 
-AUX_TASKS = ("vision", "web_extract", "compression", "skills_hub", "approval", "mcp", "title_gen", "curator")
-AUX_LABELS = {"vision": "Vision", "web_extract": "Web extract", "compression": "Compression",
-              "skills_hub": "Skills hub", "approval": "Approval", "mcp": "MCP",
-              "title_gen": "Title gen", "curator": "Curator"}
+AUX_TASKS = ("vision", "web_extract", "compression", "skills_hub", "approval", "mcp", "title_generation", "triage_specifier", "kanban_decomposer", "profile_describer", "curator")
+AUX_LABELS = {"vision": "Vision (Bilder)", "web_extract": "Web-Extraktion", "compression": "Komprimierung",
+              "skills_hub": "Skills-Hub", "approval": "Genehmigungen", "mcp": "MCP",
+              "title_generation": "Titel-Generierung", "triage_specifier": "Triage",
+              "kanban_decomposer": "Kanban-Zerlegung", "profile_describer": "Profil-Beschreibung",
+              "curator": "Curator"}
 
 
 def _hermes_aux_config_path(profile: str = ""):
@@ -1022,14 +1024,26 @@ def _write_hermes_aux(aux: dict, profile: str = ""):
         return False, "Kein Hermes-Config-Zugriff konfiguriert (ATLAS_HERMES_CONFIG_PATH oder ATLAS_HERMES_CONFIG_DIR + Hermes-Profil nötig)"
     if not os.path.exists(path):
         return False, f"Hermes-Config nicht gefunden: {path}"
-    clean = {k: (str(v).strip() if v is not None else "") for k, v in aux.items() if k in AUX_TASKS}
+    clean = {}
+    for k, v in aux.items():
+        if k not in AUX_TASKS:
+            continue
+        if isinstance(v, dict):
+            clean[k] = {"provider": str(v.get("provider") or "auto").strip() or "auto",
+                        "model": str(v.get("model") or "").strip()}
+        else:
+            clean[k] = {"provider": "custom", "model": str(v).strip() if v is not None else ""}
+    # Migration: altes 'title_gen'-Override -> title_generation übernehmen
+    if "title_gen" in aux and clean.get("title_generation", {}).get("model", None) == "":
+        old = aux["title_gen"]
+        clean["title_generation"] = {"provider": "custom", "model": str(old or "").strip()}
     with open(path, "r", encoding="utf-8") as f:
         lines = f.read().splitlines()
     block = ["auxiliary:"]
     for task in AUX_TASKS:
-        mdl = clean.get(task, "")
-        if mdl:
-            block.append(f"  {task}: {{provider: custom, model: {_yq(mdl)}}}")
+        entry = clean.get(task)
+        if entry and entry["model"]:
+            block.append(f"  {task}: {{provider: {_yq(entry['provider'])}, model: {_yq(entry['model'])}}}")
         else:
             block.append(f"  {task}: {{provider: auto, model: ''}}")
     idx = None
@@ -1070,7 +1084,17 @@ async def api_profile_aux(request: Request, aux: str = Form("{}")):
         return JSONResponse({"status": "error", "message": "aux muss ein JSON-Objekt sein"}, status_code=400)
     if not isinstance(parsed, dict):
         return JSONResponse({"status": "error", "message": "aux muss ein JSON-Objekt sein"}, status_code=400)
-    parsed = {k: (v if isinstance(v, str) else str(v)) for k, v in parsed.items() if k in AUX_TASKS}
+    # v0.0.235: Werte dürfen {provider, model}-Paare sein (Dropdown-Auswahl) ODER Strings (alt)
+    normalized = {}
+    for k, v in parsed.items():
+        if k not in AUX_TASKS:
+            continue
+        if isinstance(v, dict):
+            normalized[k] = {"provider": str(v.get("provider") or "auto").strip() or "auto",
+                             "model": str(v.get("model") or "").strip()}
+        else:
+            normalized[k] = str(v).strip()
+    parsed = normalized
     profile = (db_user.get("hermes_profile") or "")
     ok, msg = _write_hermes_aux(parsed, profile)
     conn = get_db()
@@ -1078,6 +1102,101 @@ async def api_profile_aux(request: Request, aux: str = Form("{}")):
     conn.commit()
     conn.close()
     return JSONResponse({"status": "ok", "profile": profile, "config_written": ok, "config_message": msg, "aux": parsed})
+
+
+# ---------------------------------------------------------------- Modell-Katalog (v0.0.235)
+
+_catalog_cache = {}  # user_id -> (ts, {"providers": [...], "model": ..., "provider": ...})
+
+def _catalog_cache_clear(all: bool = True):
+    if all:
+        _catalog_cache.clear()
+
+@app.get("/api/model-catalog")
+async def api_model_catalog(request: Request):
+    """Verfügbare Provider+Modelle vom Hermes-Dashboard des eingeloggten Users (wie Desktop-App).
+
+    Quelle: GET {hermes}/api/model/options?profile=<profil>&include_unconfigured=true.
+    Bereinigt: nur slug/name/models/is_current/authenticated — KEINE URLs/Keys/Credentials.
+    """
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    auth = decrypt_secret(db_user.get("hermes_auth") or "")
+    auth_user, _, auth_pass = auth.partition(":") if auth else ("", "", "")
+    info = user_hermes_info(db_user)
+    if not info or not info.get("hermes_user"):
+        return JSONResponse({"status": "error", "message": "Kein Hermes-Zugang konfiguriert"}, status_code=502)
+    now = time.time()
+    cached = _catalog_cache.get(user["user_id"])
+    if cached and now - cached[0] < 180:
+        return JSONResponse(cached[1])
+    cookie = await hermes_login_cookie(info["hermes_url"], auth_user, auth_pass)
+    if not cookie:
+        return JSONResponse({"status": "error", "message": "Hermes-Anmeldung fehlgeschlagen"}, status_code=502)
+    url = f"{info['hermes_url']}/api/model/options?profile={quote(info.get('hermes_profile') or '')}&include_unconfigured=true"
+    try:
+        async with ClientSession() as http:
+            async with http.get(url, headers={"Cookie": cookie}, timeout=ClientTimeout(total=20)) as resp:
+                if resp.status != 200:
+                    return JSONResponse({"status": "error", "message": f"Hermes-Katalog nicht erreichbar (HTTP {resp.status})"}, status_code=502)
+                data = await resp.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Hermes-Katalog nicht erreichbar (Verbindungsfehler)"}, status_code=502)
+    providers = []
+    for row in data.get("providers") or []:
+        models = [str(m) for m in (row.get("models") or [])]
+        if not models and not row.get("is_current"):
+            continue
+        providers.append({
+            "slug": str(row.get("slug") or ""),
+            "name": str(row.get("name") or row.get("slug") or ""),
+            "models": models,
+            "is_current": bool(row.get("is_current")),
+            "authenticated": bool(row.get("authenticated")),
+        })
+    payload = {"status": "ok", "providers": providers,
+               "model": str(data.get("model") or ""), "provider": str(data.get("provider") or "")}
+    _catalog_cache[user["user_id"]] = (now, payload)
+    return JSONResponse(payload)
+
+
+@app.get("/api/model-catalog/aux")
+async def api_model_catalog_aux(request: Request):
+    """Aktuelle Auxiliary-Zuweisungen des Hermes-Profils (Slots + Werte), wie Desktop-App."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    auth = decrypt_secret(db_user.get("hermes_auth") or "")
+    auth_user, _, auth_pass = auth.partition(":") if auth else ("", "", "")
+    info = user_hermes_info(db_user)
+    if not info or not info.get("hermes_user"):
+        return JSONResponse({"status": "error", "message": "Kein Hermes-Zugang konfiguriert"}, status_code=502)
+    cookie = await hermes_login_cookie(info["hermes_url"], auth_user, auth_pass)
+    if not cookie:
+        return JSONResponse({"status": "error", "message": "Hermes-Anmeldung fehlgeschlagen"}, status_code=502)
+    url = f"{info['hermes_url']}/api/model/auxiliary?profile={quote(info.get('hermes_profile') or '')}"
+    try:
+        async with ClientSession() as http:
+            async with http.get(url, headers={"Cookie": cookie}, timeout=ClientTimeout(total=20)) as resp:
+                if resp.status != 200:
+                    return JSONResponse({"status": "error", "message": f"Hermes-Aux nicht erreichbar (HTTP {resp.status})"}, status_code=502)
+                data = await resp.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Hermes-Aux nicht erreichbar (Verbindungsfehler)"}, status_code=502)
+    tasks = []
+    seen = set()
+    for t in (data.get("tasks") or []):
+        task = str(t.get("task") or "")
+        if not task or task in seen:
+            continue
+        seen.add(task)
+        tasks.append({"task": task, "provider": str(t.get("provider") or ""), "model": str(t.get("model") or "")})
+    main = data.get("main") or {}
+    return JSONResponse({"status": "ok", "tasks": tasks,
+                         "main": {"provider": str(main.get("provider") or ""), "model": str(main.get("model") or "")}})
 
 
 # ---------------------------------------------------------------- Registrierung

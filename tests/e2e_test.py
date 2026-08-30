@@ -889,6 +889,98 @@ def main():
         pass
     print("23) Auxiliary-Models abgeschlossen ✓")
 
+    # ---------------------------------------------------------------- Modell-Katalog (v0.0.235, Schritt 24)
+    print("24) Modell-Katalog: Dropdown-Daten aus dem Hermes-Dashboard (wie Desktop-App)")
+    # a) Nicht angemeldet -> 401
+    try:
+        with urllib.request.urlopen(f"{BASE}/api/model-catalog", timeout=20) as r:
+            cat_anon = r.status
+    except urllib.error.HTTPError as e:
+        cat_anon = e.code
+    print("24a) Ohne Session ->", cat_anon)
+    ok = cat_anon == 401
+    if not ok:
+        failures.append("catalog_anon")
+    # b) Angemeldet (Admin mit Hermes-Creds): Shape + Bereinigung (keine URLs/Keys/Secrets)
+    st, cat = get_json("/api/model-catalog", admin_jar)
+    print("24b) status:", cat.get("status"), "| Provider:", len(cat.get("providers") or []),
+          "| top-level:", {k: cat.get(k) for k in ("model", "provider")})
+    ok = cat.get("status") == "ok" and isinstance(cat.get("providers"), list) \
+        and any(p.get("models") for p in cat.get("providers") or [])
+    if not ok:
+        failures.append("catalog_shape")
+    proven_provider = None
+    for p in cat.get("providers") or []:
+        allowed = {"slug", "name", "models", "is_current", "authenticated"}
+        bad = set(p.keys()) - allowed
+        if bad:
+            print("24b) UNERLAUBTE FELDER:", bad)
+            failures.append("catalog_leak")
+        if p.get("models") and not proven_provider:
+            proven_provider = (p.get("slug"), p.get("models")[0])
+    # Kein Leak: api_url/key_env/warning dürfen NICHT im Payload landen
+    blob = json.dumps(cat)
+    for bad_word in ("api_url", "key_env", "warning", "base_url", "token", "secret"):
+        if bad_word in blob:
+            print("24b) LEAK-Hinweis:", bad_word, "im Katalog-Payload")
+            failures.append("catalog_leak")
+
+    # ---------------------------------------------------------------- Aux-Katalog (v0.0.235, Schritt 25)
+    print("25) Aux-Katalog: aktuelle Hermes-Aux-Zuweisungen")
+    st, auxcat = get_json("/api/model-catalog/aux", admin_jar)
+    print("25) status:", auxcat.get("status"), "| Tasks:", len(auxcat.get("tasks") or []),
+          "| main:", auxcat.get("main"))
+    ok = auxcat.get("status") == "ok" and isinstance(auxcat.get("tasks"), list) \
+        and all(isinstance(t.get("task"), str) and isinstance(t.get("provider"), str)
+                and isinstance(t.get("model"), str) for t in auxcat.get("tasks") or [])
+    if not ok:
+        failures.append("aux_catalog")
+    if "base_url" in json.dumps(auxcat):
+        failures.append("aux_catalog_leak")
+
+    # ---------------------------------------------------------------- Aux-Paar-Format (v0.0.235, Schritt 26)
+    print("26) Auxiliary-Models: {provider, model}-Paar + Config-Text-Patch")
+    prov_slug, prov_model = proven_provider or ("custom:test-prov", "Qwen3")
+    pair = {"compression": {"provider": prov_slug, "model": prov_model}}
+    dp = urllib.parse.urlencode({"aux": json.dumps(pair)}).encode()
+    req = urllib.request.Request(f"{BASE}/api/profile/aux", data=dp, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_jar)).open(req, timeout=20) as r:
+        jpair = json.loads(r.read().decode())
+    print("26a) Admin:", jpair.get("status"), "| config_written:", jpair.get("config_written"),
+          "| aux:", jpair.get("aux"))
+    ok = jpair.get("status") == "ok" and jpair.get("aux", {}).get("compression", {}).get("provider") == prov_slug
+    if not ok:
+        failures.append("aux_pair_admin")
+    st, j = get_json("/api/profile", admin_jar)
+    ok = (j.get("aux_models") or {}).get("compression", {}).get("model") == prov_model
+    if not ok:
+        failures.append("aux_pair_db")
+    # b) Config-Pfad -> Text-Patch mit Provider-UND-Modell prüfen
+    cfg_path = os.environ.get("ATLAS_HERMES_CONFIG_PATH", "")
+    if cfg_path and os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_txt = f.read()
+        expect = f'compression: {{provider: "{prov_slug}", model: "{prov_model}"}}'
+        has_pair = expect in cfg_txt
+        print("26b) Config-Paar-Patch:", "OK" if has_pair else "FEHLT")
+        if not has_pair:
+            failures.append("aux_pair_config")
+        # c) Reset + auto
+        dres = urllib.parse.urlencode({"aux": "{}"}).encode()
+        reqr = urllib.request.Request(f"{BASE}/api/profile/aux", data=dres, method="POST",
+                                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+        urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_jar)).open(reqr, timeout=20).read()
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_txt3 = f.read()
+        reset_ok = f'compression: {{provider: "{prov_slug}"' not in cfg_txt3 and "compression: {provider: auto" in cfg_txt3
+        print("26c) Config-Reset:", "OK" if reset_ok else "FEHLT")
+        if not reset_ok:
+            failures.append("aux_pair_reset")
+    else:
+        print("26b) Kein ATLAS_HERMES_CONFIG_PATH (Config-Write übersprungen)")
+    print("26) Aux-Paar abgeschlossen ✓")
+
     print("-" * 50)
     if failures:
         print("ERGEBNIS: FEHLGESCHLAGEN ->", ", ".join(failures))

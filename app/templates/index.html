@@ -910,11 +910,18 @@
                         </select>
                     </div>
                 </div>
-                <label for="p_model" style="display:block;font-size:13px;color:var(--text);margin:12px 0 4px;">Hauptmodell <span style="color:var(--muted);font-size:11px;">(Modell-ID wie in der Desktop-App, leer = Standard)</span></label>
-                <input id="p_model" type="text" placeholder="z.&nbsp;B. custom:provider · Modell" autocomplete="off" spellcheck="false" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;">
-                <label for="p_provider" style="display:block;font-size:13px;color:var(--text);margin:10px 0 4px;">Provider <span style="color:var(--muted);font-size:11px;">(optional)</span></label>
-                <input id="p_provider" type="text" placeholder="z.&nbsp;B. custom" autocomplete="off" spellcheck="false" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;">
-                <!-- Auxiliary-Models (nur Admin; instanzweit) -->
+                <div id="modelCatStatus" style="display:none;margin:10px 0 0;padding:8px 10px;border-radius:8px;background:rgba(229,72,77,.10);color:#e5484d;font-size:12px;line-height:1.4;"></div>
+                <label for="p_provider" style="display:block;font-size:13px;color:var(--text);margin:12px 0 4px;">Provider <span style="color:var(--muted);font-size:11px;">(aus dem Hermes-Katalog, wie Desktop-App)</span></label>
+                <select id="p_provider" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                    <option value="">Standard (Hermes-Einstellung)</option>
+                </select>
+                <input id="p_provider_custom" type="text" placeholder="z.&nbsp;B. custom:mein-anbieter" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
+                <label for="p_model" style="display:block;font-size:13px;color:var(--text);margin:10px 0 4px;">Hauptmodell <span style="color:var(--muted);font-size:11px;">(Modell-ID, leer = Standard)</span></label>
+                <select id="p_model" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                    <option value="">Standard (Hermes-Einstellung)</option>
+                </select>
+                <input id="p_model_custom" type="text" placeholder="z.&nbsp;B. Qwen3 oder custom:provider:modell" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
+                <!-- Auxiliary-Models (nur Admin; pro Hermes-Profil wie Desktop-App) -->
                 <div id="p_auxPanel" class="hidden" style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);">
                     <h4 style="font-size:13px;margin:0 0 6px;color:var(--text);">Auxiliary-Models <span style="color:var(--muted);font-weight:400;font-size:11px;">(Admin, pro Hermes-Profil)</span></h4>
                     <p class="hint" style="margin:0 0 10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Gelten für dein <b>Hermes-Profil</b> (wie in der Desktop-App pro Profil) und ab der nächsten Session. Leer lassen = <code>auto – Hauptmodell</code>. Das Hermes-Profil wird im oberen Bereich dieses Fensters festgelegt.</p>
@@ -1437,6 +1444,148 @@
         let userAuxModels = {};
 
         // (v0.0.234) Werte aus /api/profile-Response in globale Prefs + Felder übernehmen
+        // (v0.0.235) Verfügbarer Provider/Modell-Katalog aus dem Hermes-Dashboard (wie Desktop-App)
+        let modelCatalog = { providers: [], model: '', provider: '' };
+        let catalogError = '';
+
+        function loadModelCatalog() {
+            if (!userModelPrefs) userModelPrefs = {};
+            fetch('/api/model-catalog')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.status !== 'ok') {
+                        catalogError = d.message || 'Katalog nicht ladbar';
+                        showModelCatalogFallback();
+                        if (window) window.__catalogApplied = false;
+                        return;
+                    }
+                    modelCatalog = d;
+                    catalogError = '';
+                    const st = $('modelCatStatus');
+                    if (st) st.style.display = 'none';
+                    populateCatalogSelects();
+                    fillMainModelSelect(true);
+                    syncMainFieldsToSaved();
+                    syncAuxFromState();
+                    if (window) window.__catalogApplied = true;
+                })
+                .catch(() => {
+                    catalogError = 'Hermes-Katalog nicht erreichbar';
+                    showModelCatalogFallback();
+                    if (window) window.__catalogApplied = false;
+                });
+        }
+        // Admin: aktuelle Hermes-Aux-Zuweisungen als Vorbelegung für Slots, die in der Atlas-DB nicht gesetzt sind
+        function loadAuxCatalog() {
+            if (!isAdminUser) return;
+            fetch('/api/model-catalog/aux').then(r => r.json()).then(d => {
+                if (d.status !== 'ok') return;
+                const dbAux = userAuxModels || {};
+                let changed = false;
+                (d.tasks || []).forEach(t => {
+                    if (!(t.task in dbAux) && t.provider && t.provider !== 'auto') {
+                        dbAux[t.task] = { provider: t.provider, model: t.model };
+                        changed = true;
+                    }
+                });
+                if (changed) {
+                    userAuxModels = dbAux;
+                    syncAuxFromState();
+                }
+            }).catch(() => {});
+        }
+        function showModelCatalogFallback() {
+            const st = $('modelCatStatus');
+            if (st) {
+                st.textContent = '⚠️ ' + (catalogError || 'Hermes-Katalog nicht erreichbar') + ' — Freitext-Eingabe wird verwendet.';
+                st.style.display = 'block';
+            }
+            // Selects auf Freitext-Fallback: nur Standard + Eigene Angabe
+            ['p_provider', 'p_model'].forEach(id => {
+                const sel = $(id);
+                if (!sel) return;
+                sel.innerHTML = sel.dataset.fallbackHtml || ('<option value="">Standard (Hermes-Einstellung)</option>' + (id === 'p_model' ? '' : ''));
+                if (!sel.dataset.fallbackHtml && id === 'p_provider') sel.innerHTML += '';
+                const c = document.createElement('option');
+                c.value = '__custom__';
+                c.textContent = '✏️ Eigene Angabe…';
+                sel.appendChild(c);
+            });
+            syncMainFieldsToSaved();
+        }
+        function fillMainModelSelect(refill) {
+            const msel = $('p_model');
+            if (!msel) return;
+            const psel = $('p_provider');
+            const provVal = psel ? psel.value : '';
+            if (refill) {
+                msel.dataset.prev = msel.value;
+            }
+            const prev = msel.dataset.prev || msel.value;
+            const fallback = msel.dataset.fallbackHtml || '';
+            msel.innerHTML = '<option value="">Standard (Hermes-Einstellung)</option>' + fallback;
+            if (provVal && provVal !== '__custom__') {
+                const p = (modelCatalog.providers || []).find(x => x.slug === provVal);
+                (p ? p.models : []).forEach(m => {
+                    const o = document.createElement('option');
+                    o.value = m;
+                    o.textContent = m;
+                    msel.appendChild(o);
+                });
+            }
+            const c = document.createElement('option');
+            c.value = '__custom__';
+            c.textContent = '✏️ Eigene Angabe…';
+            msel.appendChild(c);
+            if (prev && Array.from(msel.options).some(o => o.value === prev)) msel.value = prev;
+            msel.dataset.prev = msel.dataset.prev || msel.value;
+            toggleCustomInputs();
+        }
+        function toggleCustomInputs() {
+            const psel = $('p_provider');
+            const msel = $('p_model');
+            const pc = $('p_provider_custom');
+            const mc = $('p_model_custom');
+            if (pc) pc.style.display = (psel && psel.value === '__custom__') ? 'block' : 'none';
+            if (mc) mc.style.display = (msel && msel.value === '__custom__') ? 'block' : 'none';
+        }
+        // Gespeicherte Prefs in die Selects/Custom-Felder eintragen (nach Katalog-Load oder beim Öffnen)
+        function syncMainFieldsToSaved() {
+            const psel = $('p_provider');
+            const msel = $('p_model');
+            if (!psel || !msel) return;
+            const wantP = (userModelPrefs && userModelPrefs.provider) || '';
+            const wantM = (userModelPrefs && userModelPrefs.model) || '';
+            if (wantP && Array.from(psel.options).some(o => o.value === wantP)) {
+                psel.value = wantP;
+            } else if (wantP) {
+                psel.value = '__custom__';
+                $('p_provider_custom').value = wantP;
+            } else {
+                psel.value = '';
+            }
+            fillMainModelSelect(true);
+            if (wantM && Array.from(msel.options).some(o => o.value === wantM)) {
+                msel.value = wantM;
+            } else if (wantM) {
+                msel.value = '__custom__';
+                $('p_model_custom').value = wantM;
+            } else {
+                msel.value = '';
+            }
+            toggleCustomInputs();
+        }
+        function collectMainPrefs() {
+            const psel = $('p_provider');
+            const msel = $('p_model');
+            const pc = $('p_provider_custom');
+            const mc = $('p_model_custom');
+            let provider = '', model = '';
+            if (psel) provider = psel.value === '__custom__' ? (pc ? pc.value.trim() : '') : (psel.value === '' ? '' : psel.value);
+            if (msel) model = msel.value === '__custom__' ? (mc ? mc.value.trim() : '') : (msel.value === '' ? '' : msel.value);
+            return { provider, model };
+        }
+
         function applyModelPrefsFields(d) {
             userModelPrefs = {
                 model: d.model || '',
@@ -1449,7 +1598,15 @@
             if ($('p_fast_mode')) $('p_fast_mode').value = userModelPrefs.fastMode;
             if ($('p_model')) $('p_model').value = userModelPrefs.model;
             if ($('p_provider')) $('p_provider').value = userModelPrefs.provider;
+            // Katalog bereits geladen? -> Selects aktualisieren; sonst übernimmt loadModelCatalog
+            if (modelCatalog && modelCatalog.providers && modelCatalog.providers.length) {
+                syncMainFieldsToSaved();
+            } else if (userModelPrefs.provider || userModelPrefs.model) {
+                showModelCatalogFallback();
+            }
             fillAuxFields();
+            loadModelCatalog();
+            loadAuxCatalog();
         }
 
         // (v0.0.234) Session-Overrides aus den Benutzer-Prefs in den create-Payload übernehmen
@@ -1815,9 +1972,10 @@
             d.set('hermes_profile', $('p_profile').value);
             d.set('show_reasoning', $('p_show_reasoning').checked ? '1' : '0');
             d.set('show_status', $('p_show_status').checked ? '1' : '0');
-            // v0.0.234: Modell & Reasoning
-            d.set('model', $('p_model').value.trim());
-            d.set('provider', $('p_provider').value.trim());
+            // v0.0.234/235: Modell & Reasoning (Modell/Provider aus Katalog-Selects bzw. Custom-Feldern)
+            const mp = collectMainPrefs();
+            d.set('model', mp.model);
+            d.set('provider', mp.provider);
             d.set('reasoning_effort', $('p_reasoning_effort').value);
             d.set('fast_mode', $('p_fast_mode').value);
             try {
@@ -1830,10 +1988,10 @@
                 // Anzeige-Einstellungen sofort übernehmen (Denken/Statuszeilen)
                 showReasoning = $('p_show_reasoning').checked;
                 showStatus = $('p_show_status').checked;
-                // v0.0.234: Modell-Prefs sofort in die globalen Overrides übernehmen
+                // v0.0.234/235: Modell-Prefs sofort in die globalen Overrides übernehmen
                 userModelPrefs = {
-                    model: $('p_model').value.trim(),
-                    provider: $('p_provider').value.trim(),
+                    model: mp.model,
+                    provider: mp.provider,
                     reasoningEffort: $('p_reasoning_effort').value,
                     fastMode: $('p_fast_mode').value
                 };
@@ -1855,15 +2013,18 @@
             }
         });
 
-        // ---- Auxiliary-Models (v0.0.234, Admin; schreiben in die Hermes-Profil-Config) ----
+        // ---- Auxiliary-Models (v0.0.234/235, Admin; schreiben in die Hermes-Profil-Config) ----
         const AUX_DEFS = [
-            ['vision', 'Vision'],
-            ['web_extract', 'Web extract'],
-            ['compression', 'Compression'],
-            ['skills_hub', 'Skills hub'],
-            ['approval', 'Approval'],
+            ['vision', 'Vision (Bilder)'],
+            ['web_extract', 'Web-Extraktion'],
+            ['compression', 'Komprimierung'],
+            ['skills_hub', 'Skills-Hub'],
+            ['approval', 'Genehmigungen'],
             ['mcp', 'MCP'],
-            ['title_gen', 'Title gen'],
+            ['title_generation', 'Titel-Generierung'],
+            ['triage_specifier', 'Triage'],
+            ['kanban_decomposer', 'Kanban-Zerlegung'],
+            ['profile_describer', 'Profil-Beschreibung'],
             ['curator', 'Curator']
         ];
         function fillAuxFields() {
@@ -1871,35 +2032,173 @@
             if (!box || box.dataset.built) return;
             box.dataset.built = '1';
             AUX_DEFS.forEach(([key, label]) => {
-                const row = document.createElement('label');
-                row.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);cursor:pointer;';
-                row.textContent = label;
-                const inp = document.createElement('input');
-                inp.type = 'text';
-                inp.id = 'p_aux_' + key;
-                inp.placeholder = 'auto – Hauptmodell';
-                inp.autocomplete = 'off';
-                inp.spellcheck = false;
-                inp.style.cssText = 'flex:1;min-width:0;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;';
-                row.appendChild(inp);
+                const row = document.createElement('div');
+                row.style.cssText = 'display:grid;grid-template-columns:minmax(120px,1fr) minmax(140px,1.6fr);gap:6px;align-items:center;';
+                const lbl = document.createElement('span');
+                lbl.textContent = label;
+                lbl.style.cssText = 'font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+                const prov = document.createElement('select');
+                prov.id = 'p_auxp_' + key;
+                prov.style.cssText = 'width:100%;padding:7px 8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;appearance:none;';
+                prov.innerHTML = '<option value="auto">auto – Hauptmodell</option>';
+                const mdl = document.createElement('select');
+                mdl.id = 'p_auxm_' + key;
+                mdl.style.cssText = 'width:100%;padding:7px 8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;appearance:none;';
+                mdl.innerHTML = '<option value="">(Standard)</option>';
+                prov.addEventListener('change', () => fillAuxModelSelect(key, true));
+                const cus = document.createElement('input');
+                cus.type = 'text';
+                cus.id = 'p_auxc_' + key;
+                cus.placeholder = 'Provider-ID oder Modell-ID, z. B. custom:anbieter:modell';
+                cus.autocomplete = 'off';
+                cus.spellcheck = false;
+                cus.style.cssText = 'display:none;grid-column:2;width:100%;padding:7px 8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;box-sizing:border-box;';
+                const wraps = document.createElement('div');
+                wraps.style.cssText = 'display:grid;grid-template-columns:1fr;gap:4px;';
+                wraps.appendChild(prov);
+                wraps.appendChild(cus);
+                row.appendChild(lbl);
+                row.appendChild(wraps);
                 box.appendChild(row);
+                // Modell-Select als 2. Kind der Zelle (unter Provider) — Wrap umbauen
+                wraps.appendChild(mdl);
             });
+            // Katalog in alle Aux-Zeilen einspeisen (falls schon geladen)
+            if (modelCatalog && modelCatalog.providers && modelCatalog.providers.length) {
+                populateCatalogSelects();
+            } else {
+                // ohne Katalog: wenigstens Freitext-Option anbieten
+                AUX_DEFS.forEach(([key]) => {
+                    const prov = $('p_auxp_' + key);
+                    if (prov && !Array.from(prov.options).some(o => o.value === '__custom__')) {
+                        const c = document.createElement('option');
+                        c.value = '__custom__';
+                        c.textContent = '✏️ Eigene Angabe…';
+                        prov.appendChild(c);
+                    }
+                });
+            }
             syncAuxFromState();
+        }
+        function populateCatalogSelects() {
+            const provEls = ['p_provider'].concat(AUX_DEFS.map(([k]) => 'p_auxp_' + k));
+            provEls.forEach(id => {
+                const sel = $(id);
+                if (!sel) return;
+                const cur = sel.value;
+                sel.innerHTML = '<option value="">auto – Hauptmodell</option>';
+                if (id === 'p_provider') sel.innerHTML = '<option value="">Standard (Hermes-Einstellung)</option>';
+                (modelCatalog.providers || []).forEach(p => {
+                    const o = document.createElement('option');
+                    o.value = p.slug;
+                    o.textContent = p.name || p.slug;
+                    if (p.authenticated) o.textContent += ' ✓';
+                    sel.appendChild(o);
+                });
+                const cust = document.createElement('option');
+                cust.value = '__custom__';
+                cust.textContent = '✏️ Eigene Angabe…';
+                sel.appendChild(cust);
+                if (cur && (cur === '__custom__' || Array.from(sel.options).some(o => o.value === cur))) sel.value = cur;
+            });
+            AUX_DEFS.forEach(([key]) => {
+                const psel = $('p_auxp_' + key);
+                if (psel) fillAuxModelSelect(key, true);
+            });
+        }
+        function fillAuxModelSelect(key, refill) {
+            const msel = $('p_auxm_' + key);
+            const cus = $('p_auxc_' + key);
+            if (!msel) return;
+            const prov = $('p_auxp_' + key);
+            const provVal = prov ? prov.value : 'auto';
+            const prev = refill ? msel.dataset.prev : msel.value;
+            msel.innerHTML = '<option value="">(Standard)</option>';
+            if (provVal && provVal !== 'auto' && provVal !== '__custom__') {
+                const p = (modelCatalog.providers || []).find(x => x.slug === provVal);
+                (p ? p.models : []).forEach(m => {
+                    const o = document.createElement('option');
+                    o.value = m;
+                    o.textContent = m;
+                    msel.appendChild(o);
+                });
+            }
+            const cust = document.createElement('option');
+            cust.value = '__custom__';
+            cust.textContent = '✏️ Eigene Angabe…';
+            msel.appendChild(cust);
+            if (prev && Array.from(msel.options).some(o => o.value === prev)) msel.value = prev;
+            msel.dataset.prev = msel.value;
+            if (cus) cus.style.display = msel.value === '__custom__' ? 'block' : 'none';
+            if (prov && prov.value === '__custom__') {
+                cus.style.display = 'block';
+                cus.placeholder = 'Provider-ID z. B. custom:anbieter';
+            }
         }
         function syncAuxFromState() {
             AUX_DEFS.forEach(([key]) => {
-                const inp = $('p_aux_' + key);
-                if (inp) inp.value = (userAuxModels && userAuxModels[key]) ? userAuxModels[key] : '';
+                const prov = $('p_auxp_' + key);
+                const mdl = $('p_auxm_' + key);
+                const cus = $('p_auxc_' + key);
+                if (!prov || !mdl) return;
+                const v = (userAuxModels && userAuxModels[key]) || {};
+                const vp = typeof v === 'object' ? (v.provider || '') : 'custom';
+                const vm = typeof v === 'object' ? (v.model || '') : v;
+                if (vp && vp !== 'auto' && Array.from(prov.options).some(o => o.value === vp)) {
+                    prov.value = vp;
+                } else if (vp && vp !== 'auto') {
+                    prov.value = '__custom__';
+                } else {
+                    prov.value = 'auto';
+                }
+                fillAuxModelSelect(key, true);
+                if (vm && Array.from(mdl.options).some(o => o.value === vm)) {
+                    mdl.value = vm;
+                } else if (vm) {
+                    mdl.value = '__custom__';
+                    const raw = String(vm);
+                    cus.value = (vp && vp !== 'auto' && vp !== '__custom__' && raw.indexOf(':') < 0) ? vp + ':' + raw : raw;
+                    cus.style.display = 'block';
+                }
+                mdl.dataset.prev = mdl.value;
             });
         }
         function collectAux() {
             const out = {};
             AUX_DEFS.forEach(([key]) => {
-                const inp = $('p_aux_' + key);
-                if (inp && inp.value.trim()) out[key] = inp.value.trim();
+                const prov = $('p_auxp_' + key);
+                const mdl = $('p_auxm_' + key);
+                const cus = $('p_auxc_' + key);
+                if (!prov || !mdl) return;
+                let provider = '', model = '';
+                if (prov.value === '__custom__') {
+                    provider = cus.value.trim();
+                } else if (prov.value !== 'auto') {
+                    provider = prov.value;
+                }
+                if (mdl.value === '__custom__') {
+                    // Freitext: 'custom:anbieter:modell' — letztes Segment = Modell, Rest = Provider
+                    const txt = (cus && cus.value || '').trim();
+                    const parts = txt.split(':');
+                    model = (parts.length > 1) ? parts[parts.length - 1] : txt;
+                    if (!provider && parts.length > 1) provider = parts.slice(0, -1).join(':');
+                } else {
+                    model = mdl.value;
+                }
+                if (provider || model) out[key] = { provider: provider || 'custom', model };
             });
             return out;
         }
+        // Listener: Haupt-Provider-Wechsel füllt Modell-Liste neu; Custom-Felder ein-/ausblenden
+        const _mainProvSel = $('p_provider');
+        if (_mainProvSel) _mainProvSel.addEventListener('change', () => {
+            if ($('p_model')) $('p_model').dataset.prev = '';
+            fillMainModelSelect(true);
+        });
+        if ($('p_model')) $('p_model').addEventListener('change', () => toggleCustomInputs());
+        if ($('p_provider_custom')) $('p_provider_custom').addEventListener('input', () => {
+            // beim Freitext-Provider das gespeicherte Modell nicht stören — nur UI-Status
+        });
         $('saveAuxBtn').addEventListener('click', async () => {
             const st = $('p_auxStatus');
             st.textContent = '';
