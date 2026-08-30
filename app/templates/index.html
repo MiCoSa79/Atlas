@@ -673,6 +673,35 @@
             border-radius: 0;
             color: #d5dee8;
         }
+        /* ---- Tool-Karten: Kommando-/Ergebnis-Details aufklappbar (v0.0.247) ---- */
+        .tool-detail-toggle {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            border-radius: 6px;
+            padding: 2px 8px;
+            margin-top: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            display: inline-block;
+            user-select: none;
+        }
+        .tool-detail-toggle:hover { background: rgba(64, 120, 224, 0.12); }
+        .tool-detail {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin: 6px 0 2px;
+            font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #d5dee8;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 40vh;
+            overflow: auto;
+        }
         .msg-text strong { color: #ffffff; font-weight: 700; }
         .msg-text em { color: #cfe0f2; }
         .msg-text h1, .msg-text h2, .msg-text h3,
@@ -1297,6 +1326,7 @@
                 bubble: null,                     // laufende Antwort-Bubble des Live-Streams
                 thinkingBubble: null,             // laufende „Denken“-Box (reasoning.delta)
                 activeToolEls: {},                // v0.0.142: tool_id → ⚙️-Karten-Element (tool.start → tool.complete)
+                toolDetailData: {},               // v0.0.247: tool_id → {full, res} fürs Aufklapp-Panel (Kommando + Ergebnis)
                 leaseWaitBubble: null,            // dauerhafte Lease-Warte-System-Bubble
                 leaseWaitStart: 0,                // Startzeit in ms
                 leaseWaitTimer: null,             // Intervall für Sekundenzähler
@@ -2671,6 +2701,61 @@
             return m;
         }
 
+        // ---- Tool-Detail-Aufklappung (v0.0.247) ----
+        // Nutzer-Befund 30.08.: Mehr-Kommando-Skripte erschienen in den ⚙️-Tool-Karten nur
+        // als Kurz-Preview (erste Zeile + „+ N commands“). Der volle Befehl (und bei
+        // Live-Läufen das Ergebnis) liegt im message-`args`-Feld bzw. im
+        // tool.start/tool.complete-Payload (Hermes-Gateway reicht beides durch) und wird
+        // hier als per-Klick-Panel an der Karte sichtbar.
+        function toolArgsFullText(args) {
+            if (!args || typeof args !== 'object') return String(args || '');
+            const primary = args.command || args.url || args.path || args.query;
+            if (primary && typeof primary === 'string') return primary;
+            try { return JSON.stringify(args, null, 2); } catch (e) { return String(args); }
+        }
+        function toolResultText(res) {
+            if (!res) return '';
+            const parts = [];
+            if (res.error) parts.push('⚠ ' + String(res.error));
+            else if (res.exit_code != null && res.exit_code !== 0) parts.push('⚠ exit ' + res.exit_code);
+            if (res.output != null) {
+                let out = String(res.output);
+                if (out.length > 800) out = out.slice(0, 800) + '\n… (gekürzt)';
+                parts.push(out);
+            }
+            if (!parts.length) return '';
+            return '── Ergebnis ──\n' + parts.join('\n');
+        }
+        function attachToolDetail(card, fullText, resultText) {
+            if (!card || card.querySelector('.tool-detail')) return;
+            const full = String(fullText || '').trim();
+            const res = String(resultText || '').trim();
+            if (!full && !res) return;
+            const textSpan = card.querySelector('span');
+            const preview = textSpan ? textSpan.textContent : '';
+            // Aufklappbar nur mit echtem Mehrwert: der Volltext steckt NICHT komplett
+            // im Karten-Preview (sonst wäre das Panel nur die Wiederholung des Kurztexts)
+            if (full && preview.includes(full)) return;
+            const label = document.createElement('span');
+            label.className = 'tool-detail-toggle';
+            const panel = document.createElement('pre');
+            panel.className = 'tool-detail';
+            panel.style.display = 'none';
+            if (full && res) panel.textContent = full + '\n\n' + res;
+            else if (full) panel.textContent = full;
+            else panel.textContent = res;
+            const openText = full ? '▶ Kommando anzeigen' : '▶ Ergebnis anzeigen';
+            label.textContent = openText;
+            label.addEventListener('click', () => {
+                const open = panel.style.display !== 'none';
+                panel.style.display = open ? 'none' : 'block';
+                label.textContent = open ? openText : '▲ ausblenden';
+                followSticky();
+            });
+            card.appendChild(label);
+            card.appendChild(panel);
+        }
+
         // ---- Clarify-Karte (v0.0.136) ----
         // Das Gateway sendet bei Agent-Fragen (clarify-Tool) ein Event
         // {type:"clarify.request", request_id, question, choices?, multi_select?}.
@@ -3615,7 +3700,8 @@
                                     restoreAttachmentPreview(mm, m.text);
                                 }
                             } else if (m.role === 'tool') {
-                                addMsgTo(ctx, 'system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                                const toolCard = addMsgTo(ctx, 'system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                                attachToolDetail(toolCard, toolArgsFullText((m.args || {})), '');
                             }
                         });
                         addMsgTo(ctx, 'system', 'Session geladen ✓');
@@ -3687,7 +3773,8 @@
                                 t.textContent = ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
                             }
                         } else if (m.role === 'tool') {
-                            addMsgTo(ctx, 'system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                            const toolCard = addMsgTo(ctx, 'system', '⚙️ Tool: ' + ((m.name || 'tool') + ' — ' + ((m.context || '').split('\n')[0] || '').slice(0, 60)));
+                            attachToolDetail(toolCard, toolArgsFullText((m.args || {})), '');
                         }
                     });
                     const n = msgs.length;
@@ -3835,7 +3922,11 @@
                         || '';
                     const el = addMsgTo(ctx, 'system', '⚙️ Tool: ' + p.payload.name
                         + (toolCtx ? ' — ' + String(toolCtx).split('\n')[0].slice(0, 80) : ''));
-                    if (p.payload.tool_id) ctx.activeToolEls[p.payload.tool_id] = el;
+                    if (p.payload.tool_id) {
+                        ctx.activeToolEls[p.payload.tool_id] = el;
+                        // v0.0.247: vollen Tool-Aufruf (Befehl/URL/Pfad) fürs Aufklapp-Panel merken
+                        (ctx.toolDetailData || (ctx.toolDetailData = {}))[p.payload.tool_id] = { full: toolArgsFullText((p.payload.args || {})), res: '' };
+                    }
                 }
                 if (p.type === 'tool.complete' && p.payload && p.payload.name) {
                     const el = p.payload.tool_id ? ctx.activeToolEls[p.payload.tool_id] : null;
@@ -3847,10 +3938,19 @@
                     else suffix = ' ✓' + ds;
                     if (el && el.querySelector('span')) {
                         el.querySelector('span').textContent += suffix;
+                        // v0.0.247: Ergebnis ans Aufklapp-Panel hängen (Kommando + Ausgabe)
+                        const dd = ctx.toolDetailData && ctx.toolDetailData[p.payload.tool_id];
+                        if (dd) {
+                            dd.res = toolResultText(res);
+                            attachToolDetail(el, dd.full, dd.res);
+                        }
                     } else {
                         addMsgTo(ctx, 'system', '⚙️ Tool: ' + p.payload.name + ' — abgeschlossen' + suffix);
                     }
-                    if (p.payload.tool_id) delete ctx.activeToolEls[p.payload.tool_id];
+                    if (p.payload.tool_id) {
+                        delete ctx.activeToolEls[p.payload.tool_id];
+                        if (ctx.toolDetailData) delete ctx.toolDetailData[p.payload.tool_id];
+                    }
                 }
                 if (p.type === 'message.delta' && p.payload && p.payload.text) {
                     if (!ctx.turnActive) markTurnActive(ctx);   // v0.0.210: Turn-Heilung — streamt eine Session weiter (langer Tool-Lauf, WS-Reconnect ohne neues ACK), aktiviert der Sidebar-Dot/Spinner wieder
