@@ -14,6 +14,7 @@ import aiohttp
 import bcrypt
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -253,6 +254,18 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN otp_confirmed INTEGER DEFAULT 0")
     except Exception:
         pass
+    # v0.0.234: Modell & Reasoning (pro Benutzer; session.create-Overrides)
+    for col, ddl in (
+        ("model TEXT DEFAULT ''", "model"),
+        ("provider TEXT DEFAULT ''", "provider"),
+        ("reasoning_effort TEXT DEFAULT ''", "reasoning_effort"),
+        ("fast_mode TEXT DEFAULT ''", "fast_mode"),
+        ("aux_models TEXT DEFAULT '{}'", "aux_models"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
+        except Exception:
+            _ = ddl  # Spalte existiert bereits
     # Passkeys (WebAuthn, v0.0.228)
     conn.execute("""CREATE TABLE IF NOT EXISTS passkeys (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -323,6 +336,15 @@ def verify_user(username, password):
     return None
 
 
+def _safe_json(raw):
+    """Kaputtes/invalides JSON in der DB -> {} statt 500."""
+    try:
+        val = json.loads(raw)
+        return val if isinstance(val, dict) else {}
+    except Exception:
+        return {}
+
+
 def get_user_by_id(user_id):
     conn = get_db()
     row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -344,6 +366,12 @@ def user_hermes_info(user: dict) -> dict:
         "hermes_profile": user.get("hermes_profile") or "",
         "show_reasoning": user.get("show_reasoning") if user.get("show_reasoning") is not None else 1,
         "show_status": user.get("show_status") if user.get("show_status") is not None else 1,
+        # v0.0.234: Modell & Reasoning (pro Benutzer, session.create-Overrides)
+        "model": user.get("model") or "",
+        "provider": user.get("provider") or "",
+        "reasoning_effort": user.get("reasoning_effort") or "",
+        "fast_mode": user.get("fast_mode") or "",
+        "aux_models": _safe_json(user.get("aux_models") or "{}"),
     }
 
 
@@ -868,7 +896,11 @@ async def api_profile_save(request: Request,
                            hermes_pass: str = Form(""),
                            hermes_profile: str = Form(""),
                            show_reasoning: str = Form(""),
-                           show_status: str = Form("")):
+                           show_status: str = Form(""),
+                           model: str = Form(None),
+                           provider: str = Form(None),
+                           reasoning_effort: str = Form(None),
+                           fast_mode: str = Form(None)):
     user = session_from_request(request)
     if not user:
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
@@ -915,6 +947,25 @@ async def api_profile_save(request: Request,
     if show_status != "":
         sets.append("show_status = ?")
         values.append(1 if show_status == "1" else 0)
+    # v0.0.234: Modell & Reasoning (session.create-Overrides) — leerer Wert LÖSCHT („Standard")
+    if reasoning_effort is not None:
+        if reasoning_effort not in ("", "none", "low", "medium", "high"):
+            conn.close()
+            return JSONResponse({"status": "error", "message": "Ungültiger Reasoning-Effort"}, status_code=400)
+        sets.append("reasoning_effort = ?")
+        values.append(reasoning_effort)
+    if fast_mode is not None:
+        if fast_mode not in ("", "normal", "fast"):
+            conn.close()
+            return JSONResponse({"status": "error", "message": "Ungültiger Schnellmodus"}, status_code=400)
+        sets.append("fast_mode = ?")
+        values.append(fast_mode)
+    if model is not None:
+        sets.append("model = ?")
+        values.append(model.strip())
+    if provider is not None:
+        sets.append("provider = ?")
+        values.append(provider.strip())
 
     if sets:
         sql = f"UPDATE users SET {', '.join(sets)} WHERE id = ?"
@@ -929,6 +980,104 @@ async def api_profile_save(request: Request,
     else:
         test, detail = ("missing", "Benutzer und Passwort fehlen")
     return JSONResponse({"status": "ok", "test": test, "test_error": detail})
+
+
+# ---------------------------------------------------------------- Modell & Reasoning (v0.0.234)
+
+AUX_TASKS = ("vision", "web_extract", "compression", "skills_hub", "approval", "mcp", "title_gen", "curator")
+AUX_LABELS = {"vision": "Vision", "web_extract": "Web extract", "compression": "Compression",
+              "skills_hub": "Skills hub", "approval": "Approval", "mcp": "MCP",
+              "title_gen": "Title gen", "curator": "Curator"}
+
+
+def _hermes_aux_config_path(profile: str = ""):
+    """Pfad zur Hermes-config.yaml des PROFILS (pro Profil konfigurierbar, wie Desktop-App).
+
+    Priorität: ATLAS_HERMES_CONFIG_PATH (fester Pfad) > ATLAS_HERMES_CONFIG_DIR/<profil>/config.yaml.
+    """
+    fixed = os.environ.get("ATLAS_HERMES_CONFIG_PATH", "").strip()
+    if fixed:
+        return fixed or None
+    base = os.environ.get("ATLAS_HERMES_CONFIG_DIR", "").strip()
+    if not base or not profile:
+        return None
+    prof = profile.strip()
+    if not prof or re.search(r"[/\\]|\.\.", prof):
+        return None
+    return os.path.join(base, prof, "config.yaml")
+
+
+def _yq(s):
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _write_hermes_aux(aux: dict, profile: str = ""):
+    """Schreibt auxiliary.* in die Hermes-config.yaml des Profils (Text-Patch, Kommentare bleiben).
+
+    aux: {task: model} — nur AUX_TASKS-Keys; leerer String entfernt das Override (provider: auto).
+    Rückgabe: (ok, message)
+    """
+    path = _hermes_aux_config_path(profile)
+    if not path:
+        return False, "Kein Hermes-Config-Zugriff konfiguriert (ATLAS_HERMES_CONFIG_PATH oder ATLAS_HERMES_CONFIG_DIR + Hermes-Profil nötig)"
+    if not os.path.exists(path):
+        return False, f"Hermes-Config nicht gefunden: {path}"
+    clean = {k: (str(v).strip() if v is not None else "") for k, v in aux.items() if k in AUX_TASKS}
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    block = ["auxiliary:"]
+    for task in AUX_TASKS:
+        mdl = clean.get(task, "")
+        if mdl:
+            block.append(f"  {task}: {{provider: custom, model: {_yq(mdl)}}}")
+        else:
+            block.append(f"  {task}: {{provider: auto, model: ''}}")
+    idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "auxiliary:" and (i == 0 or lines[i - 1].strip() == "" or not lines[i - 1][:1].isspace()):
+            idx = i
+            break
+    if idx is not None:
+        end = idx + 1
+        while end < len(lines) and (lines[end].strip() == "" or lines[end][:1].isspace()):
+            end += 1
+        out = lines[:idx] + block + lines[end:]
+    else:
+        out = lines + [""] + block
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out).rstrip() + "\n")
+    return True, f"Hermes-Config aktualisiert ({', '.join(AUX_LABELS[k] for k in clean if clean[k]) or 'alle auf auto'})"
+
+
+@app.post("/api/profile/aux")
+async def api_profile_aux(request: Request, aux: str = Form("{}")):
+    """Admin-only: Auxiliary-Models für das EIGENE Hermes-Profil setzen (wie Desktop-App).
+
+    Hermes konfiguriert Auxiliary-Models PRO PROFIL (config.yaml des Profils). Atlas
+    schreibt in die Config des Hermes-Profils, das in den Benutzer-Einstellungen steht.
+    Erfordert ATLAS_HERMES_CONFIG_PATH oder ATLAS_HERMES_CONFIG_DIR + gesetztes Profil.
+    """
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    # is_admin kommt NICHT aus der Session (nur user_id/username) — aus der DB laden
+    db_user = get_user_by_id(user["user_id"]) or {}
+    if not db_user.get("is_admin"):
+        return JSONResponse({"status": "error", "message": "Nur Admins dürfen Auxiliary-Models ändern"}, status_code=403)
+    try:
+        parsed = json.loads(aux or "{}")
+    except Exception:
+        return JSONResponse({"status": "error", "message": "aux muss ein JSON-Objekt sein"}, status_code=400)
+    if not isinstance(parsed, dict):
+        return JSONResponse({"status": "error", "message": "aux muss ein JSON-Objekt sein"}, status_code=400)
+    parsed = {k: (v if isinstance(v, str) else str(v)) for k, v in parsed.items() if k in AUX_TASKS}
+    profile = (db_user.get("hermes_profile") or "")
+    ok, msg = _write_hermes_aux(parsed, profile)
+    conn = get_db()
+    conn.execute("UPDATE users SET aux_models = ? WHERE id = ?", (json.dumps(parsed), user["user_id"]))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok", "profile": profile, "config_written": ok, "config_message": msg, "aux": parsed})
 
 
 # ---------------------------------------------------------------- Registrierung

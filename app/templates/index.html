@@ -333,6 +333,12 @@
            als iframe-Mindestbreite) → Screen-Breite wird gesprengt */
         .file-viewer { display: none; position: fixed; inset: 0; width: 100%; max-width: 100vw; overflow: hidden; background: rgba(10, 12, 16, 0.92); z-index: 60; flex-direction: column; }
         .file-viewer.open { display: flex; }
+        /* v0.0.233: PC & Handy unterscheiden sich — Handy bleibt echtes Vollbild
+           (inset:0), Desktop (>=900px) wird ein zentriertes Modal mit Rahmen. */
+        @media (min-width: 900px) {
+            .file-viewer { inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(1100px, 94vw); height: min(92vh, 92dvh); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55); }
+            .file-viewer .fv-bar { border-radius: 14px 14px 0 0; }
+        }
         .file-viewer .fv-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
         .file-viewer .fv-title { flex: 1; min-width: 0; font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .file-viewer .fv-actions { display: flex; gap: 8px; flex-shrink: 0; }
@@ -880,6 +886,43 @@
                     <b>Falls es auf dem iPhone scheitert:</b> iCloud-Schlüsselbund (Einstellungen → Passwörter) und Face ID müssen aktiv sein; nicht im privaten Safari-Modus testen; iOS ≥ 16.3.
                 </p>
             </div>
+            <!-- Modell & Reasoning (v0.0.234) -->
+            <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
+                <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">🧠 Modell &amp; Reasoning</h3>
+                <p class="hint" style="margin:0 0 12px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Gilt für neue Unterhaltungen (wie im Composer der Hermes-Desktop-App). „Standard“ = Einstellung der Hermes-Instanz wird verwendet.</p>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                    <div style="flex:1;min-width:140px;">
+                        <label for="p_reasoning_effort" style="display:block;font-size:13px;color:var(--text);margin-bottom:4px;">Reasoning-Effort</label>
+                        <select id="p_reasoning_effort" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                            <option value="">Standard</option>
+                            <option value="none">none (aus)</option>
+                            <option value="low">low</option>
+                            <option value="medium">medium</option>
+                            <option value="high">high</option>
+                        </select>
+                    </div>
+                    <div style="flex:1;min-width:140px;">
+                        <label for="p_fast_mode" style="display:block;font-size:13px;color:var(--text);margin-bottom:4px;">Schnellmodus</label>
+                        <select id="p_fast_mode" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                            <option value="">Standard</option>
+                            <option value="normal">normal</option>
+                            <option value="fast">fast (Priority)</option>
+                        </select>
+                    </div>
+                </div>
+                <label for="p_model" style="display:block;font-size:13px;color:var(--text);margin:12px 0 4px;">Hauptmodell <span style="color:var(--muted);font-size:11px;">(Modell-ID wie in der Desktop-App, leer = Standard)</span></label>
+                <input id="p_model" type="text" placeholder="z.&nbsp;B. custom:provider · Modell" autocomplete="off" spellcheck="false" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;">
+                <label for="p_provider" style="display:block;font-size:13px;color:var(--text);margin:10px 0 4px;">Provider <span style="color:var(--muted);font-size:11px;">(optional)</span></label>
+                <input id="p_provider" type="text" placeholder="z.&nbsp;B. custom" autocomplete="off" spellcheck="false" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;">
+                <!-- Auxiliary-Models (nur Admin; instanzweit) -->
+                <div id="p_auxPanel" class="hidden" style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);">
+                    <h4 style="font-size:13px;margin:0 0 6px;color:var(--text);">Auxiliary-Models <span style="color:var(--muted);font-weight:400;font-size:11px;">(Admin, pro Hermes-Profil)</span></h4>
+                    <p class="hint" style="margin:0 0 10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Gelten für dein <b>Hermes-Profil</b> (wie in der Desktop-App pro Profil) und ab der nächsten Session. Leer lassen = <code>auto – Hauptmodell</code>. Das Hermes-Profil wird im oberen Bereich dieses Fensters festgelegt.</p>
+                    <div id="p_auxFields" style="display:flex;flex-direction:column;gap:6px;"></div>
+                    <button id="saveAuxBtn" style="width:auto;padding:8px 16px;font-size:13px;margin:10px 0 4px;">Auxiliary-Models speichern</button>
+                    <p class="status-ok" id="p_auxStatus" style="font-size:12px;margin-top:6px;"></p>
+                </div>
+            </div>
             <!-- Admin-Einstellungen (nur Admin) -->
             <div id="adminSettingsPanel" class="hidden" style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
                 <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">⚡ Admin-Bereich</h3>
@@ -1389,6 +1432,35 @@
         let pending2faToken = null;  // Token aus 2FA-Stufe 1 (Login) bis zur Code-Bestätigung
         let showReasoning = true;     // pro Benutzer einstellbar
         let showStatus = true;        // pro Benutzer einstellbar
+        // v0.0.234: Modell & Reasoning (pro Benutzer; werden beim session.create als Overrides mitgeschickt)
+        let userModelPrefs = { model: '', provider: '', reasoningEffort: '', fastMode: '' };
+        let userAuxModels = {};
+
+        // (v0.0.234) Werte aus /api/profile-Response in globale Prefs + Felder übernehmen
+        function applyModelPrefsFields(d) {
+            userModelPrefs = {
+                model: d.model || '',
+                provider: d.provider || '',
+                reasoningEffort: d.reasoning_effort || '',
+                fastMode: d.fast_mode || ''
+            };
+            userAuxModels = (d.aux_models && typeof d.aux_models === 'object') ? d.aux_models : {};
+            if ($('p_reasoning_effort')) $('p_reasoning_effort').value = userModelPrefs.reasoningEffort;
+            if ($('p_fast_mode')) $('p_fast_mode').value = userModelPrefs.fastMode;
+            if ($('p_model')) $('p_model').value = userModelPrefs.model;
+            if ($('p_provider')) $('p_provider').value = userModelPrefs.provider;
+            fillAuxFields();
+        }
+
+        // (v0.0.234) Session-Overrides aus den Benutzer-Prefs in den create-Payload übernehmen
+        function attachUserModelOverrides(p) {
+            const mp = userModelPrefs || {};
+            if (mp.model) p.model = mp.model;
+            if (mp.provider) p.provider = mp.provider;
+            if (mp.reasoningEffort) p.reasoning_effort = mp.reasoningEffort;
+            if (mp.fastMode === 'fast') p.fast = true;
+            else if (mp.fastMode === 'normal') p.fast = false;
+        }
 
         // Anzeige-Einstellungen (Denken/Statuszeilen) frisch aus der DB laden
         function loadDisplaySettings() {
@@ -1400,6 +1472,7 @@
                         showStatus = (d.show_status !== undefined) ? !!d.show_status : true;
                         if ($('p_show_reasoning')) $('p_show_reasoning').checked = showReasoning;
                         if ($('p_show_status')) $('p_show_status').checked = showStatus;
+                        applyModelPrefsFields(d);
                     }
                 })
                 .catch(() => {});
@@ -1439,6 +1512,7 @@
                         showStatus = (d.show_status !== undefined) ? !!d.show_status : true;
                         $('p_show_reasoning').checked = showReasoning;
                         $('p_show_status').checked = showStatus;
+                        applyModelPrefsFields(d);
                     }
                 })
                 .catch(() => {});
@@ -1462,6 +1536,16 @@
                 .catch(() => {});
             $('settingsModal').classList.add('active');
             loadOtpStatus();  // 2FA-Status immer beim Öffnen laden
+            // v0.0.234: Auxiliary-Models nur für Admins (ändern Hermes-Profil-Config)
+            const auxPanel = $('p_auxPanel');
+            if (auxPanel) {
+                if (isAdminUser) {
+                    auxPanel.classList.remove('hidden');
+                    fillAuxFields();
+                } else {
+                    auxPanel.classList.add('hidden');
+                }
+            }
         }
 
         // v0.0.228: Profil-Dropdown (ersetzt ⚙️- und Logout-Buttons im Header)
@@ -1731,6 +1815,11 @@
             d.set('hermes_profile', $('p_profile').value);
             d.set('show_reasoning', $('p_show_reasoning').checked ? '1' : '0');
             d.set('show_status', $('p_show_status').checked ? '1' : '0');
+            // v0.0.234: Modell & Reasoning
+            d.set('model', $('p_model').value.trim());
+            d.set('provider', $('p_provider').value.trim());
+            d.set('reasoning_effort', $('p_reasoning_effort').value);
+            d.set('fast_mode', $('p_fast_mode').value);
             try {
                 const r = await fetch('/api/profile', { method: 'POST', body: d });
                 const j = await r.json().catch(() => ({}));
@@ -1741,6 +1830,13 @@
                 // Anzeige-Einstellungen sofort übernehmen (Denken/Statuszeilen)
                 showReasoning = $('p_show_reasoning').checked;
                 showStatus = $('p_show_status').checked;
+                // v0.0.234: Modell-Prefs sofort in die globalen Overrides übernehmen
+                userModelPrefs = {
+                    model: $('p_model').value.trim(),
+                    provider: $('p_provider').value.trim(),
+                    reasoningEffort: $('p_reasoning_effort').value,
+                    fastMode: $('p_fast_mode').value
+                };
                 if (j.test === 'connected') {
                     $('profileStatus').textContent = '✓ Verbunden mit Hermes!';
                     $('settingsModal').classList.remove('active');
@@ -1756,6 +1852,79 @@
                 $('profileError').textContent = 'Netzwerkfehler beim Speichern';
             } finally {
                 btn.disabled = false;
+            }
+        });
+
+        // ---- Auxiliary-Models (v0.0.234, Admin; schreiben in die Hermes-Profil-Config) ----
+        const AUX_DEFS = [
+            ['vision', 'Vision'],
+            ['web_extract', 'Web extract'],
+            ['compression', 'Compression'],
+            ['skills_hub', 'Skills hub'],
+            ['approval', 'Approval'],
+            ['mcp', 'MCP'],
+            ['title_gen', 'Title gen'],
+            ['curator', 'Curator']
+        ];
+        function fillAuxFields() {
+            const box = $('p_auxFields');
+            if (!box || box.dataset.built) return;
+            box.dataset.built = '1';
+            AUX_DEFS.forEach(([key, label]) => {
+                const row = document.createElement('label');
+                row.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);cursor:pointer;';
+                row.textContent = label;
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.id = 'p_aux_' + key;
+                inp.placeholder = 'auto – Hauptmodell';
+                inp.autocomplete = 'off';
+                inp.spellcheck = false;
+                inp.style.cssText = 'flex:1;min-width:0;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none;';
+                row.appendChild(inp);
+                box.appendChild(row);
+            });
+            syncAuxFromState();
+        }
+        function syncAuxFromState() {
+            AUX_DEFS.forEach(([key]) => {
+                const inp = $('p_aux_' + key);
+                if (inp) inp.value = (userAuxModels && userAuxModels[key]) ? userAuxModels[key] : '';
+            });
+        }
+        function collectAux() {
+            const out = {};
+            AUX_DEFS.forEach(([key]) => {
+                const inp = $('p_aux_' + key);
+                if (inp && inp.value.trim()) out[key] = inp.value.trim();
+            });
+            return out;
+        }
+        $('saveAuxBtn').addEventListener('click', async () => {
+            const st = $('p_auxStatus');
+            st.textContent = '';
+            const aux = collectAux();
+            const d = new URLSearchParams();
+            d.set('aux', JSON.stringify(aux));
+            try {
+                const r = await fetch('/api/profile/aux', { method: 'POST', body: d });
+                const j = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                    st.textContent = '⚠️ ' + (j.message || 'Speichern fehlgeschlagen');
+                    st.classList.add('error-msg');
+                    st.classList.remove('status-ok');
+                    return;
+                }
+                userAuxModels = aux;
+                st.classList.remove('error-msg');
+                st.classList.add('status-ok');
+                st.textContent = j.config_written
+                    ? '✓ ' + j.config_message
+                    : '✓ In der Atlas-DB gespeichert — ' + j.config_message;
+            } catch (e) {
+                st.textContent = '⚠️ Netzwerkfehler';
+                st.classList.add('error-msg');
+                st.classList.remove('status-ok');
             }
         });
 
@@ -2635,6 +2804,8 @@
                     console.log('[Atlas] session.create');
                 }
                 if (selectedProfile) p.profile = selectedProfile;
+                // v0.0.234: Per-Benutzer-Overrides (wie Desktop-Composer) — nur beim CREATE
+                if (!ctx.storedId) attachUserModelOverrides(p);
                 const reqId = ctx.sendRpc(ctx.storedId ? 'session.resume' : 'session.create', p);
                 if (ctx.storedId) ctx.resumeRpcId = reqId; else ctx.createRpcId = reqId;
             };
@@ -3183,7 +3354,7 @@
             if (pendingFiles.length > 0) {
                 attachmentsHtml = pendingFiles.map(pf => {
                     if (pf.isImage && pf.previewUrl) {
-                        return `<div style="margin-top:6px;"><img src="${pf.previewUrl}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;"><div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${pf.name}</div></div>`;
+                        return `<div style="margin-top:6px;"><img src="${pf.previewUrl}" onclick="openFilePreviewFromUpload('${pf.name.replace(/'/g, '')}')" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;cursor:pointer;" title="Vergrößern"><div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${pf.name}</div></div>`;
                     } else {
                         return `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${pf.name}</span></div>`;
                     }
@@ -3327,6 +3498,12 @@
                         const resp = ctx.pendingAttachResponses[attachRpcId];
                         delete ctx.pendingAttachResponses[attachRpcId]; // aufräumen
                         if (resp && (resp.attached || resp.count !== undefined)) {
+                            // v0.0.233: Server-Pfad merken — die Thumbnail-Kachel kann
+                            // damit auch nach Reload/Cache-Verlust die Datei öffnen.
+                            const refPath = (resp.ref_text && (resp.ref_text.match(/@file:\s*(\S+)/) || [])[1]);
+                            const attPath = (typeof resp.attached === 'string' && resp.attached.startsWith('/')) ? resp.attached : '';
+                            const serverPath = refPath || attPath;
+                            if (serverPath) uploadServerPaths[pf.name] = serverPath;
                             addMsg('system', '✅ ' + pf.name + ' bei Hermes registriert');
                         } else {
                             addMsg('system', '⚠️ Unerwartete Antwort für ' + pf.name + ': ' + JSON.stringify(resp).substring(0, 150));
@@ -3489,39 +3666,132 @@
             followSticky();
         }
 
+        // v0.0.233: Server-Pfade je Upload-Namen (aus der attach-Antwort). Die
+        // Live-Thumbnail-Kachel öffnet damit die Datei über /api/files/download
+        // statt über die flüchtige Blob-URL.
+        const uploadServerPaths = {};
+        function openFilePreviewFromUpload(name) {
+            openFilePreview(uploadServerPaths[name] || name);
+        }
+
+        // Server-Kandidaten für einen reinen Dateinamen (History-Load ohne Pfad).
+        // Hermes verwahrt Nutzer-Uploads im Profil-Workspace (attachments/ für
+        // file.attach, images/ für die Vision-Pipeline, image.attach_bytes).
+        function FILE_CANDIDATES(name) {
+            return [
+                '/opt/data/profiles/axel/attachments/' + name,
+                '/opt/data/profiles/axel/images/' + name,
+                '/data/uploads/' + name
+            ];
+        }
+
         // Vorschau aus localStorage rekonstruieren (für Session-Wechsel / History-Laden)
         // NUR für User-Uploads (Bilder/Dokumente aus dem Chat) — Agenten-Dateien
         // kommen ausschließlich über MEDIA:-Tags (renderMediaDownloads).
         function restoreAttachmentPreview(userBubble, text) {
             if (!text) return;
+
+            // v0.0.233: Referenzen JETZT auch aus Pfad-Markierungen der History
+            // (vorher NUR der [Name]-Block + localStorage): Hermes speichert den
+            // Upload-Verlauf als [IMG_x.png] + @file:<pfad> + image_url:<pfad>/
+            // MEDIA:<pfad>. Bilder laden ihre Vorschau vom Server (/api/files/
+            // download) statt nur aus localStorage — der lokale Cache (anderer
+            // Browser, bereinigt, iOS-Speicherdruck) ließ Uploads sonst ohne
+            // Vorschau zurück (Befund 30.08. „Vorschau nach Reload weg").
+            let refs = [];
             const bracketMatch = text.match(/\[([^\]]+)\]/);
-            if (!bracketMatch) return;
-            const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
-            if (!names.length) return;
-
-            // Zeige den [Dateiname]- und @image:…-Block NICHT im Bubble-Text —
-            // sie werden als Thumbnails/Vorschau gerendert, nicht als roher Text.
-            const cleaned = text.replace(bracketMatch[0], '').replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').trim();
-            // Links in User-Blasen erhalten (v0.0.163): innerHTML + dataset.raw synchron halten
-            const uSpan = userBubble.querySelector('span');
-            uSpan.dataset.raw = cleaned;
-            uSpan.innerHTML = renderMsgText(cleaned);
-
-            // Vorschau-HTML für jede Datei (localStorage-Bilder aus dem Upload)
-            let attachmentsHtml = '';
-            for (const name of names) {
-                const key = 'atlas_attach_' + name;
-                const data = localStorage.getItem(key);
-                if (!data) continue;
-                if (data.startsWith('data:image/')) {
-                    attachmentsHtml += `<div style="margin-top:6px;"><img src="${data}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;"><div style="font-size:11px;color:var(--muted);margin-top:4px;">📎 ${name}</div></div>`;
-                } else {
-                    attachmentsHtml += `<div style="margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">📄</span><span style="font-size:13px;color:var(--text);">${name}</span></div>`;
+            let cleaned = text;
+            if (bracketMatch) {
+                const names = bracketMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+                for (const n of names) refs.push({ name: n });
+                cleaned = cleaned.replace(bracketMatch[0], '');
+            }
+            const pathRe = /(?:@file|image_url|MEDIA):\s*(?:`|"|')?([^\s`"'\],]+)(?:`|"|')?/gi;
+            let pm;
+            while ((pm = pathRe.exec(text)) !== null) {
+                const p = pm[1].replace(/^\*+|\*+$/g, ''); // nur Fett-Markup-Sterne kappen, NICHT _
+                if (!refs.some(r => r.path === p)) {
+                    refs.push({
+                        name: p.split('/').pop() || p,
+                        path: p,
+                        kind: pm[0].toLowerCase().startsWith('@file') ? 'file' : 'img'
+                    });
                 }
             }
-            if (!attachmentsHtml) return;
+            cleaned = cleaned.replace(pathRe, '')
+                .replace(/@image:\s*[^\s,]+(,[^\s,]+)*/g, '').trim();
+            if (cleaned !== text) {
+                // Links in User-Blasen erhalten (v0.0.163): innerHTML + dataset.raw synchron halten
+                const uSpan = userBubble.querySelector('span');
+                uSpan.dataset.raw = cleaned;
+                uSpan.innerHTML = renderMsgText(cleaned);
+            }
+
+            if (!refs.length) return;
+            // v0.0.233: 1:1-Entsprechung [Namen]-Block ↔ pathRefs (image_url/@file/MEDIA)
+            // bedeutet: beides referenziert DIESELBEN Uploads (Hermes schreibt bei jedem
+            // Anhang den Namen in den Text UND die Path-Darstellung). Dann gibt es EINE
+            // Kachel je Upload — der [Name] wird als Fallback-Kandidat (attachments/,
+            // images/) an die Pfad-Kachel gehängt. Keine Doppelkacheln für ein Bild.
+            const bareRefs = refs.filter(r => !r.path);
+            const pathRefs = refs.filter(r => r.path);
+            if (bareRefs.length === pathRefs.length && pathRefs.length > 0 && bareRefs.length <= 8) {
+                bareRefs.forEach((b, i) => { pathRefs[i].fbName = b.name; });
+                refs = pathRefs;
+            }
             const div = document.createElement('div');
-            div.innerHTML = attachmentsHtml;
+            const serverUrl = p => '/api/files/download?path=' + encodeURIComponent(p);
+            for (const ref of refs) {
+                const name = ref.name;
+                const isImg = ref.kind === 'img' || isImageFilePath(ref.path || name);
+                const openPath = ref.path || FILE_CANDIDATES(name)[0];
+                if (isImg) {
+                    const wrap = document.createElement('div');
+                    wrap.style.marginTop = '6px';
+                    const img = document.createElement('img');
+                    img.alt = name;
+                    img.style.cssText = 'max-width:150px;max-height:150px;border-radius:8px;border:1px solid var(--border);object-fit:cover;cursor:pointer;';
+                    img.title = 'Vergrößern';
+                    // onerror-Kaskade: lokale data-URLs (localStorage) → Pfad (Server) →
+                    // Fallback-Kandidaten attachments/, images/ (auch des [Name]-Zwillings).
+                    const srcList = [];
+                    const push = u => { if (u && !srcList.includes(u)) srcList.push(u); };
+                    (ref.fbName ? [ref.fbName, ref.name] : [ref.name]).forEach(nm => {
+                        try { const l = localStorage.getItem('atlas_attach_' + nm); if (l && l.startsWith('data:image/')) push(l); } catch (e) { /* iOS Private Mode */ }
+                    });
+                    if (ref.path) push(serverUrl(ref.path));
+                    (ref.fbName ? [ref.fbName, ref.name] : [ref.name]).forEach(nm =>
+                        FILE_CANDIDATES(nm).forEach(p => push(serverUrl(p)))
+                    );
+                    let ci = 0;
+                    img.onerror = () => { if (ci >= srcList.length) { img.style.opacity = '0.4'; return; } img.src = srcList[ci++]; };
+                    img.src = srcList[ci++];
+                    img.onclick = () => openFilePreview(openPath);
+                    const cap = document.createElement('div');
+                    cap.style.cssText = 'font-size:11px;color:var(--muted);margin-top:4px;';
+                    cap.textContent = '📎 ' + name;
+                    wrap.appendChild(img); wrap.appendChild(cap);
+                    div.appendChild(wrap);
+                } else {
+                    // Nicht-Bild: Kachel — PDF öffnet die Vorschau, alles andere lädt direkt
+                    const tile = document.createElement('div');
+                    tile.className = 'attach-file-tile';
+                    tile.style.cssText = 'margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;cursor:pointer;';
+                    const icon = document.createElement('span');
+                    icon.style.fontSize = '20px';
+                    icon.textContent = '📄';
+                    const lbl = document.createElement('span');
+                    lbl.style.cssText = 'font-size:13px;color:var(--text);';
+                    lbl.textContent = name;
+                    tile.onclick = () => {
+                        const p = ref.path || name;
+                        if (isPreviewablePath(p)) openFilePreview(p);
+                        else downloadAtlasFile(p);
+                    };
+                    tile.appendChild(icon); tile.appendChild(lbl);
+                    div.appendChild(tile);
+                }
+            }
             userBubble.appendChild(div);
         }
 
@@ -4382,9 +4652,9 @@
                             console.warn('[Atlas] Kontext-Übernahme übersprungen:', e && e.message ? e.message : e);
                         }
                     }
-                    const cr = await fetchRpc('session.create', {
-                        close_on_disconnect: false, source: 'webui', profile: selectedProfile
-                    });
+                    const crParams = { close_on_disconnect: false, source: 'webui', profile: selectedProfile };
+                    attachUserModelOverrides(crParams);
+                    const cr = await fetchRpc('session.create', crParams);
                     if (cr && cr.stored_session_id) {
                         targetStored = cr.stored_session_id;
                         forcedNewChat = true;

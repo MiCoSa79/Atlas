@@ -735,6 +735,161 @@ def main():
         failures.append("crypto_db")
 
     print("-" * 50)
+
+    # ---------------------------------------------------------------- Modell & Reasoning (v0.0.234, Schritt 22)
+    print("22) Modell & Reasoning: model/provider/reasoning_effort/fast_mode")
+    st, j = get_json("/api/profile", jar)
+    old_model, old_provider = j.get("model", ""), j.get("provider", "")
+    old_effort, old_fast = j.get("reasoning_effort", ""), j.get("fast_mode", "")
+    print("22) Vorher:", repr(old_model), repr(old_effort), repr(old_fast))
+
+    def profile_save(fields):
+        _, cur = get_json("/api/profile", jar)
+        merged = {k: (cur.get(k) or "") for k in ("model", "provider", "reasoning_effort", "fast_mode")}
+        merged.update({k: v for k, v in fields.items() if k in merged})
+        d = urllib.parse.urlencode({
+            "hermes_url": "", "hermes_user": "", "hermes_pass": "",
+            "hermes_profile": "", "show_reasoning": "1", "show_status": "1", **merged,
+        })
+        req = urllib.request.Request(f"{BASE}/api/profile", data=d.encode(),
+                                     method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        with op.open(req, timeout=20) as r:
+            return json.loads(r.read().decode())
+
+    jr = profile_save({"model": "custom:test-llm", "provider": "custom",
+                       "reasoning_effort": "high", "fast_mode": "fast"})
+    ok = jr.get("status") == "ok"
+    if not ok:
+        failures.append("model_save")
+    st, j = get_json("/api/profile", jar)
+    ok = (j.get("model") == "custom:test-llm" and j.get("provider") == "custom"
+          and j.get("reasoning_effort") == "high" and j.get("fast_mode") == "fast")
+    print("22a) Gespeichert:", j.get("model"), j.get("provider"), j.get("reasoning_effort"), j.get("fast_mode"))
+    if not ok:
+        failures.append("model_readback")
+
+    # Ungültige Werte -> 400
+    req = urllib.request.Request(
+        f"{BASE}/api/profile",
+        data=urllib.parse.urlencode({"reasoning_effort": "ultra"}).encode(),
+        method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        with op.open(req, timeout=20) as r:
+            bad_status = r.status
+    except urllib.error.HTTPError as e:
+        bad_status = e.code
+    print("22b) Ungültiger Effort ->", bad_status)
+    ok = bad_status == 400
+    if not ok:
+        failures.append("model_validation")
+
+    # Cleanup: Ursprungszustand wiederherstellen ('' = nicht senden -> alte Werte setzen)
+    cleanup = {}
+    if old_model:
+        cleanup["model"] = old_model
+    if old_provider:
+        cleanup["provider"] = old_provider
+    if old_effort:
+        cleanup["reasoning_effort"] = old_effort
+    if old_fast:
+        cleanup["fast_mode"] = old_fast
+    if cleanup:
+        profile_save(cleanup)
+    print("22) Modell & Reasoning abgeschlossen ✓")
+
+    # ---------------------------------------------------------------- Auxiliary-Models (v0.0.234, Schritt 23)
+    print("23) Auxiliary-Models: Admin-Only + Hermes-Profil-Config")
+    # a) Non-Admin -> 403
+    st, login = post_form("/api/login", {"username": "testuser1", "password": "test123"}, u_jar)
+    d = urllib.parse.urlencode({"aux": '{"vision": "custom:vision-x"}'}).encode()
+    req = urllib.request.Request(f"{BASE}/api/profile/aux", data=d, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.build_opener(urllib.request.HTTPCookieProcessor(u_jar)).open(req, timeout=20) as r:
+            aux_status = r.status
+    except urllib.error.HTTPError as e:
+        aux_status = e.code
+    print("23a) Non-Admin ->", aux_status)
+    ok = aux_status == 403
+    if not ok:
+        failures.append("aux_403")
+
+    # b) Admin: speichert in DB; Config-Write hängt an ENV. FRISCHER Admin-Login
+    #    (jar-Session kann nach Rechte-Tests Block 18 einen veralteten is_admin haben).
+    admin_jar = http.cookiejar.CookieJar()
+    alogin = urllib.parse.urlencode({"username": ADMIN_USER, "password": ADMIN_PASS}).encode()
+    aop = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_jar))
+    with aop.open(urllib.request.Request(f"{BASE}/api/login", data=alogin, method="POST"), timeout=20) as ar:
+        assert ar.status == 200, f"Admin-Login Status {ar.status}"
+    st, asess = get_json("/api/session", admin_jar)
+    if not (asess.get("logged_in") and asess.get("is_admin") is True):
+        print("23b) FRISCHER ADMIN-LOGIN ist NICHT admin:", asess)
+        failures.append("aux_admin_login")
+    req = urllib.request.Request(f"{BASE}/api/profile/aux", data=d, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_jar)).open(req, timeout=20) as r:
+        jaux = json.loads(r.read().decode())
+    print("23b) Admin:", jaux.get("status"), "| config_written:", jaux.get("config_written"),
+          "| profile:", jaux.get("profile"))
+    ok = jaux.get("status") == "ok" and jaux.get("aux", {}).get("vision") == "custom:vision-x"
+    if not ok:
+        failures.append("aux_admin")
+    st, j = get_json("/api/profile", admin_jar)
+    ok = (j.get("aux_models") or {}).get("vision") == "custom:vision-x"
+    if not ok:
+        failures.append("aux_db")
+
+    # c) ENV-Pfad vorhanden? -> config.yaml wirklich geschrieben
+    cfg_path = os.environ.get("ATLAS_HERMES_CONFIG_PATH", "")
+    if cfg_path and os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_txt = f.read()
+        has_aux = "auxiliary:" in cfg_txt and "custom:vision-x" in cfg_txt
+        print("23c) Config-Text-Patch:", "OK" if has_aux else "FEHLT")
+        if not has_aux:
+            failures.append("aux_config_write")
+        # d) Zurücksetzen: vision leer -> provider auto
+        d2 = urllib.parse.urlencode({"aux": "{}"}).encode()
+        req2 = urllib.request.Request(f"{BASE}/api/profile/aux", data=d2, method="POST",
+                                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_jar)).open(req2, timeout=20) as r2:
+            r2.read()
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_txt2 = f.read()
+        reset_ok = "custom:vision-x" not in cfg_txt2 and "provider: auto" in cfg_txt2
+        print("23d) Config-Reset:", "OK" if reset_ok else "FEHLT")
+        if not reset_ok:
+            failures.append("aux_config_reset")
+    else:
+        print("23c) Kein ATLAS_HERMES_CONFIG_PATH im Test-Env (Config-Write übersprungen)")
+
+    # e) Ungültiges JSON -> 400
+    req = urllib.request.Request(f"{BASE}/api/profile/aux",
+                                 data=urllib.parse.urlencode({"aux": "kein-json"}).encode(),
+                                 method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_jar)).open(req, timeout=20) as r:
+            aux_bad = r.status
+    except urllib.error.HTTPError as e:
+        aux_bad = e.code
+    print("23e) Ungültiges JSON ->", aux_bad)
+    ok = aux_bad == 400
+    if not ok:
+        failures.append("aux_invalid")
+
+    # Cleanup: aux_models in DB leeren
+    d3 = urllib.parse.urlencode({"aux": "{}"}).encode()
+    req3 = urllib.request.Request(f"{BASE}/api/profile/aux", data=d3, method="POST",
+                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_jar)).open(req3, timeout=20).read()
+    except Exception:
+        pass
+    print("23) Auxiliary-Models abgeschlossen ✓")
+
+    print("-" * 50)
     if failures:
         print("ERGEBNIS: FEHLGESCHLAGEN ->", ", ".join(failures))
         sys.exit(1)
