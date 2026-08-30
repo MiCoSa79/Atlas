@@ -113,11 +113,19 @@ out2 = write(BASE.replace('reasoning_effort: medium\n', ''), {"reasoning_effort"
 check("Reasoning-only: Block bleibt", 'default: DeepSeek-V4-Flash' in out2
       and 'reasoning_effort: "high"' in out2 and "provider: holographic" in out2)
 
-# Reset: Block wird entfernt, memory bleibt
+# Reset: provider/default aus dem Block entfernt, max_tokens (fremdes Kind) BLEIBT.
+# v0.0.242: Der Block wird nur entfernt, wenn er danach kinderlos wäre.
 out3 = write(BASE, {"provider": "", "model": ""})
-check("Reset: kein model:-Block mehr",
-      not any(re.match(r'^model:', ln) for ln in out3.splitlines()))
-check("Reset: memory bleibt", "provider: holographic" in out3)
+blk3 = re.search(r'^model:.*?(?=^[^\s#]|\Z)', out3, re.M | re.S)
+blk3txt = blk3.group(0) if blk3 else ""
+check("Reset: kein model:-Block mehr" if not blk3 else
+      "Reset: provider/default entfernt, max_tokens bleibt",
+      (not blk3) or (
+          "provider: holographic" in out3 and
+          "  provider:" not in blk3txt and
+          "  default:" not in blk3txt and
+          "max_tokens: 32768" in blk3txt
+      ))
 
 # Korrupte Altform heilen (Waisen unter top-level model:String)
 kaputt = 'model: "DeepSeek-V4-Flash"\n  provider: custom:alt\n  default: Alt\nmemory:\n  provider: holographic\n'

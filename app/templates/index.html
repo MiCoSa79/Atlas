@@ -1646,6 +1646,7 @@
                 reasoningEffort: (main && main.reasoning_effort) || '',
                 fastMode: (main && main.fast_mode) || ''
             };
+            userAuxModels = aux || {};
             userSvcPrefs = {
                 stt_model: (services && services.stt_model) || '',
                 tts_voice: (services && services.tts_voice) || ''

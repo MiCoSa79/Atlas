@@ -976,17 +976,15 @@ AUX_LABELS = {"vision": "Vision (Bilder)", "web_extract": "Web-Extraktion", "com
 def _hermes_aux_config_path(profile: str = ""):
     """Pfad zur Hermes-config.yaml des PROFILS (pro Profil konfigurierbar, wie Desktop-App).
 
-    Priorität: ATLAS_HERMES_CONFIG_PATH (fester Pfad) > ATLAS_HRMES_CONFIG_DIR/<profil>/config.yaml.
+    Priorität: ATLAS_HERMES_CONFIG_PATH (fester Pfad) > ATLAS_HERMES_CONFIG_DIR/<profil>/config.yaml.
 
-    NOTE (v0.0.242): Diese Funktion hat auf manchen Python-VMs (ZimaOS/Frame-Interaktion)
-    einen Bug, wo sie trotz gesetzter env var None zurückgibt. Alle Call-Sites, die den
-    Pfad direkt aus der env var lesen müssen (z. B. neue Services-Writer), verwenden
-    deshalb eine Inline-Fassung (siehe unten: _inline_config_path).
+    NOTE (v0.0.242): ACHTUNG auf den Tippfehler ATLAS_HRMES_* (ohne E) — die Funktion
+    liest NUR ATLAS_HERMES_CONFIG_PATH/ATLAS_HERMES_CONFIG_DIR (mit E).
     """
-    fixed = os.environ.get("ATLAS_HRMES_CONFIG_PATH", "").strip()
+    fixed = os.environ.get("ATLAS_HERMES_CONFIG_PATH", "").strip()
     if fixed:
         return fixed
-    base = os.environ.get("ATLAS_HRMES_CONFIG_DIR", "").strip()
+    base = os.environ.get("ATLAS_HERMES_CONFIG_DIR", "").strip()
     if not base or not profile:
         return None
     prof = profile.strip()
@@ -1002,15 +1000,16 @@ def _yq(s):
 # ---------------------------------------------------------------- Inline helper (Frame-Bug-Workaround, v0.0.242)
 
 def _inline_config_path(profile: str = ""):
-    """Lesen des Config-Pfads aus env vars — INLINE für Frame-Bug-Sicherheit.
+    """Lesen des Config-Pfads aus env vars — INLINE-Fassung.
 
-    Dieselbe Logik wie _hermes_aux_config_path, aber ohne Funktionsebene
-    (vermeidet den seltenen Python-Frame-Bug, wo fixed nicht initialisiert wird).
+    Identische Logik wie _hermes_aux_config_path (beide lesen ATLAS_HERMES_CONFIG_PATH/
+    ATLAS_HERMES_CONFIG_DIR). Bewusst als eigene kleine Funktion gehalten, damit
+    zukünftige Refactors an der einen Stelle nicht versehentlich die andere brechen.
     """
-    fixed = os.environ.get("ATLAS_HRMES_CONFIG_PATH", "").strip()
+    fixed = os.environ.get("ATLAS_HERMES_CONFIG_PATH", "").strip()
     if fixed:
         return fixed
-    base = os.environ.get("ATLAS_HRMES_CONFIG_DIR", "").strip()
+    base = os.environ.get("ATLAS_HERMES_CONFIG_DIR", "").strip()
     if not base or not profile:
         return None
     prof = profile.strip()
@@ -1138,11 +1137,79 @@ def _patch_block_kids(lines, header_re, pairs, kid_re):
     missing = [k for k in replacements if replacements[k] is not None and k not in used]
     if missing:
         new_kids = [replacements[k] for k in missing] + new_kids
-    if not new_kids:
-        # Block komplett entfernen (Header + Kinderbereich; keine Kommentare übrig)
+    if not any(ln.strip() for ln in new_kids):
+        # Block komplett entfernen (Header + Kinderbereich) — nur Leerzeilen übrig
+        # (Blank-Absätze zählen nicht als Kinder, sonst bliebe ein Header-Skelett)
         return out[:header_idx] + out[end:], True, False
     out[header_idx + 1:end] = new_kids
     return out, True, True
+
+
+def _clean_service_sub(lines, block, keep_provider=None):
+    """Räumt den Sub-Block des AKTUELL gesetzten Service-Providers, wenn dessen Wert ein
+    Atlas-Katalogwert ist (v0.0.242). keep_provider != None: nur räumen, wenn der aktuelle
+    Provider ein ANDERER ist (Provider-Wechsel) — der neue Sub-Block wird woanders gesetzt.
+    Fremde manuelle Sub-Block-Konfiguration bleibt unberührt. Rückgabe: neue Zeilen."""
+    lines = list(lines)
+    header_re = r'^' + re.escape(block) + r':'
+    hstart = None
+    for i, ln in enumerate(lines):
+        if not ln.strip():
+            continue
+        if re.match(header_re, ln):
+            hstart = i
+            break
+    if hstart is None:
+        return lines
+    cur = None
+    for j in range(hstart + 1, len(lines)):
+        ln = lines[j]
+        if not ln.strip():
+            continue
+        if ln[:1].isspace():
+            m0 = re.match(r'^  provider:\s*(.*?)\s*$', ln)
+            if m0:
+                cur = m0.group(1).strip().strip('"').strip("'")
+        else:
+            break
+    if not cur or (keep_provider is not None and cur == keep_provider):
+        return lines
+    sub_key = SERVICE_STT_SUBKEY.get(cur, "model") if block == "stt" \
+        else SERVICE_TTS_SUBKEY.get(cur, "voice")
+    check_set = SERVICE_STT_MODELS if block == "stt" else SERVICE_TTS_VOICES
+    if not check_set:
+        return lines
+    sub_head = r'^  ' + re.escape(cur) + r':'
+    sub_idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip() and re.match(sub_head, ln):
+            sub_idx = i
+            break
+    if sub_idx is None:
+        return lines
+    # Modell-Kind im Sub-Block nur entfernen, wenn es ein Atlas-Service-Wert ist;
+    # danach Kinderlosigkeit -> Sub-Block-Header gleich mit weg (kein Skelett)
+    is_atlas = False
+    for ln in lines[sub_idx + 1:]:
+        if not ln.strip():
+            continue
+        if ln[:1].isspace():
+            m0 = re.match(r'^    [a-z_0-9]+:\s*(.*?)\s*$', ln)
+            if m0 and m0.group(1).strip().strip('"').strip("'") in check_set:
+                is_atlas = True
+            if is_atlas and m0 and m0.group(1).strip().strip('"').strip("'"):
+                # erster gesetzter Wert identifiziert den Atlas-Service-Wert
+                break
+        else:
+            break
+    if is_atlas:
+        # Der Sub-Block ist Atlas-geschrieben (Katalogwert) -> komplett entfernen
+        # (Header + Kinder), kein leeres Skelett hinterlassen.
+        end = sub_idx + 1
+        while end < len(lines) and lines[end] and len(lines[end]) - len(lines[end].lstrip()) > 2:
+            end += 1
+        del lines[sub_idx:end]
+    return lines
 
 
 def _patch_service_block(lines, block, provider, model):
@@ -1169,56 +1236,13 @@ def _patch_service_block(lines, block, provider, model):
                 add += [f"  {provider}:", f"    {sub_key}: {_yq(model)}"]
             return lines + add, False
         return lines, False
+    # VOR dem provider-Patch: evtl. alten Atlas-Sub-Block (anderer Provider) aufräumen —
+    # cur ist NUR hier noch lesbar; danach ist provider schon überschrieben/entfernt.
+    lines = _clean_service_sub(lines, block, keep_provider=provider or None)
     # provider-Kind setzen/entfernen
     lines, _, _ = _patch_block_kids(lines, header_re, {"provider": provider},
                                     r'^  (provider):')
     if not provider:
-        # Reset: AUCH den Modell-Wert räumen, den ATLAS selbst geschrieben hat
-        # (erkennbar am Service-Wert; fremde manuelle Sub-Block-Konfiguration bleibt unberührt)
-        cur = None
-        hstart = None
-        for i, ln in enumerate(lines):
-            if not ln.strip():
-                continue
-            if re.match(header_re, ln):
-                hstart = i
-                break
-        if hstart is not None:
-            for j in range(hstart + 1, len(lines)):
-                ln = lines[j]
-                if not ln.strip():
-                    continue
-                if ln[:1].isspace():
-                    m0 = re.match(r'^  provider:\s*(.*?)\s*$', ln.strip())
-                    if m0:
-                        cur = m0.group(1).strip().strip('"').strip("'")
-                else:
-                    break
-        if cur:
-            sub_key = SERVICE_STT_SUBKEY.get(cur, "model") if block == "stt" \
-                else SERVICE_TTS_SUBKEY.get(cur, "voice")
-            check_set = SERVICE_STT_MODELS if block == "stt" else SERVICE_TTS_VOICES
-            sub_head = r'^  ' + re.escape(cur) + r':'
-            sub_idx = None
-            for i, ln in enumerate(lines):
-                if ln.strip() and re.match(sub_head, ln):
-                    sub_idx = i
-                    break
-            if sub_idx is not None:
-                # Modell-Kind im Sub-Block nur entfernen, wenn es ein Atlas-Service-Wert ist
-                for ln in lines[sub_idx + 1:]:
-                    if not ln.strip():
-                        continue
-                    if ln[:1].isspace():
-                        m0 = re.match(r'^    [a-z_0-9]+:\s*(.*?)\s*$', ln.strip())
-                        if m0 and m0.group(1).strip().strip('"').strip("'") in check_set:
-                            lines, _, _ = _patch_block_kids(
-                                lines, sub_head, {sub_key: ""},
-                                r'^    (' + '|'.join(re.escape(k) for k in
-                                                     ("model", "model_id", "voice", "voice_id")) + r'):')
-                            break
-                    else:
-                        break
         return lines, True
     # Unter-Block des Ziel-Providers
     sub_key = SERVICE_STT_SUBKEY.get(provider, "model") if block == "stt" \
@@ -1276,8 +1300,12 @@ def _write_hermes_services(services: dict, profile: str = ""):
         SERVICE_TTS_PROVIDER_MAP.get(str(services.get("tts_voice") or "").strip(), "")
     tv = str(services.get("tts_voice") or "").strip()
     head, tail = _split_aux_tail(open(path, "r", encoding="utf-8").read().splitlines())
-    head, _ = _patch_service_block(head, "stt", sp, sm)
-    head, _ = _patch_service_block(head, "tts", tp, tv)
+    # Nur Blöcke anfassen, deren Felder der Client auch gesendet hat — ein „nur STT“-Save
+    # darf den TTS-Block nicht ausradieren (und umgekehrt).
+    if "stt_provider" in services or "stt_model" in services:
+        head, _ = _patch_service_block(head, "stt", sp, sm)
+    if "tts_provider" in services or "tts_voice" in services:
+        head, _ = _patch_service_block(head, "tts", tp, tv)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(head + tail).rstrip() + "\n")
     return True, f"Sprach-Dienste aktualisiert (STT={sm or 'Standard'}, TTS={tv or 'Standard'})"
