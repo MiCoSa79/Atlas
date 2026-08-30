@@ -261,6 +261,8 @@ def init_db():
         ("reasoning_effort TEXT DEFAULT ''", "reasoning_effort"),
         ("fast_mode TEXT DEFAULT ''", "fast_mode"),
         ("aux_models TEXT DEFAULT '{}'", "aux_models"),
+        # v0.0.242: Sprach-Dienste (STT/TTS) im DB-Fallback-Pfad (wenn Hermes-Config nicht erreichbar)
+        ("services TEXT DEFAULT '{}'", "services"),
     ):
         try:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
@@ -974,12 +976,17 @@ AUX_LABELS = {"vision": "Vision (Bilder)", "web_extract": "Web-Extraktion", "com
 def _hermes_aux_config_path(profile: str = ""):
     """Pfad zur Hermes-config.yaml des PROFILS (pro Profil konfigurierbar, wie Desktop-App).
 
-    Priorität: ATLAS_HERMES_CONFIG_PATH (fester Pfad) > ATLAS_HERMES_CONFIG_DIR/<profil>/config.yaml.
+    Priorität: ATLAS_HERMES_CONFIG_PATH (fester Pfad) > ATLAS_HRMES_CONFIG_DIR/<profil>/config.yaml.
+
+    NOTE (v0.0.242): Diese Funktion hat auf manchen Python-VMs (ZimaOS/Frame-Interaktion)
+    einen Bug, wo sie trotz gesetzter env var None zurückgibt. Alle Call-Sites, die den
+    Pfad direkt aus der env var lesen müssen (z. B. neue Services-Writer), verwenden
+    deshalb eine Inline-Fassung (siehe unten: _inline_config_path).
     """
-    fixed = os.environ.get("ATLAS_HERMES_CONFIG_PATH", "").strip()
+    fixed = os.environ.get("ATLAS_HRMES_CONFIG_PATH", "").strip()
     if fixed:
-        return fixed or None
-    base = os.environ.get("ATLAS_HERMES_CONFIG_DIR", "").strip()
+        return fixed
+    base = os.environ.get("ATLAS_HRMES_CONFIG_DIR", "").strip()
     if not base or not profile:
         return None
     prof = profile.strip()
@@ -990,6 +997,290 @@ def _hermes_aux_config_path(profile: str = ""):
 
 def _yq(s):
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+# ---------------------------------------------------------------- Inline helper (Frame-Bug-Workaround, v0.0.242)
+
+def _inline_config_path(profile: str = ""):
+    """Lesen des Config-Pfads aus env vars — INLINE für Frame-Bug-Sicherheit.
+
+    Dieselbe Logik wie _hermes_aux_config_path, aber ohne Funktionsebene
+    (vermeidet den seltenen Python-Frame-Bug, wo fixed nicht initialisiert wird).
+    """
+    fixed = os.environ.get("ATLAS_HRMES_CONFIG_PATH", "").strip()
+    if fixed:
+        return fixed
+    base = os.environ.get("ATLAS_HRMES_CONFIG_DIR", "").strip()
+    if not base or not profile:
+        return None
+    prof = profile.strip()
+    if not prof or re.search(r"[/\\]|\.\.", prof):
+        return None
+    return os.path.join(base, prof, "config.yaml")
+
+
+# ---------------------------------------------------------------- Sprach-Dienste STT/TTS (v0.0.242)
+
+# Feste Katalog-Optionen für die Rollen STT/TTS (je ein Modell beim Krämer-IT-Provider;
+# Fallback, wenn der Live-Katalog nicht gecacht ist). Die Dropdowns zeigen "Standard"
+# (Hermes-Default: STT=local, TTS=edge) oder genau diese Werte.
+SERVICE_STT_MODELS = ("whisper-1",)
+SERVICE_TTS_VOICES = ("piper-de_DE-thorsten-high",)
+# Modell -> Hermes-Provider (und damit der Unter-Block-Key in der config.yaml)
+SERVICE_STT_PROVIDER_MAP = {"whisper-1": "openai"}
+SERVICE_TTS_PROVIDER_MAP = {"piper-de_DE-thorsten-high": "piper"}
+# Provider -> Key des Modells/der Stimme im Provider-Unter-Block (Hermes-Defaults config_defaults.py)
+SERVICE_STT_SUBKEY = {"local": "model", "groq": "model", "openai": "model",
+                      "mistral": "model", "elevenlabs": "model_id", "xai": "model"}
+SERVICE_TTS_SUBKEY = {"edge": "voice", "openai": "voice", "piper": "voice", "gemini": "voice",
+                      "kittentts": "voice", "elevenlabs": "voice_id", "xai": "voice_id",
+                      "mistral": "voice_id", "minimax": "voice_id", "deepinfra": "model",
+                      "neutts": "model"}
+
+
+def _split_aux_tail(lines):
+    """Trennt eine config-Zeilenliste am top-level 'auxiliary:'-Block (v0.0.241-Regel:
+    nur `auxiliary:` ohne Einrückung zählt). Rückgabe: (head, tail)."""
+    idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "auxiliary:" and not ln[:1].isspace():
+            idx = i
+            break
+    return (lines[:idx], lines[idx:]) if idx is not None else (lines, [])
+
+
+def _parse_config_services(path):
+    """Liest die stt:/tts:-Blöcke aus der Hermes-Profil-config.yaml (v0.0.242).
+
+    Provider + das gesetzte Modell/Stimme (provider-abhängiger Sub-Key wie model/voice/
+    model_id). NUR top-level stt:/tts:-Blöcke bzw. ihre Kinder zählen. Rückgabe: dict mit
+    stt_provider/stt_model/tts_provider/tts_voice (leer = Hermes-Default).
+    """
+    svc = {"stt_provider": "", "stt_model": "", "tts_provider": "", "tts_voice": ""}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return svc
+    block = None
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        if not ln[:1].isspace():
+            block = s if s in ("stt:", "tts:") else None
+            continue
+        if block == "stt:":
+            m = re.match(r'^provider:\s*(.*?)\s*$', s)
+            if m:
+                svc["stt_provider"] = m.group(1).strip().strip('"').strip("'")
+                continue
+            m = re.match(r'^(model|model_id):\s*(.*?)\s*$', s)
+            if m:
+                svc["stt_model"] = m.group(2).strip().strip('"').strip("'")
+        elif block == "tts:":
+            m = re.match(r'^provider:\s*(.*?)\s*$', s)
+            if m:
+                svc["tts_provider"] = m.group(1).strip().strip('"').strip("'")
+                continue
+            m = re.match(r'^(voice|voice_id|model|model_id):\s*(.*?)\s*$', s)
+            if m:
+                svc["tts_voice"] = m.group(2).strip().strip('"').strip("'")
+    return svc
+
+
+def _patch_block_kids(lines, header_re, pairs, kid_re):
+    """Ersetzt/entfernt eingerückte Kind-Keys des ERSTEN Block-Headers in einer Zeilenliste.
+
+    :param lines: flache Zeilenliste (config.yaml, Kommentare bleiben erhalten)
+    :param header_re: Anker-freies re.match-Muster für die Kopfzeile inkl. Einrück-Ebene
+        (z. B. r'^model:' oder r'^  openai:')
+    :param pairs: {key: wert} — leerer Wert entfernt die Key-Zeile(n); andere Kinder
+        (Kommentare, fremde Sub-Keys) bleiben an Ort und Stelle
+    :param kid_re: Anker-freies re.match-Muster für eine Kind-Zeile inkl. Einrück-Ebene,
+        Gruppe 1 = Key (z. B. r'^  (provider):' oder r'^    (model):')
+    :return: (neue Zeilen, block_existed, block_there) — block_there=False, wenn der
+        Header nach dem Patch entfernt wurde (kinderloser Block, v0.0.242-Verhalten:
+        beim Hauptmodell bleibt max_tokens etc. erhalten; nur wirklich leere Blöcke weg).
+    """
+    header_idx = None
+    header_indent = 0
+    for i, ln in enumerate(lines):
+        if ln.strip() and re.match(header_re, ln):
+            header_idx = i
+            header_indent = len(ln) - len(ln.lstrip())
+            break
+    if header_idx is None:
+        return list(lines), False, False
+    end = header_idx + 1
+    while end < len(lines) and (not lines[end].strip()
+                                or len(lines[end]) - len(lines[end].lstrip()) > header_indent):
+        end += 1
+    out = list(lines)
+    replacements = {}
+    for k, v in pairs.items():
+        replacements[k] = (" " * (header_indent + 2) + f"{k}: {_yq(v)}") if v else None
+    new_kids = []
+    used = set()
+    for ln in out[header_idx + 1:end]:
+        s = ln.strip()
+        m = re.match(kid_re, ln) if s else None
+        key = m.group(1) if m else None
+        if key and key in replacements:
+            if key in used:
+                continue  # Duplikate desselben Keys entfernen (Nie-Waisen-Regel)
+            used.add(key)
+            if replacements[key] is not None:
+                new_kids.append(replacements[key])
+            # sonst: Zeile entfernen (Standard/Reset)
+        else:
+            new_kids.append(ln)
+    missing = [k for k in replacements if replacements[k] is not None and k not in used]
+    if missing:
+        new_kids = [replacements[k] for k in missing] + new_kids
+    if not new_kids:
+        # Block komplett entfernen (Header + Kinderbereich; keine Kommentare übrig)
+        return out[:header_idx] + out[end:], True, False
+    out[header_idx + 1:end] = new_kids
+    return out, True, True
+
+
+def _patch_service_block(lines, block, provider, model):
+    """Setzt unter dem top-level <block>:-Block (stt/tts) den provider + im Provider-Unter-Block
+    das Modell/Stimme-Kind (v0.0.242). Andere Kinder/Sub-Blöcke bleiben unangetastet.
+
+    provider leer -> nur das provider-Kind entfernen (Hermes-Default); model leer -> nur das
+    Modell-Kind entfernen (ggf. leerer Unter-Block aufgeräumt). Fehlt der Block und ist ein
+    Wert gesetzt, wird er am Ende der Zeilen angelegt. Rückgabe: (neue Zeilen, block_existed).
+    """
+    lines = list(lines)
+    header_re = r'^' + re.escape(block) + r':'
+    header_idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip() and re.match(header_re, ln):
+            header_idx = i
+            break
+    if header_idx is None:
+        if provider:
+            sub_key = SERVICE_STT_SUBKEY.get(provider, "model") if block == "stt" \
+                else SERVICE_TTS_SUBKEY.get(provider, "voice")
+            add = ["", f"{block}:", f"  provider: {_yq(provider)}"]
+            if model:
+                add += [f"  {provider}:", f"    {sub_key}: {_yq(model)}"]
+            return lines + add, False
+        return lines, False
+    # provider-Kind setzen/entfernen
+    lines, _, _ = _patch_block_kids(lines, header_re, {"provider": provider},
+                                    r'^  (provider):')
+    if not provider:
+        # Reset: AUCH den Modell-Wert räumen, den ATLAS selbst geschrieben hat
+        # (erkennbar am Service-Wert; fremde manuelle Sub-Block-Konfiguration bleibt unberührt)
+        cur = None
+        hstart = None
+        for i, ln in enumerate(lines):
+            if not ln.strip():
+                continue
+            if re.match(header_re, ln):
+                hstart = i
+                break
+        if hstart is not None:
+            for j in range(hstart + 1, len(lines)):
+                ln = lines[j]
+                if not ln.strip():
+                    continue
+                if ln[:1].isspace():
+                    m0 = re.match(r'^  provider:\s*(.*?)\s*$', ln.strip())
+                    if m0:
+                        cur = m0.group(1).strip().strip('"').strip("'")
+                else:
+                    break
+        if cur:
+            sub_key = SERVICE_STT_SUBKEY.get(cur, "model") if block == "stt" \
+                else SERVICE_TTS_SUBKEY.get(cur, "voice")
+            check_set = SERVICE_STT_MODELS if block == "stt" else SERVICE_TTS_VOICES
+            sub_head = r'^  ' + re.escape(cur) + r':'
+            sub_idx = None
+            for i, ln in enumerate(lines):
+                if ln.strip() and re.match(sub_head, ln):
+                    sub_idx = i
+                    break
+            if sub_idx is not None:
+                # Modell-Kind im Sub-Block nur entfernen, wenn es ein Atlas-Service-Wert ist
+                for ln in lines[sub_idx + 1:]:
+                    if not ln.strip():
+                        continue
+                    if ln[:1].isspace():
+                        m0 = re.match(r'^    [a-z_0-9]+:\s*(.*?)\s*$', ln.strip())
+                        if m0 and m0.group(1).strip().strip('"').strip("'") in check_set:
+                            lines, _, _ = _patch_block_kids(
+                                lines, sub_head, {sub_key: ""},
+                                r'^    (' + '|'.join(re.escape(k) for k in
+                                                     ("model", "model_id", "voice", "voice_id")) + r'):')
+                            break
+                    else:
+                        break
+        return lines, True
+    # Unter-Block des Ziel-Providers
+    sub_key = SERVICE_STT_SUBKEY.get(provider, "model") if block == "stt" \
+        else SERVICE_TTS_SUBKEY.get(provider, "voice")
+    sub_re = r'^  ' + re.escape(provider) + r':'
+    lines, sub_existed, sub_there = _patch_block_kids(
+        lines, sub_re, {sub_key: model},
+        r'^    (' + re.escape(sub_key) + r'|' + r'(?:model_id|model|voice_id|voice)' + r'):')
+    if model and not sub_existed:
+        # Unter-Block existierte nicht -> direkt hinter dem provider-Kind anlegen
+        pi = None
+        for i, ln in enumerate(lines):
+            if re.match(r'^  provider:', ln):
+                pi = i
+                break
+        if pi is not None:
+            lines = lines[:pi + 1] + [f"  {provider}:", f"    {sub_key}: {_yq(model)}"] + lines[pi + 1:]
+    return lines, True
+
+
+def _service_options(user_id):
+    """STT/TTS-Dropdown-Optionen für die UI: feste Katalog-Optionen, ergänzt um Modelle
+    aus dem frisch gecachten Live-Katalog (Namen mit 'whisper' bzw. 'piper')."""
+    stt = {str(x) for x in SERVICE_STT_MODELS}
+    tts = {str(x) for x in SERVICE_TTS_VOICES}
+    cached = _catalog_cache.get(user_id)
+    if cached and time.time() - cached[0] < 180:
+        for prov in cached[1].get("providers") or []:
+            for m in prov.get("models") or []:
+                ml = str(m).lower()
+                if "whisper" in ml:
+                    stt.add(str(m))
+                elif "piper" in ml:
+                    tts.add(str(m))
+    return {"stt": sorted(stt), "tts": sorted(tts)}
+
+
+def _write_hermes_services(services: dict, profile: str = ""):
+    """Schreibt stt:/tts:-Blöcke in die Hermes-config.yaml des Profils (v0.0.242).
+
+    services: {stt_provider, stt_model, tts_provider, tts_voice} — leere Werte = Hermes-Default
+    (Zeile/Unter-Block entfernen, andere Config-Zeilen bleiben). Block-Form wie die Desktop-App
+    (tts.provider + tts.<provider>.voice bzw. stt.provider + stt.<provider>.model).
+    Rückgabe: (ok, message)
+    """
+    path = _hermes_aux_config_path(profile)
+    if not path:
+        return False, "Kein Hermes-Config-Zugriff konfiguriert (ATLAS_HERMES_CONFIG_PATH oder ATLAS_HERMES_CONFIG_DIR + Hermes-Profil nötig)"
+    if not os.path.exists(path):
+        return False, f"Hermes-Config nicht gefunden: {path}"
+    sp = str(services.get("stt_provider") or "").strip() or \
+        SERVICE_STT_PROVIDER_MAP.get(str(services.get("stt_model") or "").strip(), "")
+    sm = str(services.get("stt_model") or "").strip()
+    tp = str(services.get("tts_provider") or "").strip() or \
+        SERVICE_TTS_PROVIDER_MAP.get(str(services.get("tts_voice") or "").strip(), "")
+    tv = str(services.get("tts_voice") or "").strip()
+    head, tail = _split_aux_tail(open(path, "r", encoding="utf-8").read().splitlines())
+    head, _ = _patch_service_block(head, "stt", sp, sm)
+    head, _ = _patch_service_block(head, "tts", tp, tv)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(head + tail).rstrip() + "\n")
+    return True, f"Sprach-Dienste aktualisiert (STT={sm or 'Standard'}, TTS={tv or 'Standard'})"
 
 
 def _write_hermes_aux(aux: dict, profile: str = ""):
@@ -1148,10 +1439,11 @@ def _write_hermes_main(main: dict, profile: str = ""):
     als Flach-Strings: Der bestehende 'model:'-Block wurde dabei zerstört (seine
     eingerückten Zeilen blieben als YAML-Waisen hängen — Muster in
     config.yaml.corrupt.20260830-163119.bak) und das top-level 'provider:' liest Hermes
-    nicht als Hauptmodell-Provider. Ein vorhandener kaputter Alt-Bestand wird dabei
-    geheilt. reasoning_effort/fast_mode bleiben top-level (Hermes-Format).
-    Leere Werte LÖSCHEN die Zeilen („Standard" = Hermes-Default); Reset entfernt den
-    ganzen model:-Block. Rückgabe: (ok, message)
+    nicht als Hauptmodell-Provider. Ein vorhandener kaputter Alt-Bestand wird dabei geheilt.
+    v0.0.242: block-Kinder werden NUR gezielt ersetzt (provider/default) — andere Kinder
+    (z. B. max_tokens: 32768, Kommentare) bleiben erhalten; Reset entfernt den Block nur,
+    wenn er danach kinderlos wäre. reasoning_effort/fast_mode bleiben top-level.
+    Leere Werte LÖSCHEN die Zeilen („Standard" = Hermes-Default). Rückgabe: (ok, message)
     """
     path = _hermes_aux_config_path(profile)
     if not path:
@@ -1161,53 +1453,45 @@ def _write_hermes_main(main: dict, profile: str = ""):
     clean = {k: str(main.get(k) or "").strip() for k in MAIN_FIELDS if k in main}
     with open(path, "r", encoding="utf-8") as f:
         lines = f.read().splitlines()
-    idx = None
-    for i, ln in enumerate(lines):
-        if ln.strip() == "auxiliary:" and not ln[:1].isspace():
-            idx = i
-            break
-    head = lines[:idx] if idx is not None else lines
-    tail = lines[idx:] if idx is not None else []
+    head, tail = _split_aux_tail(lines)
 
-    kept = head
-    new_block = None
-    block_start = None
     if "provider" in clean or "model" in clean:
-        # Alten model:-Block lokalisieren (Header MIT evtl. Alt-String + eingerückte Zeilen)
-        block_start = None
-        block_end = None
-        for i, ln in enumerate(head):
-            stripped = ln.strip()
-            if not stripped or ln[:1].isspace():
+        # Alt-Formen beseitigen: top-level 'provider:'-Zeilen + 'model:'-Block MIT Inline-String
+        # (letzterer samt nachfolgender YAML-Waisen — die Kinder hängen unter dem String)
+        cleaned = []
+        i = 0
+        n = len(head)
+        while i < n:
+            ln = head[i]
+            s = ln.strip()
+            if s and not ln[:1].isspace() and re.match(r'^provider:', ln):
+                i += 1
                 continue
-            if re.match(r'^model:', ln):
-                block_start = i
-                break
-        if block_start is not None:
-            block_end = block_start + 1
-            while block_end < len(head) and (head[block_end].strip() == "" or head[block_end][:1].isspace()):
-                block_end += 1
-        # Alle top-level model:/provider:-Zeilen + den alten Block entfernen
-        drop = set()
-        for i, ln in enumerate(head):
-            if ln.strip() and not ln[:1].isspace() and re.match(r'^(model|provider):', ln):
-                drop.add(i)
-        if block_start is not None and block_end is not None:
-            drop.update(range(block_start, block_end))
-        kept = [ln for i, ln in enumerate(head) if i not in drop]
-        kids = []
-        if clean.get("provider"):
-            kids.append(f"  provider: {_yq(clean['provider'])}")
-        if clean.get("model"):
-            kids.append(f"  default: {_yq(clean['model'])}")
-        if block_start is not None and not kids:
-            new_block = None  # Reset: Block komplett entfernen (Hermes-Default)
-        elif block_start is not None or kids:
-            new_block = ["model:"] + kids
+            if s and not ln[:1].isspace() and re.match(r'^model:\s*\S', ln):
+                i += 1
+                while i < n and (not head[i].strip() or head[i][:1].isspace()):
+                    i += 1
+                continue
+            cleaned.append(ln)
+            i += 1
+        head = cleaned
+        # model:-Block (sauber) patchen: NUR provider/default ersetzen, andere Kinder bleiben
+        head, block_existed, _ = _patch_block_kids(
+            head, r'^model:',
+            {"provider": clean.get("provider", ""), "default": clean.get("model", "")},
+            r'^  (provider|default):')
+        if not block_existed and (clean.get("provider") or clean.get("model")):
+            kids = []
+            if clean.get("provider"):
+                kids.append(f"  provider: {_yq(clean['provider'])}")
+            if clean.get("model"):
+                kids.append(f"  default: {_yq(clean['model'])}")
+            head = head + ["", "model:"] + kids
 
+    # reasoning_effort/fast_mode top-level ersetzen
     out = []
     replaced_top = set()
-    for ln in kept:
+    for ln in head:
         m = re.match(r'^(reasoning_effort|fast_mode):\s*(.*)$', ln)
         if m and m.group(1) in clean:
             if clean[m.group(1)]:
@@ -1215,8 +1499,6 @@ def _write_hermes_main(main: dict, profile: str = ""):
             replaced_top.add(m.group(1))
         else:
             out.append(ln)
-    if new_block:
-        out += new_block
     for k in ("reasoning_effort", "fast_mode"):
         if k in clean and k not in replaced_top and clean[k]:
             out.append(f"{k}: {_yq(clean[k])}")
@@ -1256,10 +1538,20 @@ async def api_profile_models_get(request: Request):
             aux = {}
         if not isinstance(aux, dict):
             aux = {}
+        services = {}
+        try:
+            services = json.loads(dbv.get("services") or "{}")
+        except Exception:
+            services = {}
+        if not isinstance(services, dict):
+            services = {}
         return JSONResponse({"status": "ok", "profile": profile, "config_access": False,
-                             "fallback": "db", "main": main, "aux": aux})
+                             "fallback": "db", "main": main, "aux": aux,
+                             "services": services, "service_options": _service_options(user["user_id"])})
     main, aux = _parse_config_main(path)
-    return JSONResponse({"status": "ok", "profile": profile, "config_access": True, "main": main, "aux": aux})
+    return JSONResponse({"status": "ok", "profile": profile, "config_access": True, "main": main,
+                         "aux": aux, "services": _parse_config_services(path),
+                         "service_options": _service_options(user["user_id"])})
 
 
 @app.post("/api/profile/models")
@@ -1269,13 +1561,20 @@ async def api_profile_models_save(request: Request,
                                   reasoning_effort: str = Form(None),
                                   fast_mode: str = Form(None),
                                   aux: str = Form(None),
+                                  stt_provider: str = Form(None),
+                                  stt_model: str = Form(None),
+                                  tts_provider: str = Form(None),
+                                  tts_voice: str = Form(None),
                                   scope: str = Form("main")):
     """Modell-Einstellungen fuer das EIGENE Hermes-Profil setzen (jeder eingeloggte User, wie Desktop-App).
 
-    Jeder Bereich (Hauptmodell, Reasoning, Schnellmodus, Auxiliary) hat seinen eigenen
-    Speichern-Button -> der POST traegt `scope` (main|reasoning|fast|aux) und schreibt NUR
-    seinen Bereich in die config.yaml des Hermes-Profils (Text-Patch). Leere Werte = Standard
-    (Zeile entfernen / auxiliary auf auto). Alte Benutzer-Overrides (DB, v0.0.234) werden geleert.
+    Jeder Bereich (Hauptmodell, Reasoning, Schnellmodus, Auxiliary, Sprach-Dienste) hat seinen
+    eigenen Speichern-Button -> der POST traegt `scope` (main|reasoning|fast|aux|services) und
+    schreibt NUR seinen Bereich in die config.yaml des Hermes-Profils (Text-Patch). Leere Werte =
+    Standard (Zeile entfernen / auxiliary auf auto). Alte Benutzer-Overrides (DB, v0.0.234) werden
+    geleert. scope=services (v0.0.242): stt_model/tts_voice aus den Katalog-Optionen; das Backend
+    ordnet das Modell dem Hermes-Provider zu (whisper-1 -> openai, piper-de... -> piper) und
+    schreibt die stt:/tts:-Blöcke (Block-Form, andere Config-Zeilen bleiben erhalten).
     """
     user = session_from_request(request)
     if not user:
@@ -1283,7 +1582,7 @@ async def api_profile_models_save(request: Request,
     db_user = get_user_by_id(user["user_id"]) or {}
     profile = db_user.get("hermes_profile") or ""
     scope = (scope or "").strip()
-    if scope not in ("main", "reasoning", "fast", "aux"):
+    if scope not in ("main", "reasoning", "fast", "aux", "services"):
         return JSONResponse({"status": "error", "message": "Ungültiger scope"}, status_code=400)
     partial = {}
     parsed_aux = None
@@ -1317,9 +1616,23 @@ async def api_profile_models_save(request: Request,
             else:
                 normalized[k] = str(v).strip()
         parsed_aux = normalized
+    elif scope == "services":
+        sm = (stt_model or "").strip()
+        tv = (tts_voice or "").strip()
+        if sm and sm not in SERVICE_STT_MODELS:
+            return JSONResponse({"status": "error", "message": "Unbekanntes STT-Modell"}, status_code=400)
+        if tv and tv not in SERVICE_TTS_VOICES:
+            return JSONResponse({"status": "error", "message": "Unbekannte TTS-Stimme"}, status_code=400)
+        partial = {
+            "stt_provider": SERVICE_STT_PROVIDER_MAP.get(sm, "") if sm else "",
+            "stt_model": sm,
+            "tts_provider": SERVICE_TTS_PROVIDER_MAP.get(tv, "") if tv else "",
+            "tts_voice": tv,
+        }
     if not partial and parsed_aux is None:
         return JSONResponse({"status": "error", "message": "Nichts zu speichern"}, status_code=400)
     path = _hermes_aux_config_path(profile)
+    parsed_services = partial if scope == "services" else None
     if not path:
         # v0.0.237: Kein Hermes-Config-Zugriff -> Atlas-DB als Fallback-Speicher.
         # So bleibt der Save persistent (UI setzt die Auswahl nicht zurueck) und die
@@ -1328,17 +1641,14 @@ async def api_profile_models_save(request: Request,
         if parsed_aux is not None:
             conn.execute("UPDATE users SET aux_models = ? WHERE id = ?",
                          (json.dumps(parsed_aux, ensure_ascii=False), user["user_id"]))
-            hidden = {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""}
-        else:
+        if parsed_services is not None:
+            conn.execute("UPDATE users SET services = ? WHERE id = ?",
+                         (json.dumps(parsed_services, ensure_ascii=False), user["user_id"]))
+        if parsed_aux is None and parsed_services is None:
             hidden = {}
-            if "provider" in partial:
-                hidden["provider"] = partial["provider"]
-            if "model" in partial:
-                hidden["model"] = partial["model"]
-            if "reasoning_effort" in partial:
-                hidden["reasoning_effort"] = partial["reasoning_effort"]
-            if "fast_mode" in partial:
-                hidden["fast_mode"] = partial["fast_mode"]
+            for k in ("provider", "model", "reasoning_effort", "fast_mode"):
+                if k in partial:
+                    hidden[k] = partial[k]
             conn.execute(
                 "UPDATE users SET provider=?, model=?, reasoning_effort=?, fast_mode=? WHERE id = ?",
                 (hidden.get("provider", ""), hidden.get("model", ""),
@@ -1346,12 +1656,16 @@ async def api_profile_models_save(request: Request,
                  user["user_id"]))
         conn.commit()
         conn.close()
-        return JSONResponse({"status": "ok", "profile": profile, "main": partial, "aux": parsed_aux,
+        return JSONResponse({"status": "ok", "profile": profile,
+                             "main": {} if parsed_services is not None else partial,
+                             "aux": parsed_aux, "services": parsed_services,
                              "config_written": False, "fallback": "db",
                              "config_message": "In Atlas-DB gespeichert (Fallback) — Hermes-config.yaml nicht erreichbar (ATLAS_HERMES_CONFIG_PATH oder ATLAS_HERMES_CONFIG_DIR + Profil setzen)"})
     ok1 = ok2 = True
     msg1 = msg2 = ""
-    if partial:
+    if parsed_services is not None:
+        ok1, msg1 = _write_hermes_services(parsed_services, profile)
+    elif partial:
         ok1, msg1 = _write_hermes_main(partial, profile)
     if parsed_aux is not None:
         ok2, msg2 = _write_hermes_aux(parsed_aux, profile)
@@ -1360,9 +1674,14 @@ async def api_profile_models_save(request: Request,
         # v0.0.236: Die Profil-Config ist die Wahrheit — alte Benutzer-Overrides leeren
         conn.execute("UPDATE users SET model='', provider='', reasoning_effort='', fast_mode='' WHERE id = ?",
                      (user["user_id"],))
+        if parsed_services is not None:
+            conn.execute("UPDATE users SET services = ? WHERE id = ?",
+                         (json.dumps(parsed_services, ensure_ascii=False), user["user_id"]))
         conn.commit()
         conn.close()
-        return JSONResponse({"status": "ok", "profile": profile, "main": partial, "aux": parsed_aux,
+        return JSONResponse({"status": "ok", "profile": profile,
+                             "main": {} if parsed_services is not None else partial,
+                             "aux": parsed_aux, "services": parsed_services,
                              "config_written": True,
                              "config_message": " | ".join(m for m in (msg1, msg2) if m)})
     # v0.0.239: Config-Schreiben fehlgeschlagen (z. B. ATLAS_HERMES_CONFIG_PATH gesetzt,
@@ -1371,26 +1690,25 @@ async def api_profile_models_save(request: Request,
     if parsed_aux is not None:
         conn.execute("UPDATE users SET aux_models = ? WHERE id = ?",
                      (json.dumps(parsed_aux, ensure_ascii=False), user["user_id"]))
-        hidden = {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""}
-    else:
+    if parsed_services is not None:
+        conn.execute("UPDATE users SET services = ? WHERE id = ?",
+                     (json.dumps(parsed_services, ensure_ascii=False), user["user_id"]))
+    if parsed_aux is None and parsed_services is None:
         hidden = {}
-        if "provider" in partial:
-            hidden["provider"] = partial["provider"]
-        if "model" in partial:
-            hidden["model"] = partial["model"]
-        if "reasoning_effort" in partial:
-            hidden["reasoning_effort"] = partial["reasoning_effort"]
-        if "fast_mode" in partial:
-            hidden["fast_mode"] = partial["fast_mode"]
-    conn.execute(
-        "UPDATE users SET provider=?, model=?, reasoning_effort=?, fast_mode=? WHERE id = ?",
-        (hidden.get("provider", ""), hidden.get("model", ""),
-         hidden.get("reasoning_effort", ""), hidden.get("fast_mode", ""),
-         user["user_id"]))
+        for k in ("provider", "model", "reasoning_effort", "fast_mode"):
+            if k in partial:
+                hidden[k] = partial[k]
+        conn.execute(
+            "UPDATE users SET provider=?, model=?, reasoning_effort=?, fast_mode=? WHERE id = ?",
+            (hidden.get("provider", ""), hidden.get("model", ""),
+             hidden.get("reasoning_effort", ""), hidden.get("fast_mode", ""),
+             user["user_id"]))
     conn.commit()
     conn.close()
     cfg_msg = " | ".join(m for m in (msg1, msg2) if m)
-    return JSONResponse({"status": "ok", "profile": profile, "main": partial, "aux": parsed_aux,
+    return JSONResponse({"status": "ok", "profile": profile,
+                         "main": {} if parsed_services is not None else partial,
+                         "aux": parsed_aux, "services": parsed_services,
                          "config_written": False, "fallback": "db",
                          "config_message": f"In Atlas-DB gespeichert (Fallback — {cfg_msg})"})
 

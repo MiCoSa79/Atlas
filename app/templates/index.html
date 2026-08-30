@@ -950,6 +950,29 @@
                     <button id="saveAuxBtn" style="width:auto;padding:8px 16px;font-size:13px;margin:10px 0 4px;">Auxiliary-Models speichern</button>
                     <p class="status-ok" id="p_auxStatus" style="font-size:12px;margin-top:6px;"></p>
                 </div>
+                <!-- Sprach-Dienste STT/TTS (v0.0.242) -->
+                <div id="p_svcPanel" style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);">
+                    <h4 style="font-size:13px;margin:0 0 6px;color:var(--text);">🎤 Sprach-Dienste (STT / TTS) <span style="color:var(--muted);font-weight:400;font-size:11px;">(für das Hermes-Profil oben, wie Desktop-App)</span></h4>
+                    <p class="hint" style="margin:0 0 10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Sprach-zu-Text (STT) für Sprachnachrichten + Text-zu-Sprache (TTS) für Sprachausgabe. Leere Werte = <b>Hermes-Default</b>.</p>
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+                        <div style="flex:1;min-width:200px;">
+                            <label for="p_stt_select" style="display:block;font-size:13px;color:var(--text);margin:0 0 4px;">STT-Modell</label>
+                            <select id="p_stt_select" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                                <option value="">Standard (Hermes-Einstellung)</option>
+                            </select>
+                            <input id="p_stt_custom" type="text" placeholder="z. B. whisper-1" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
+                        </div>
+                        <div style="flex:1;min-width:200px;">
+                            <label for="p_tts_select" style="display:block;font-size:13px;color:var(--text);margin:0 0 4px;">TTS-Stimme</label>
+                            <select id="p_tts_select" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                                <option value="">Standard (Hermes-Einstellung)</option>
+                            </select>
+                            <input id="p_tts_custom" type="text" placeholder="z. B. piper-de_DE-thorsten-high" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
+                        </div>
+                    </div>
+                    <button id="saveSvcBtn" style="width:auto;padding:8px 16px;font-size:13px;margin:6px 0 4px;">Sprach-Dienste speichern</button>
+                    <p class="status-ok" id="p_svcStatus" style="font-size:12px;margin-top:6px;"></p>
+                </div>
             </div>
             </div><!-- /userSettingsPanel (Benutzer-Teil) -->
             <!-- Admin-Einstellungen (nur Admin) -->
@@ -1468,6 +1491,9 @@
         // v0.0.234: Modell & Reasoning (pro Benutzer; werden beim session.create als Overrides mitgeschickt)
         let userModelPrefs = { model: '', provider: '', reasoningEffort: '', fastMode: '' };
         let userAuxModels = {};
+        // v0.0.242: Sprach-Dienste STT/TTS
+        let userSvcPrefs = { stt_model: '', tts_voice: '' };
+        let userSvcOptions = { stt: [], tts: [] };
 
         // (v0.0.234) Werte aus /api/profile-Response in globale Prefs + Felder übernehmen
         // (v0.0.235) Verfügbarer Provider/Modell-Katalog aus dem Hermes-Dashboard (wie Desktop-App)
@@ -1613,17 +1639,20 @@
 
         // (v0.0.236) Modell-Einstellungen kommen aus der HERMES-PROFIL-Config (wie Desktop-App):
         // userModelPrefs = Ist-Zustand [model/provider/reasoning_effort/fast_mode], userAuxModels = Ist-Aux
-        function applyProfileModelsToUi(main, aux) {
+        function applyProfileModelsToUi(main, aux, services, serviceOptions) {
             userModelPrefs = {
                 model: (main && main.model) || '',
                 provider: (main && main.provider) || '',
                 reasoningEffort: (main && main.reasoning_effort) || '',
                 fastMode: (main && main.fast_mode) || ''
             };
-            // v0.0.236: Cache in localStorage — nach Reload stehen die Overrides sofort
-            // (der Boot-Create-Session kommt sonst dem async fetch in die Quere)
+            userSvcPrefs = {
+                stt_model: (services && services.stt_model) || '',
+                tts_voice: (services && services.tts_voice) || ''
+            };
+            userSvcOptions = serviceOptions || { stt: [], tts: [] };
             try { localStorage.setItem('atlas_profile_models', JSON.stringify(userModelPrefs)); } catch (_) {}
-            userAuxModels = (aux && typeof aux === 'object') ? aux : {};
+            try { localStorage.setItem('atlas_svc_models', JSON.stringify(userSvcPrefs)); } catch (_) {}
             if ($('p_reasoning_effort')) $('p_reasoning_effort').value = userModelPrefs.reasoningEffort;
             if ($('p_fast_mode')) $('p_fast_mode').value = userModelPrefs.fastMode;
             // Katalog bereits geladen? -> Selects aktualisieren; sonst übernimmt loadModelCatalog
@@ -1635,6 +1664,7 @@
             fillAuxFields();
             loadModelCatalog();
             loadAuxCatalog();
+            applySvcPrefsToUi();
         }
         function loadProfileModels() {
             // Sofort mit dem zuletzt gespeicherten Stand weiterarbeiten (Overrides wirken ab dem ersten Create nach Reload)
@@ -1646,7 +1676,7 @@
             }
             fetch('/api/profile/models')
                 .then(r => r.json())
-                .then(d => { if (d.status === 'ok') applyProfileModelsToUi(d.main || {}, d.aux || {}); })
+                .then(d => { if (d.status === 'ok') applyProfileModelsToUi(d.main || {}, d.aux || {}, d.services || {}, d.service_options || {}); })
                 .catch(() => {});
         }
 
@@ -2285,6 +2315,83 @@
             saveProfileModelsPost({ scope: 'aux', aux: JSON.stringify(collectAux()) }, 'p_auxStatus',
                 '✓ Auxiliary-Models gespeichert (gilt für das Hermes-Profil oben)');
         });
+        // ---- Sprach-Dienste STT/TTS (v0.0.242) ----
+        function loadSvcPrefs() {
+            try {
+                const cached = JSON.parse(localStorage.getItem('atlas_svc_models') || 'null');
+                if (cached && typeof cached === 'object') userSvcPrefs = cached;
+            } catch (_) {}
+        }
+        function applySvcPrefsToUi() {
+            const sttSel = $('p_stt_select');
+            const sttIn = $('p_stt_custom');
+            const ttsSel = $('p_tts_select');
+            const ttsIn = $('p_tts_custom');
+            if (!sttSel || !sttIn || !ttsSel || !ttsIn) return;
+            if (sttSel.options.length <= 1) {
+                (userSvcOptions.stt || []).forEach(v => {
+                    const o = document.createElement('option');
+                    o.value = v; o.textContent = v;
+                    sttSel.appendChild(o);
+                });
+            }
+            if (ttsSel.options.length <= 1) {
+                (userSvcOptions.tts || []).forEach(v => {
+                    const o = document.createElement('option');
+                    o.value = v; o.textContent = v;
+                    ttsSel.appendChild(o);
+                });
+            }
+            const curStt = userSvcPrefs.stt_model || '';
+            if (curStt) {
+                sttIn.value = curStt;
+                const inSel = Array.from(sttSel.options).some(o => o.value === curStt);
+                if (inSel) { sttSel.value = curStt; sttIn.style.display = 'none'; }
+                else { sttSel.value = ''; sttIn.value = curStt; sttIn.style.display = ''; }
+            } else { sttSel.value = ''; sttIn.value = ''; sttIn.style.display = 'none'; }
+            const curTts = userSvcPrefs.tts_voice || '';
+            if (curTts) {
+                ttsIn.value = curTts;
+                const inSel = Array.from(ttsSel.options).some(o => o.value === curTts);
+                if (inSel) { ttsSel.value = curTts; ttsIn.style.display = 'none'; }
+                else { ttsSel.value = ''; ttsIn.value = curTts; ttsIn.style.display = ''; }
+            } else { ttsSel.value = ''; ttsIn.value = ''; ttsIn.style.display = 'none'; }
+        }
+        function attachSvcCustomListeners() {
+            const sttSel = $('p_stt_select');
+            const sttIn = $('p_stt_custom');
+            const ttsSel = $('p_tts_select');
+            const ttsIn = $('p_tts_custom');
+            if (sttSel) sttSel.addEventListener('change', () => {
+                if (sttIn) { sttIn.style.display = 'none'; sttIn.value = ''; }
+            });
+            if (sttIn) sttIn.addEventListener('input', () => { sttSel.value = ''; sttIn.style.display = ''; });
+            if (ttsSel) ttsSel.addEventListener('change', () => {
+                if (ttsIn) { ttsIn.style.display = 'none'; ttsIn.value = ''; }
+            });
+            if (ttsIn) ttsIn.addEventListener('input', () => { ttsSel.value = ''; ttsIn.style.display = ''; });
+        }
+        // --- ENDE Sprach-Dienste ---
+        // Initialisierung beim Boot
+        loadSvcPrefs();
+        attachSvcCustomListeners();
+        $('saveSvcBtn').addEventListener('click', () => {
+            const sttSel = $('p_stt_select');
+            const sttIn = $('p_stt_custom');
+            const ttsSel = $('p_tts_select');
+            const ttsIn = $('p_tts_custom');
+            let sttM = sttSel ? sttSel.value : '';
+            let ttsV = ttsSel ? ttsSel.value : '';
+            if (sttIn && sttIn.style.display !== 'none') sttM = sttIn.value.trim();
+            if (ttsIn && ttsIn.style.display !== 'none') ttsV = ttsIn.value.trim();
+            saveProfileModelsPost(
+                { scope: 'services', stt_model: sttM, tts_voice: ttsV },
+                'p_svcStatus',
+                '✓ Sprach-Dienste gespeichert (gilt für das Hermes-Profil oben)'
+            );
+        });
+
+        // ---- End Sprach-Dienste (v0.0.242) ----
 
         // ---- Markdown-Links klickbar machen (v0.0.163) ----
         // Hermes antwortet mit Markdown: [label](url) und nackten https://-URLs.
