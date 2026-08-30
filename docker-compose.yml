@@ -1,41 +1,59 @@
-version: '3'
-
 services:
   atlas:
     image: micosa79/atlas:latest
     build: .
-    restart: always
-    network_mode: host
+    restart: unless-stopped
+    ports:
+      # Host-Port (links) -> Container-Port 8000 (rechts).
+      # Über die Variable ATLAS_PORT umbenennbar (z.B. ATLAS_PORT=9000 docker compose up -d).
+      - "${ATLAS_PORT:-8899}:8000"
     environment:
-      # ── Atlas-Konfiguration ─────────────────────────────────
-      # ⚠️ BEISPIELWERTE — vor dem ersten Start ersetzen!
+      # ── Alle Variablen sind OPTIONAL — der Container startet ohne jede Angabe ──
       #
-      # HERMES_URL: Gateway-URL zum Hermes-Server.
-      #   Ersetze durch die tatsächliche URL (z.B. http://hermes.local:9119).
-      HERMES_URL: "http://hermes.example.com:9119"
+      # ATLAS_DB: Speicherort der SQLite-Datenbank (User, Einstellungen, hermes_auth).
+      #   Liegt im named volume "atlas-data" und muss normalerweise NICHT gesetzt werden.
+      #   Nur ändern, wenn die DB woanders liegen soll (z.B. eigener Mount).
+      # ATLAS_DB: /data/atlas.db
       #
-      # HERMES_USER / HERMES_PASS: Zugangsdaten für den Hermes-Login.
-      #   Wird in der Datenbank verschlüsselt gespeichert (AES via Fernet).
-      HERMES_USER: "benutzer@example.com"
-      HERMES_PASS: "BeispielPasswort123!"
+      # ATLAS_HERMES_CONFIG_DIR: Basis-Verzeichnis der Hermes-Profile. Dorthin schreibt
+      #   Atlas (seit v0.0.234) die Einstellungen "Modelle für dieses Hermes-Profil"
+      #   (Hauptmodell/Reasoning/Schnellmodus/Auxiliary): <dir>/<profil>/config.yaml.
+      #   Läuft Hermes auf DEMSELBEN Host, hier dessen Profil-Verzeichnis eintragen
+      #   (z.B. /opt/data/profiles) und den volumes-Mount unten anpassen.
+      #   Ohne Zugriff speichert Atlas nur in der eigenen DB (config_written: false),
+      #   der Rest der App funktioniert unverändert.
+      # ATLAS_HERMES_CONFIG_DIR: /data/profiles
       #
-      # ADMIN_SETUP_TOKEN: Token zum Erstellen des ersten Admin-Accounts.
-      #   Wird nur beim ersten Start (leere DB) verwendet.
-      ADMIN_SETUP_TOKEN: "SetzeHierDeinGeheimesToken"
+      # ATLAS_HERMES_CONFIG_PATH: alternativ ein FESTER Dateipfad zur config.yaml
+      #   (hat Vorrang vor CONFIG_DIR). Nur für Sonderfälle, in denen alle Profile
+      #   in einer einzigen Datei liegen.
+      # ATLAS_HERMES_CONFIG_PATH: /data/config.yaml
       #
-      # ATLAS_DB: Pfad zur SQLite-Datenbank im Volume.
-      ATLAS_DB: "/data/atlas.db"
+      # WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN: Passkey-Login. Seit v0.0.229 NUR Fallback —
+      #   die Admin-Settings im Atlas-UI (Profil -> Administration) haben Vorrang.
+      #   RP_ID  = Domain, unter der Atlas erreichbar ist (eTLD+1, ohne Schema/Port)
+      #   ORIGIN = vollständige URL inkl. Schema und Port (https://atlas.beispiel.de)
+      #   Ohne beide Wege bleibt der Passkey-Login verborgen, Passwort-Login geht immer.
+      # WEBAUTHN_RP_ID: atlas.beispiel.de
+      # WEBAUTHN_ORIGIN: https://atlas.beispiel.de
       #
-      # WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN: Passkey-Login (seit v0.0.229 OPTIONAL — Fallback).
-      #   Seit v0.0.229 genügt die Konfiguration in den Admin-Settings (Profil -> Administration);
-      #   DB-Werte haben Vorrang, diese Envs sind nur noch der Fallback.
-      #   RP_ID  = die Domain, unter der Atlas erreichbar ist (eTLD+1, ohne Schema/Port).
-      #   ORIGIN = vollständige URL inkl. Schema und Port.
-      #   Ohne beide Konfigurationswege bleibt der Passkey-Login verborgen (Passwort-Login bleibt).
-      WEBAUTHN_RP_ID: "atlas.beispiel.de"
-      WEBAUTHN_ORIGIN: "https://atlas.beispiel.de"
+      # TZ: Zeitzone für Logs im Container (Host-Logs bleiben UTC).
+      # TZ: Europe/Berlin
     volumes:
+      # Persistente Daten (SQLite-DB + hochgeladene Dateien).
+      # Named volume "atlas-data" — überlebt Container-Updates (pull + recreate).
       - atlas-data:/data
+      # Zugriff auf die Hermes-Profil-Configs des HOSTS (optional, zu ATLAS_HERMES_CONFIG_DIR).
+      # Läuft Hermes NICHT auf diesem Host: diese Zeile entfernen und die Variable weglassen.
+      # Achtung: Atlas PATCHT die config.yaml des Profils (schreibend) — Mount darf nicht :ro sein.
+      - ${HERMES_CONFIG_DIR:-/data/profiles}:/data/profiles
+    healthcheck:
+      # "healthy", sobald die Startseite antwortet (Python ist im Image vorhanden, kein curl nötig).
+      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5); sys.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   atlas-data:
