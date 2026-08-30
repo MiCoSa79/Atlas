@@ -1170,10 +1170,13 @@ async def api_profile_models_get(request: Request):
     db_user = get_user_by_id(user["user_id"]) or {}
     profile = db_user.get("hermes_profile") or ""
     path = _hermes_aux_config_path(profile)
-    if not path:
+    if not path or not os.path.exists(path):
         # v0.0.237: DB-Fallback, wenn der Container keinen Hermes-Config-Zugriff hat
         # (ATLAS_HERMES_CONFIG_PATH/DIR nicht gesetzt) — zuletzt gespeicherte Werte
         # aus der Atlas-DB zurueckgeben, damit die UI die Auswahl nicht zuruecksetzt.
+        # v0.0.239: auch wenn der Pfad GESETZT ist, die Datei aber nicht existiert
+        # (fehlender Mount im Container) — sonst liest GET eine leere Config und das
+        # Hauptmodell wirkt "nicht gespeichert".
         dbv = get_user_by_id(user["user_id"]) or {}
         main = {
             "model": dbv.get("model") or "",
@@ -1287,15 +1290,44 @@ async def api_profile_models_save(request: Request,
         ok1, msg1 = _write_hermes_main(partial, profile)
     if parsed_aux is not None:
         ok2, msg2 = _write_hermes_aux(parsed_aux, profile)
-    # v0.0.236: Die Profil-Config ist die Wahrheit — alte Benutzer-Overrides (session.create) leeren
     conn = get_db()
-    conn.execute("UPDATE users SET model='', provider='', reasoning_effort='', fast_mode='' WHERE id = ?",
-                 (user["user_id"],))
+    if ok1 and ok2:
+        # v0.0.236: Die Profil-Config ist die Wahrheit — alte Benutzer-Overrides leeren
+        conn.execute("UPDATE users SET model='', provider='', reasoning_effort='', fast_mode='' WHERE id = ?",
+                     (user["user_id"],))
+        conn.commit()
+        conn.close()
+        return JSONResponse({"status": "ok", "profile": profile, "main": partial, "aux": parsed_aux,
+                             "config_written": True,
+                             "config_message": " | ".join(m for m in (msg1, msg2) if m)})
+    # v0.0.239: Config-Schreiben fehlgeschlagen (z. B. ATLAS_HERMES_CONFIG_PATH gesetzt,
+    # aber Datei existiert im Container nicht) -> DB-Fallback, damit der GET die
+    # gespeicherten Werte zurueckliefert und die UI die Auswahl nicht zuruecksetzt.
+    if parsed_aux is not None:
+        conn.execute("UPDATE users SET aux_models = ? WHERE id = ?",
+                     (json.dumps(parsed_aux, ensure_ascii=False), user["user_id"]))
+        hidden = {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""}
+    else:
+        hidden = {}
+        if "provider" in partial:
+            hidden["provider"] = partial["provider"]
+        if "model" in partial:
+            hidden["model"] = partial["model"]
+        if "reasoning_effort" in partial:
+            hidden["reasoning_effort"] = partial["reasoning_effort"]
+        if "fast_mode" in partial:
+            hidden["fast_mode"] = partial["fast_mode"]
+    conn.execute(
+        "UPDATE users SET provider=?, model=?, reasoning_effort=?, fast_mode=? WHERE id = ?",
+        (hidden.get("provider", ""), hidden.get("model", ""),
+         hidden.get("reasoning_effort", ""), hidden.get("fast_mode", ""),
+         user["user_id"]))
     conn.commit()
     conn.close()
+    cfg_msg = " | ".join(m for m in (msg1, msg2) if m)
     return JSONResponse({"status": "ok", "profile": profile, "main": partial, "aux": parsed_aux,
-                         "config_written": ok1 and ok2,
-                         "config_message": " | ".join(m for m in (msg1, msg2) if m)})
+                         "config_written": False, "fallback": "db",
+                         "config_message": f"In Atlas-DB gespeichert (Fallback — {cfg_msg})"})
 
 # ---------------------------------------------------------------- Modell-Katalog (v0.0.235)
 
