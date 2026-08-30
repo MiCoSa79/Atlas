@@ -25,6 +25,13 @@ services:
       #
       # ATLAS_DB: Pfad zur SQLite-Datenbank im Volume.
       ATLAS_DB: "/data/atlas.db"
+      #
+      # WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN: Passkey-Login (v0.0.228).
+      #   RP_ID  = die Domain, unter der Atlas erreichbar ist (ohne Schema/Port).
+      #   ORIGIN = vollständige URL inkl. Schema und Port.
+      #   Ohne diese Werte ist der Passkey-Login ausgeblendet (Passwort-Login bleibt).
+      WEBAUTHN_RP_ID: "atlas.beispiel.de"
+      WEBAUTHN_ORIGIN: "https://atlas.beispiel.de"
     volumes:
       - atlas-data:/data
 
