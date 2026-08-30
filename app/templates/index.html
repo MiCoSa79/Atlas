@@ -3541,6 +3541,16 @@
         // Antippen liefert eine NEUE User-Activation und öffnet das Share-Sheet
         // dann zuverlässig (fetch-Antwort landet im HTTP-Cache → zweiter Versuch
         // ist deutlich schneller als der erste).
+        // iOS-Teilung (seit v0.0.192, Abnahme iPhone): Das native Share-Sheet ist
+        // NUR auf iPhones/iPads gewollt. Windows-/Android-Browser haben
+        // navigator.share ebenfalls (https-Kontext) — dort öffnet statt eines
+        // Downloads das Windows-Teilen-Panel (Nutzer-Befund 30.08.: „Windows
+        // Startmenü“). Gitternetz: iOS → Share, alles andere → Anchor-Download.
+        function isIOSShareCapable() {
+            return /iPad|iPhone|iPod/.test(navigator.userAgent) &&
+                typeof navigator.share === 'function' && !!navigator.canShare;
+        }
+
         async function downloadAtlasFile(filePath) {
             const btn = fileViewerState.el && fileViewerState.el.querySelector('.fv-download');
             const prevText = btn ? btn.textContent : '';
@@ -3563,7 +3573,7 @@
                     throw new Error(hint);
                 }
                 const blob = await resp.blob();
-                if (navigator.share && navigator.canShare &&
+                if (isIOSShareCapable() &&
                         navigator.canShare({ files: [new File([blob], fileName)] })) {
                     const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
                     try {
@@ -3720,7 +3730,7 @@
                 const resp = await fetch('/api/files/download?path=' + encodeURIComponent(filePath) + '&inline=1');
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const blob = await resp.blob();
-                if (typeof File === 'undefined' || !navigator.canShare) throw new Error('no-file-share');
+                if (typeof File === 'undefined' || !isIOSShareCapable()) throw new Error('no-file-share');
                 const file = new File([blob], fileName, { type: resp.headers.get('content-type') || 'application/octet-stream' });
                 if (!navigator.canShare({ files: [file] })) throw new Error('share-unsupported');
                 await navigator.share({ files: [file], title: fileName });
