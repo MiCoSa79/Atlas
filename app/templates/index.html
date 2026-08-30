@@ -891,7 +891,12 @@
                     <input type="checkbox" id="require2faToggle" style="width:18px;height:18px;accent-color:var(--accent);">
                     <label for="require2faToggle" style="margin:0;font-size:14px;color:var(--text);cursor:pointer;">2FA für alle Benutzer verpflichtend</label>
                 </div>
-                <button id="saveAdminSettings" style="width:auto;padding:8px 16px;font-size:13px;margin:0 8px 8px 0;">Speichern</button>
+                <div style="margin:14px 0 4px;font-size:13px;color:var(--muted);">🔑 Passkey-Login (Keepass/Bitwarden/Windows Hello) — beide Felder leer = deaktiviert</div>
+                <label for="webauthnRpId" style="display:block;font-size:13px;color:var(--text);margin:8px 0 4px;">WebAuthn RP-ID (Domain ohne Schema, z.&nbsp;B. <code>atlas.beispiel.de</code>)</label>
+                <input id="webauthnRpId" type="text" placeholder="z. B. atlas.beispiel.de" autocomplete="off" spellcheck="false" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;">
+                <label for="webauthnOrigin" style="display:block;font-size:13px;color:var(--text);margin:10px 0 4px;">WebAuthn Origin (exakt die Adresszeile, z.&nbsp;B. <code>https://atlas.beispiel.de</code>)</label>
+                <input id="webauthnOrigin" type="text" placeholder="z. B. https://atlas.beispiel.de" autocomplete="off" spellcheck="false" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;">
+                <button id="saveAdminSettings" style="width:auto;padding:8px 16px;font-size:13px;margin:12px 8px 8px 0;">Speichern</button>
                 <button id="showAdminUsers" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted);cursor:pointer;">Benutzerverwaltung</button>
                 <button id="usageResetBtn" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid #e5534b;border-radius:10px;color:#e5534b;cursor:pointer;margin-top:8px;">Token-Verbrauch heute zurücksetzen</button>
             </div>
@@ -1413,6 +1418,8 @@
                         if (d.status === 'ok') {
                             $('allowRegToggle').checked = d.allow_registration;
                             $('require2faToggle').checked = !!d.require_2fa;
+                            $('webauthnRpId').value = d.webauthn_rp_id || '';
+                            $('webauthnOrigin').value = d.webauthn_origin || '';
                         }
                     })
                     .catch(() => {});
@@ -1594,6 +1601,8 @@
             const d = new URLSearchParams();
             d.set('allow_registration', $('allowRegToggle').checked ? '1' : '0');
             d.set('require_2fa', $('require2faToggle').checked ? '1' : '0');
+            d.set('webauthn_rp_id', $('webauthnRpId').value.trim());
+            d.set('webauthn_origin', $('webauthnOrigin').value.trim());
             const r = await fetch('/api/admin/settings', { method: 'POST', body: d });
             const j = await r.json().catch(() => ({}));
             showToast(r.ok ? 'Einstellung gespeichert ✓' : (j.message || 'Speichern fehlgeschlagen'));

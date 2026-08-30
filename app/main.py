@@ -40,8 +40,9 @@ DB_PATH = os.environ.get("ATLAS_DB", "/data/atlas.db")
 UPLOAD_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "uploads")
 SESSION_COOKIE = "atlas_session"
 # ------------------------------------------------ Passkeys / WebAuthn (v0.0.228 — Port aus Starface-F58)
-# Konfiguration über Env (Docker-Compose). Ohne RP_ID/ORIGIN sind Passkeys deaktiviert
-# (Routen 503, Login-Button ausgeblendet) — Container-Start bleibt sicher.
+# Konfiguration: Admin-Settings (DB) haben Vorrang, ENV ist Fallback (Docker-Compose).
+# Ohne RP_ID/ORIGIN sind Passkeys deaktiviert (Routen 503, Login-Button ausgeblendet) —
+# Container-Start bleibt sicher.
 WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID", "")
 WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "Atlas")
 WEBAUTHN_ORIGIN = os.environ.get("WEBAUTHN_ORIGIN", "")
@@ -73,15 +74,24 @@ def _raw_to_der_b64(sig_b64u: str) -> str:
     return _b64u(utils.encode_dss_signature(r, s))
 
 
+def _webauthn_config() -> dict:
+    """Aktive WebAuthn-Konfig: Admin-Settings (DB) > ENV-Fallback."""
+    rp_id = get_setting("webauthn_rp_id", "") or WEBAUTHN_RP_ID
+    origin = get_setting("webauthn_origin", "") or WEBAUTHN_ORIGIN
+    return {"rp_id": rp_id, "origin": origin, "rp_name": WEBAUTHN_RP_NAME}
+
+
 def _passkey_enabled() -> bool:
-    return bool(WEBAUTHN_RP_ID and WEBAUTHN_ORIGIN)
+    cfg = _webauthn_config()
+    return bool(cfg["rp_id"] and cfg["origin"])
 
 
 def _fido2_server():
+    cfg = _webauthn_config()
     return Fido2Server(
-        PublicKeyCredentialRpEntity(id=WEBAUTHN_RP_ID, name=WEBAUTHN_RP_NAME),
+        PublicKeyCredentialRpEntity(id=cfg["rp_id"], name=cfg["rp_name"]),
         attestation="none",
-        verify_origin=lambda origin: origin == WEBAUTHN_ORIGIN,
+        verify_origin=lambda origin, _cfg=cfg: origin == _cfg["origin"],
     )
 
 
@@ -961,18 +971,28 @@ async def admin_settings(request: Request):
         return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
     allow_reg = get_setting("allow_registration", "1") == "1"
     require_2fa = get_setting("require_2fa", "0") == "1"
-    return JSONResponse({"status": "ok", "allow_registration": allow_reg, "require_2fa": require_2fa})
+    wa = _webauthn_config()
+    return JSONResponse({"status": "ok", "allow_registration": allow_reg, "require_2fa": require_2fa,
+                         "webauthn_rp_id": wa["rp_id"], "webauthn_origin": wa["origin"]})
 
 
 @app.post("/api/admin/settings")
 async def admin_settings_save(request: Request,
                               allow_registration: str = Form("0"),
-                              require_2fa: str = Form("0")):
+                              require_2fa: str = Form("0"),
+                              webauthn_rp_id: str = Form(""),
+                              webauthn_origin: str = Form("")):
     if not is_admin_request(request):
         return JSONResponse({"status": "error", "message": "Nur für Admins"}, status_code=403)
     conn = get_db()
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('allow_registration', ?)", (allow_registration,))
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('require_2fa', ?)", (require_2fa,))
+    for key, val in (("webauthn_rp_id", webauthn_rp_id.strip()),
+                     ("webauthn_origin", webauthn_origin.strip())):
+        if val:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, val))
+        else:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
     conn.commit()
     conn.close()
     return JSONResponse({"status": "ok"})
@@ -1555,7 +1575,7 @@ async def passkey_login_options():
     }
     return JSONResponse({
         "challenge": state["challenge"],
-        "rpId": WEBAUTHN_RP_ID,
+        "rpId": _webauthn_config()["rp_id"],
         "userVerification": "required",
         "timeout": 180000,
     })
@@ -1659,7 +1679,7 @@ async def passkey_register_options(request: Request):
     }
     return JSONResponse({
         "challenge": state["challenge"],
-        "rp": {"id": WEBAUTHN_RP_ID, "name": WEBAUTHN_RP_NAME},
+        "rp": {"id": _webauthn_config()["rp_id"], "name": _webauthn_config()["rp_name"]},
         "user": {
             "id": _b64u(user_id_bytes),
             "name": user["username"],
