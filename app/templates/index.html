@@ -3387,6 +3387,19 @@
                         // (Zweipfad-Kollision: erster Pfad rendert, zweiter löscht alles.)
                         ctx.historyRpcId = null;
                     }
+                    // v0.0.240: Offene clarify-Frage auch im Live-Resume-Pfad wiederherstellen.
+                    // session.resume liefert fast immer result.messages → historyRpcId wurde
+                    // oben auf null gesetzt → der historyRpcId-Handler (bisher EINZIGER
+                    // Render-Ort der Wiederherstellung) wird nie erreicht → Karte verloren,
+                    // kein clarify.respond → Turn hängt bis Timeout/User-Interrupt.
+                    // (Befund 30.08.: Session 20260830_151803_2fff83 — clarify blockierte
+                    // 546 s bis zum Interrupt; Live-Probe probe_clarify_reconnect.py:
+                    // pending_clarify kommt im resume an, aber das Gateway replayt
+                    // clarify.request NICHT auf die neue WS — Client muss die Karte bauen.)
+                    if (!ctx.historyRpcId && ctx.pendingClarifyOnResume) {
+                        if (ctx === C) renderClarifyCard(ctx.pendingClarifyOnResume);
+                        ctx.pendingClarifyOnResume = null;
+                    }
                     // v0.0.198: Label nur für die sichtbare Session setzen (Hintergrund-Resume
                     // würde sonst die Session-Anzeige der aktiven Ctx überschreiben)
                     if (ctx === C) { $('currentSessionLabel').textContent = activeSessionId; $('currentSessionLabel').classList.remove('hidden'); }
@@ -3542,7 +3555,10 @@
                 // Feld rendern. Antwort via clarify.respond — sonst blockiert der
                 // Turn bis zum 1h-Timeout und die Session hängt.
                 if (p.type === 'clarify.request' && p.payload && p.payload.request_id) {
-            if (ctx === C) renderClarifyCard(p.payload);
+                    if (ctx === C) renderClarifyCard(p.payload);
+                    // v0.0.240: Bei HINTERGRUND-Ctx die Frage nicht verschlucken — merken,
+                    // Reconnect/Wechsel rendert sie über pendingClarifyOnResume nach.
+                    else ctx.pendingClarifyOnResume = p.payload;
                     return;
                 }
                 if (p.type === 'clarify.expire' && p.payload) {
