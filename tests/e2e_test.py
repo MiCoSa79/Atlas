@@ -736,68 +736,116 @@ def main():
 
     print("-" * 50)
 
-    # ---------------------------------------------------------------- Modell & Reasoning (v0.0.234, Schritt 22)
-    print("22) Modell & Reasoning: model/provider/reasoning_effort/fast_mode")
-    st, j = get_json("/api/profile", jar)
-    old_model, old_provider = j.get("model", ""), j.get("provider", "")
-    old_effort, old_fast = j.get("reasoning_effort", ""), j.get("fast_mode", "")
-    print("22) Vorher:", repr(old_model), repr(old_effort), repr(old_fast))
+    # ---------------------------------------------------------------- Profil-Modelle (v0.0.236, Schritt 22)
+    print("22) Profil-Modelle: Hauptmodell/Reasoning/Schnellmodus -> Hermes-Profil-Config (v0.0.236)")
+    cfg_path = os.environ.get("ATLAS_HERMES_CONFIG_PATH", "")
 
-    def profile_save(fields):
-        _, cur = get_json("/api/profile", jar)
-        merged = {k: (cur.get(k) or "") for k in ("model", "provider", "reasoning_effort", "fast_mode")}
-        merged.update({k: v for k, v in fields.items() if k in merged})
-        d = urllib.parse.urlencode({
-            "hermes_url": "", "hermes_user": "", "hermes_pass": "",
-            "hermes_profile": "", "show_reasoning": "1", "show_status": "1", **merged,
-        })
-        req = urllib.request.Request(f"{BASE}/api/profile", data=d.encode(),
-                                     method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
-        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-        with op.open(req, timeout=20) as r:
-            return json.loads(r.read().decode())
+    def models_save(fields, which_jar=jar):
+        body = urllib.parse.urlencode(fields).encode()
+        req = urllib.request.Request(f"{BASE}/api/profile/models", data=body, method="POST",
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(which_jar))
+        try:
+            with op.open(req, timeout=20) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, {}
 
-    jr = profile_save({"model": "custom:test-llm", "provider": "custom",
-                       "reasoning_effort": "high", "fast_mode": "fast"})
-    ok = jr.get("status") == "ok"
+    # 0) Determinismus: alle Bereiche zurücksetzen (Config = Hermes-Default)
+    models_save({"scope": "main", "main_provider": "", "main_model": ""})
+    models_save({"scope": "reasoning", "reasoning_effort": ""})
+    models_save({"scope": "fast", "fast_mode": ""})
+    models_save({"scope": "aux", "aux": "{}"})
+
+    # a) Angemeldet speichert die 4 Bereiche (je eigener Button/scope) -> config.yaml top-level gepatcht
+    st, jm = models_save({"scope": "main", "main_provider": "custom:test-prov", "main_model": "Qwen3"})
+    st2, _ = models_save({"scope": "reasoning", "reasoning_effort": "high"})
+    st3, _ = models_save({"scope": "fast", "fast_mode": "fast"})
+    print("22a) Speichern:", st, st2, st3, jm.get("status"), "| config_written:", jm.get("config_written"))
+    ok = st == 200 and st2 == 200 and st3 == 200 and jm.get("status") == "ok" and jm.get("config_written", False) is True
     if not ok:
-        failures.append("model_save")
-    st, j = get_json("/api/profile", jar)
-    ok = (j.get("model") == "custom:test-llm" and j.get("provider") == "custom"
-          and j.get("reasoning_effort") == "high" and j.get("fast_mode") == "fast")
-    print("22a) Gespeichert:", j.get("model"), j.get("provider"), j.get("reasoning_effort"), j.get("fast_mode"))
-    if not ok:
-        failures.append("model_readback")
+        failures.append("models_save")
 
-    # Ungültige Werte -> 400
-    req = urllib.request.Request(
-        f"{BASE}/api/profile",
-        data=urllib.parse.urlencode({"reasoning_effort": "ultra"}).encode(),
-        method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
-    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    # b) Alte DB-Overrides werden geleert (Config ist die Wahrheit seit v0.0.236)
+    st, j = get_json("/api/profile", jar)
+    cleared = (j.get("model") in ("", None) and j.get("provider") in ("", None)
+               and j.get("reasoning_effort") in ("", None) and j.get("fast_mode") in ("", None))
+    print("22b) DB-Overrides geleert:", "OK" if cleared else "NEIN",
+          "|", j.get("model"), j.get("provider"), j.get("reasoning_effort"), j.get("fast_mode"))
+    if not cleared:
+        failures.append("models_db_cleared")
+
+    # c) Config-Text-Patch: top-level model/provider/reasoning_effort/fast_mode
+    if cfg_path and os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_txt = f.read()
+        has_main = ('model: "Qwen3"' in cfg_txt and 'provider: "custom:test-prov"' in cfg_txt
+                    and 'reasoning_effort: "high"' in cfg_txt and 'fast_mode: "fast"' in cfg_txt)
+        print("22c) Config-Main-Patch:", "OK" if has_main else "FEHLT")
+        if not has_main:
+            failures.append("models_config_main")
+
+    # d) GET /api/profile/models liefert den Ist-Zustand der Profil-Config
+    st, g = get_json("/api/profile/models", jar)
+    gmain = g.get("main") or {}
+    ok = (g.get("status") == "ok" and g.get("profile") == (j.get("hermes_profile") or "")
+          and gmain.get("model") == "Qwen3" and gmain.get("provider") == "custom:test-prov"
+          and gmain.get("reasoning_effort") == "high" and gmain.get("fast_mode") == "fast")
+    print("22d) GET Ist-Zustand:", gmain, "| profile:", g.get("profile"))
+    if not ok:
+        failures.append("models_readback")
+
+    # e) Partiell: NUR Reasoning -> nur dessen Zeile ändert sich, Rest bleibt
+    st, _ = models_save({"scope": "reasoning", "reasoning_effort": "low"})
+    if cfg_path and os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_txt = f.read()
+        ok = 'reasoning_effort: "low"' in cfg_txt and 'model: "Qwen3"' in cfg_txt
+        print("22e) Teilweise (nur Reasoning):", "OK" if ok else "FEHLT")
+        if not ok:
+            failures.append("models_partial")
+
+    # f) Ungültige Werte -> 400 (Reasoning-Felix + kaputtes aux-JSON auf dem neuen Endpoint)
+    bs, _ = models_save({"scope": "reasoning", "reasoning_effort": "ultra"})
+    bs2, _ = models_save({"scope": "aux", "aux": "kein-json"})
+    print("22f) Ungültiger Effort ->", bs, "| ungültiges aux-JSON ->", bs2)
+    if bs != 400 or bs2 != 400:
+        failures.append("models_validation")
+
+    # g) Reset: alle Bereiche leer -> Zeilen entfernt (Hermes-Default)
+    st, _ = models_save({"scope": "main", "main_provider": "", "main_model": ""})
+    st, _ = models_save({"scope": "reasoning", "reasoning_effort": ""})
+    st, _ = models_save({"scope": "fast", "fast_mode": ""})
+    if cfg_path and os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_txt = f.read()
+        reset_ok = 'model: "Qwen3"' not in cfg_txt and 'reasoning_effort:' not in cfg_txt and 'fast_mode:' not in cfg_txt
+        print("22g) Config-Reset:", "OK" if reset_ok else "FEHLT")
+        if not reset_ok:
+            failures.append("models_reset")
+
+    # h) Ohne Session -> 401
     try:
-        with op.open(req, timeout=20) as r:
-            bad_status = r.status
+        req = urllib.request.Request(f"{BASE}/api/profile/models",
+                                     data=urllib.parse.urlencode({"reasoning_effort": "low"}).encode(),
+                                     method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+        urllib.request.urlopen(req, timeout=20).read()
+        anon = 200
     except urllib.error.HTTPError as e:
-        bad_status = e.code
-    print("22b) Ungültiger Effort ->", bad_status)
-    ok = bad_status == 400
-    if not ok:
-        failures.append("model_validation")
+        anon = e.code
+    print("22h) Ohne Session ->", anon)
+    if anon != 401:
+        failures.append("models_anon")
 
-    # Cleanup: Ursprungszustand wiederherstellen ('' = nicht senden -> alte Werte setzen)
-    cleanup = {}
-    if old_model:
-        cleanup["model"] = old_model
-    if old_provider:
-        cleanup["provider"] = old_provider
-    if old_effort:
-        cleanup["reasoning_effort"] = old_effort
-    if old_fast:
-        cleanup["fast_mode"] = old_fast
-    if cleanup:
-        profile_save(cleanup)
-    print("22) Modell & Reasoning abgeschlossen ✓")
+    # i) Non-Admin darf die Modelle des eigenen Profils setzen (Kern von v0.0.236)
+    st, login = post_form("/api/login", {"username": "testuser1", "password": "test123"}, u_jar)
+    st, jn = models_save({"scope": "main", "main_provider": "custom:test-prov", "main_model": "Qwen3"}, u_jar)
+    print("22i) Non-Admin:", st, jn.get("status"), "| config_written:", jn.get("config_written"))
+    if st != 200 or jn.get("status") != "ok":
+        failures.append("models_nonadmin")
+    # Aufräumen: Non-Admin-Änderung wieder entfernen
+    models_save({"scope": "main", "main_provider": "", "main_model": ""}, u_jar)
+    print("22) Profil-Modelle abgeschlossen ✓")
 
     # ---------------------------------------------------------------- Auxiliary-Models (v0.0.234, Schritt 23)
     print("23) Auxiliary-Models: Admin-Only + Hermes-Profil-Config")

@@ -896,11 +896,7 @@ async def api_profile_save(request: Request,
                            hermes_pass: str = Form(""),
                            hermes_profile: str = Form(""),
                            show_reasoning: str = Form(""),
-                           show_status: str = Form(""),
-                           model: str = Form(None),
-                           provider: str = Form(None),
-                           reasoning_effort: str = Form(None),
-                           fast_mode: str = Form(None)):
+                           show_status: str = Form("")):
     user = session_from_request(request)
     if not user:
         return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
@@ -947,25 +943,8 @@ async def api_profile_save(request: Request,
     if show_status != "":
         sets.append("show_status = ?")
         values.append(1 if show_status == "1" else 0)
-    # v0.0.234: Modell & Reasoning (session.create-Overrides) — leerer Wert LÖSCHT („Standard")
-    if reasoning_effort is not None:
-        if reasoning_effort not in ("", "none", "low", "medium", "high"):
-            conn.close()
-            return JSONResponse({"status": "error", "message": "Ungültiger Reasoning-Effort"}, status_code=400)
-        sets.append("reasoning_effort = ?")
-        values.append(reasoning_effort)
-    if fast_mode is not None:
-        if fast_mode not in ("", "normal", "fast"):
-            conn.close()
-            return JSONResponse({"status": "error", "message": "Ungültiger Schnellmodus"}, status_code=400)
-        sets.append("fast_mode = ?")
-        values.append(fast_mode)
-    if model is not None:
-        sets.append("model = ?")
-        values.append(model.strip())
-    if provider is not None:
-        sets.append("provider = ?")
-        values.append(provider.strip())
+    # v0.0.236: Modell-Felder (model/provider/reasoning_effort/fast_mode) liegen NICHT mehr in der DB —
+    # die Profil-Config (config.yaml) ist die Wahrheit, siehe POST /api/profile/models.
 
     if sets:
         sql = f"UPDATE users SET {', '.join(sets)} WHERE id = ?"
@@ -1103,6 +1082,174 @@ async def api_profile_aux(request: Request, aux: str = Form("{}")):
     conn.close()
     return JSONResponse({"status": "ok", "profile": profile, "config_written": ok, "config_message": msg, "aux": parsed})
 
+
+# ---------------------------------------------------------------- Modell-Katalog (v0.0.235) + Profil-Modelle (v0.0.236)
+
+MAIN_FIELDS = ("model", "provider", "reasoning_effort", "fast_mode")
+
+
+def _parse_config_main(path):
+    """Liest Hauptmodell/Provider/Reasoning/Schnellmodus + auxiliary aus der HERMES-Profil-config (Text).
+
+    Die config.yaml des Hermes-Profils ist die Quelle (wie Desktop-App): top-level
+    model/provider/reasoning_effort/fast_mode UND ein 'auxiliary:'-Block mit 11 Tasks.
+    Rückgabe: (main-dict mit leeren Defaults, aux-dict {task: {provider, model}}).
+    """
+    main = {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""}
+    aux = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return main, aux
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        m = re.match(r'^(model|provider|reasoning_effort|fast_mode):\s*(.*?)\s*$', s)
+        if m:
+            v = m.group(2).strip().strip('"').strip("'")
+            main[m.group(1)] = v
+            continue
+        m2 = re.match(r'^([a-z_0-9]+):\s*\{provider:\s*(.+?),\s*model:\s*(.*?)\s*\}\s*$', s)
+        if m2 and m2.group(1) in AUX_TASKS:
+            pv = m2.group(2).strip().strip('"').strip("'")
+            mv = m2.group(3).strip().strip('"').strip("'")
+            aux[m2.group(1)] = {"provider": pv or "auto", "model": mv}
+    return main, aux
+
+
+def _write_hermes_main(main: dict, profile: str = ""):
+    """Schreibt top-level model/provider/reasoning_effort/fast_mode in die config.yaml des Profils.
+
+    Nur MAIN_FIELDS-Keys werden angefasst; ein leerer String LÖSCHT die Zeile („Standard"
+    = Hermes-Default); fehlende Keys bleiben unverändert. Kommentare/Bestand bleiben erhalten.
+    Rückgabe: (ok, message)
+    """
+    path = _hermes_aux_config_path(profile)
+    if not path:
+        return False, "Kein Hermes-Config-Zugriff konfiguriert (ATLAS_HERMES_CONFIG_PATH oder ATLAS_HERMES_CONFIG_DIR + Hermes-Profil nötig)"
+    if not os.path.exists(path):
+        return False, f"Hermes-Config nicht gefunden: {path}"
+    clean = {k: str(main.get(k) or "").strip() for k in MAIN_FIELDS if k in main}
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    idx = None
+    for i, ln in enumerate(lines):
+        stripped = ln.strip()
+        if stripped == "auxiliary:" and (i == 0 or lines[i - 1].strip() == "" or not lines[i - 1][:1].isspace()):
+            idx = i
+            break
+    head = lines[:idx] if idx is not None else lines
+    tail = lines[idx:] if idx is not None else []
+    out = []
+    replaced = set()
+    for ln in head:
+        m = re.match(r'^(model|provider|reasoning_effort|fast_mode):\s*(.*)$', ln)
+        if m and m.group(1) in clean:
+            if clean[m.group(1)]:
+                out.append(f"{m.group(1)}: {_yq(clean[m.group(1)])}")
+            replaced.add(m.group(1))
+        else:
+            out.append(ln)
+    for k in MAIN_FIELDS:
+        if k in clean and k not in replaced and clean[k]:
+            out.append(f"{k}: {_yq(clean[k])}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out + tail).rstrip() + "\n")
+    done = ", ".join(f"{k}={v or 'Standard'}" for k, v in clean.items())
+    return True, f"Hermes-Config aktualisiert ({done})"
+
+
+@app.get("/api/profile/models")
+async def api_profile_models_get(request: Request):
+    """Ist-Zustand der Modell-Einstellungen des USER-Hermes-Profils (config.yaml), wie Desktop-App."""
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    profile = db_user.get("hermes_profile") or ""
+    path = _hermes_aux_config_path(profile)
+    if not path:
+        return JSONResponse({"status": "ok", "profile": profile, "config_access": False,
+                             "main": {"model": "", "provider": "", "reasoning_effort": "", "fast_mode": ""},
+                             "aux": {}})
+    main, aux = _parse_config_main(path)
+    return JSONResponse({"status": "ok", "profile": profile, "config_access": True, "main": main, "aux": aux})
+
+
+@app.post("/api/profile/models")
+async def api_profile_models_save(request: Request,
+                                  main_provider: str = Form(None),
+                                  main_model: str = Form(None),
+                                  reasoning_effort: str = Form(None),
+                                  fast_mode: str = Form(None),
+                                  aux: str = Form(None),
+                                  scope: str = Form("main")):
+    """Modell-Einstellungen fuer das EIGENE Hermes-Profil setzen (jeder eingeloggte User, wie Desktop-App).
+
+    Jeder Bereich (Hauptmodell, Reasoning, Schnellmodus, Auxiliary) hat seinen eigenen
+    Speichern-Button -> der POST traegt `scope` (main|reasoning|fast|aux) und schreibt NUR
+    seinen Bereich in die config.yaml des Hermes-Profils (Text-Patch). Leere Werte = Standard
+    (Zeile entfernen / auxiliary auf auto). Alte Benutzer-Overrides (DB, v0.0.234) werden geleert.
+    """
+    user = session_from_request(request)
+    if not user:
+        return JSONResponse({"status": "error", "message": "Nicht angemeldet"}, status_code=401)
+    db_user = get_user_by_id(user["user_id"]) or {}
+    profile = db_user.get("hermes_profile") or ""
+    scope = (scope or "").strip()
+    if scope not in ("main", "reasoning", "fast", "aux"):
+        return JSONResponse({"status": "error", "message": "Ungültiger scope"}, status_code=400)
+    partial = {}
+    parsed_aux = None
+    if scope == "main":
+        partial["provider"] = (main_provider or "").strip()
+        partial["model"] = (main_model or "").strip()
+    elif scope == "reasoning":
+        v = (reasoning_effort or "").strip()
+        if v not in ("", "none", "low", "medium", "high"):
+            return JSONResponse({"status": "error", "message": "Ungültiger Reasoning-Effort"}, status_code=400)
+        partial["reasoning_effort"] = v
+    elif scope == "fast":
+        v = (fast_mode or "").strip()
+        if v not in ("", "normal", "fast"):
+            return JSONResponse({"status": "error", "message": "Ungültiger Schnellmodus"}, status_code=400)
+        partial["fast_mode"] = v
+    elif scope == "aux":
+        try:
+            parsed_aux = json.loads(aux or "{}")
+        except Exception:
+            return JSONResponse({"status": "error", "message": "aux muss ein JSON-Objekt sein"}, status_code=400)
+        if not isinstance(parsed_aux, dict):
+            return JSONResponse({"status": "error", "message": "aux muss ein JSON-Objekt sein"}, status_code=400)
+        normalized = {}
+        for k, v in parsed_aux.items():
+            if k not in AUX_TASKS:
+                continue
+            if isinstance(v, dict):
+                normalized[k] = {"provider": str(v.get("provider") or "auto").strip() or "auto",
+                                 "model": str(v.get("model") or "").strip()}
+            else:
+                normalized[k] = str(v).strip()
+        parsed_aux = normalized
+    if not partial and parsed_aux is None:
+        return JSONResponse({"status": "error", "message": "Nichts zu speichern"}, status_code=400)
+    ok1 = ok2 = True
+    msg1 = msg2 = ""
+    if partial:
+        ok1, msg1 = _write_hermes_main(partial, profile)
+    if parsed_aux is not None:
+        ok2, msg2 = _write_hermes_aux(parsed_aux, profile)
+    # v0.0.236: Die Profil-Config ist die Wahrheit — alte Benutzer-Overrides (session.create) leeren
+    conn = get_db()
+    conn.execute("UPDATE users SET model='', provider='', reasoning_effort='', fast_mode='' WHERE id = ?",
+                 (user["user_id"],))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"status": "ok", "profile": profile, "main": partial, "aux": parsed_aux,
+                         "config_written": ok1 and ok2,
+                         "config_message": " | ".join(m for m in (msg1, msg2) if m)})
 
 # ---------------------------------------------------------------- Modell-Katalog (v0.0.235)
 

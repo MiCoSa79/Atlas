@@ -886,12 +886,31 @@
                     <b>Falls es auf dem iPhone scheitert:</b> iCloud-Schlüsselbund (Einstellungen → Passwörter) und Face ID müssen aktiv sein; nicht im privaten Safari-Modus testen; iOS ≥ 16.3.
                 </p>
             </div>
-            <!-- Modell & Reasoning (v0.0.234) -->
+            <!-- Modelle für das Hermes-Profil (v0.0.236: wie Desktop-App, pro Profil, 4 eigene Speichern-Buttons) -->
             <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
-                <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">🧠 Modell &amp; Reasoning</h3>
-                <p class="hint" style="margin:0 0 12px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Gilt für neue Unterhaltungen (wie im Composer der Hermes-Desktop-App). „Standard“ = Einstellung der Hermes-Instanz wird verwendet.</p>
-                <div style="display:flex;gap:10px;flex-wrap:wrap;">
-                    <div style="flex:1;min-width:140px;">
+                <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">🧠 Modelle für dieses Hermes-Profil</h3>
+                <p class="hint" style="margin:0 0 12px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Gelten für das <b>Hermes-Profil</b>, das oben unter „Einstellungen“ gewählt ist — wie in der Desktop-App. Jeder Bereich hat seinen eigenen Speichern-Button; „Standard“ = Hermes-Default.</p>
+                <!-- Hauptmodell -->
+                <div style="margin-top:14px;">
+                    <label for="p_provider" style="display:block;font-size:13px;color:var(--text);margin-bottom:4px;">Hauptmodell <span style="color:var(--muted);font-size:11px;">(Provider + Modell aus dem Hermes-Katalog, wie Desktop-App)</span></label>
+                    <select id="p_provider" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                        <option value="">Standard (Hermes-Einstellung)</option>
+                    </select>
+                    <input id="p_provider_custom" type="text" placeholder="z.&nbsp;B. custom:mein-anbieter" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
+                    <label for="p_model" style="display:block;font-size:13px;color:var(--text);margin:10px 0 4px;">Modell-ID <span style="color:var(--muted);font-size:11px;">(leer = Standard)</span></label>
+                    <select id="p_model" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
+                        <option value="">Standard (Hermes-Einstellung)</option>
+                    </select>
+                    <input id="p_model_custom" type="text" placeholder="z.&nbsp;B. Qwen3 oder custom:provider:modell" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
+                    <div id="modelCatStatus" style="display:none;margin:8px 0 0;padding:8px 10px;border-radius:8px;background:rgba(229,72,77,.10);color:#e5484d;font-size:12px;line-height:1.4;"></div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                        <button id="saveMainBtn" style="width:auto;padding:8px 16px;font-size:13px;">Hauptmodell speichern</button>
+                        <p class="status-ok" id="p_mainStatus" style="margin:0;font-size:12px;"></p>
+                    </div>
+                </div>
+                <!-- Reasoning-Effort -->
+                <div style="margin-top:14px;display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;">
+                    <div style="flex:1;min-width:180px;">
                         <label for="p_reasoning_effort" style="display:block;font-size:13px;color:var(--text);margin-bottom:4px;">Reasoning-Effort</label>
                         <select id="p_reasoning_effort" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
                             <option value="">Standard</option>
@@ -901,7 +920,14 @@
                             <option value="high">high</option>
                         </select>
                     </div>
-                    <div style="flex:1;min-width:140px;">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <button id="saveReasoningBtn" style="width:auto;padding:8px 16px;font-size:13px;">Reasoning speichern</button>
+                        <p class="status-ok" id="p_reasoningStatus" style="margin:0;font-size:12px;"></p>
+                    </div>
+                </div>
+                <!-- Schnellmodus -->
+                <div style="margin-top:14px;display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;">
+                    <div style="flex:1;min-width:180px;">
                         <label for="p_fast_mode" style="display:block;font-size:13px;color:var(--text);margin-bottom:4px;">Schnellmodus</label>
                         <select id="p_fast_mode" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
                             <option value="">Standard</option>
@@ -909,22 +935,15 @@
                             <option value="fast">fast (Priority)</option>
                         </select>
                     </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <button id="saveFastBtn" style="width:auto;padding:8px 16px;font-size:13px;">Schnellmodus speichern</button>
+                        <p class="status-ok" id="p_fastStatus" style="margin:0;font-size:12px;"></p>
+                    </div>
                 </div>
-                <div id="modelCatStatus" style="display:none;margin:10px 0 0;padding:8px 10px;border-radius:8px;background:rgba(229,72,77,.10);color:#e5484d;font-size:12px;line-height:1.4;"></div>
-                <label for="p_provider" style="display:block;font-size:13px;color:var(--text);margin:12px 0 4px;">Provider <span style="color:var(--muted);font-size:11px;">(aus dem Hermes-Katalog, wie Desktop-App)</span></label>
-                <select id="p_provider" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
-                    <option value="">Standard (Hermes-Einstellung)</option>
-                </select>
-                <input id="p_provider_custom" type="text" placeholder="z.&nbsp;B. custom:mein-anbieter" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
-                <label for="p_model" style="display:block;font-size:13px;color:var(--text);margin:10px 0 4px;">Hauptmodell <span style="color:var(--muted);font-size:11px;">(Modell-ID, leer = Standard)</span></label>
-                <select id="p_model" autocomplete="off" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;appearance:none;">
-                    <option value="">Standard (Hermes-Einstellung)</option>
-                </select>
-                <input id="p_model_custom" type="text" placeholder="z.&nbsp;B. Qwen3 oder custom:provider:modell" autocomplete="off" spellcheck="false" style="display:none;width:100%;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none;box-sizing:border-box;margin-top:6px;">
-                <!-- Auxiliary-Models (nur Admin; pro Hermes-Profil wie Desktop-App) -->
-                <div id="p_auxPanel" class="hidden" style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);">
-                    <h4 style="font-size:13px;margin:0 0 6px;color:var(--text);">Auxiliary-Models <span style="color:var(--muted);font-weight:400;font-size:11px;">(Admin, pro Hermes-Profil)</span></h4>
-                    <p class="hint" style="margin:0 0 10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Gelten für dein <b>Hermes-Profil</b> (wie in der Desktop-App pro Profil) und ab der nächsten Session. Leer lassen = <code>auto – Hauptmodell</code>. Das Hermes-Profil wird im oberen Bereich dieses Fensters festgelegt.</p>
+                <!-- Auxiliary-Models (für alle sichtbar, pro Hermes-Profil) -->
+                <div id="p_auxPanel" style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);">
+                    <h4 style="font-size:13px;margin:0 0 6px;color:var(--text);">Auxiliary-Models <span style="color:var(--muted);font-weight:400;font-size:11px;">(für das Hermes-Profil oben, wie Desktop-App)</span></h4>
+                    <p class="hint" style="margin:0 0 10px;color:var(--muted);font-size:12px;text-align:left;line-height:1.5;">Gelten für dein <b>Hermes-Profil</b> (wie in der Desktop-App pro Profil) und ab der nächsten Session. Leer lassen = <code>auto – Hauptmodell</code>.</p>
                     <div id="p_auxFields" style="display:flex;flex-direction:column;gap:6px;"></div>
                     <button id="saveAuxBtn" style="width:auto;padding:8px 16px;font-size:13px;margin:10px 0 4px;">Auxiliary-Models speichern</button>
                     <p class="status-ok" id="p_auxStatus" style="font-size:12px;margin-top:6px;"></p>
@@ -1475,9 +1494,8 @@
                     if (window) window.__catalogApplied = false;
                 });
         }
-        // Admin: aktuelle Hermes-Aux-Zuweisungen als Vorbelegung für Slots, die in der Atlas-DB nicht gesetzt sind
+        // Ist-Zustand der Hermes-Aux-Zuweisungen (Vorbelegung für Slots, die in der Atlas-DB nicht gesetzt sind)
         function loadAuxCatalog() {
-            if (!isAdminUser) return;
             fetch('/api/model-catalog/aux').then(r => r.json()).then(d => {
                 if (d.status !== 'ok') return;
                 const dbAux = userAuxModels || {};
@@ -1586,18 +1604,21 @@
             return { provider, model };
         }
 
-        function applyModelPrefsFields(d) {
+        // (v0.0.236) Modell-Einstellungen kommen aus der HERMES-PROFIL-Config (wie Desktop-App):
+        // userModelPrefs = Ist-Zustand [model/provider/reasoning_effort/fast_mode], userAuxModels = Ist-Aux
+        function applyProfileModelsToUi(main, aux) {
             userModelPrefs = {
-                model: d.model || '',
-                provider: d.provider || '',
-                reasoningEffort: d.reasoning_effort || '',
-                fastMode: d.fast_mode || ''
+                model: (main && main.model) || '',
+                provider: (main && main.provider) || '',
+                reasoningEffort: (main && main.reasoning_effort) || '',
+                fastMode: (main && main.fast_mode) || ''
             };
-            userAuxModels = (d.aux_models && typeof d.aux_models === 'object') ? d.aux_models : {};
+            // v0.0.236: Cache in localStorage — nach Reload stehen die Overrides sofort
+            // (der Boot-Create-Session kommt sonst dem async fetch in die Quere)
+            try { localStorage.setItem('atlas_profile_models', JSON.stringify(userModelPrefs)); } catch (_) {}
+            userAuxModels = (aux && typeof aux === 'object') ? aux : {};
             if ($('p_reasoning_effort')) $('p_reasoning_effort').value = userModelPrefs.reasoningEffort;
             if ($('p_fast_mode')) $('p_fast_mode').value = userModelPrefs.fastMode;
-            if ($('p_model')) $('p_model').value = userModelPrefs.model;
-            if ($('p_provider')) $('p_provider').value = userModelPrefs.provider;
             // Katalog bereits geladen? -> Selects aktualisieren; sonst übernimmt loadModelCatalog
             if (modelCatalog && modelCatalog.providers && modelCatalog.providers.length) {
                 syncMainFieldsToSaved();
@@ -1608,12 +1629,30 @@
             loadModelCatalog();
             loadAuxCatalog();
         }
+        function loadProfileModels() {
+            // Sofort mit dem zuletzt gespeicherten Stand weiterarbeiten (Overrides wirken ab dem ersten Create nach Reload)
+            if (!userModelPrefs || !userModelPrefs.reasoningEffort && !userModelPrefs.fastMode && !userModelPrefs.model && !userModelPrefs.provider) {
+                try {
+                    const cached = JSON.parse(localStorage.getItem('atlas_profile_models') || 'null');
+                    if (cached && (cached.reasoningEffort || cached.fastMode || cached.model || cached.provider)) userModelPrefs = cached;
+                } catch (_) {}
+            }
+            fetch('/api/profile/models')
+                .then(r => r.json())
+                .then(d => { if (d.status === 'ok') applyProfileModelsToUi(d.main || {}, d.aux || {}); })
+                .catch(() => {});
+        }
 
-        // (v0.0.234) Session-Overrides aus den Benutzer-Prefs in den create-Payload übernehmen
+        // (v0.0.236) Reasoning/Schnellmodus als Session-Overrides (Hauptmodell wirkt über die Profil-Config)
+        // Fallback auf den localStorage-Cache, damit der Boot-Create nie auf den async fetch wartet.
         function attachUserModelOverrides(p) {
-            const mp = userModelPrefs || {};
-            if (mp.model) p.model = mp.model;
-            if (mp.provider) p.provider = mp.provider;
+            let mp = userModelPrefs || {};
+            if (!mp.reasoningEffort && !mp.fastMode && !mp.model && !mp.provider) {
+                try {
+                    const cached = JSON.parse(localStorage.getItem('atlas_profile_models') || 'null');
+                    if (cached && typeof cached === 'object') mp = cached;
+                } catch (_) {}
+            }
             if (mp.reasoningEffort) p.reasoning_effort = mp.reasoningEffort;
             if (mp.fastMode === 'fast') p.fast = true;
             else if (mp.fastMode === 'normal') p.fast = false;
@@ -1621,6 +1660,9 @@
 
         // Anzeige-Einstellungen (Denken/Statuszeilen) frisch aus der DB laden
         function loadDisplaySettings() {
+            // v0.0.236: Profil-Modelle SYNCHRON beim Boot laden (localStorage-Cache) — der
+            // boot-Create-Session darf nicht auf den async fetch warten müssen (Race → Overrides fehlen)
+            loadProfileModels();
             fetch('/api/profile')
                 .then(r => r.json())
                 .then(d => {
@@ -1629,7 +1671,7 @@
                         showStatus = (d.show_status !== undefined) ? !!d.show_status : true;
                         if ($('p_show_reasoning')) $('p_show_reasoning').checked = showReasoning;
                         if ($('p_show_status')) $('p_show_status').checked = showStatus;
-                        applyModelPrefsFields(d);
+                        loadProfileModels();
                     }
                 })
                 .catch(() => {});
@@ -1669,7 +1711,7 @@
                         showStatus = (d.show_status !== undefined) ? !!d.show_status : true;
                         $('p_show_reasoning').checked = showReasoning;
                         $('p_show_status').checked = showStatus;
-                        applyModelPrefsFields(d);
+                        loadProfileModels();
                     }
                 })
                 .catch(() => {});
@@ -1693,15 +1735,11 @@
                 .catch(() => {});
             $('settingsModal').classList.add('active');
             loadOtpStatus();  // 2FA-Status immer beim Öffnen laden
-            // v0.0.234: Auxiliary-Models nur für Admins (ändern Hermes-Profil-Config)
+            // v0.0.236: Auxiliary-Models sind für JEDEN Benutzer sichtbar (pro Hermes-Profil, wie Desktop-App)
             const auxPanel = $('p_auxPanel');
             if (auxPanel) {
-                if (isAdminUser) {
-                    auxPanel.classList.remove('hidden');
-                    fillAuxFields();
-                } else {
-                    auxPanel.classList.add('hidden');
-                }
+                auxPanel.classList.remove('hidden');
+                fillAuxFields();
             }
         }
 
@@ -1973,11 +2011,8 @@
             d.set('show_reasoning', $('p_show_reasoning').checked ? '1' : '0');
             d.set('show_status', $('p_show_status').checked ? '1' : '0');
             // v0.0.234/235: Modell & Reasoning (Modell/Provider aus Katalog-Selects bzw. Custom-Feldern)
-            const mp = collectMainPrefs();
-            d.set('model', mp.model);
-            d.set('provider', mp.provider);
-            d.set('reasoning_effort', $('p_reasoning_effort').value);
-            d.set('fast_mode', $('p_fast_mode').value);
+            // v0.0.236: Modell-Einstellungen gehören in die HERMES-PROFIL-Config (eigene Buttons unten),
+            // NICHT in die Benutzer-DB — daher hier keine model/provider/reasoning/fast-Felder
             try {
                 const r = await fetch('/api/profile', { method: 'POST', body: d });
                 const j = await r.json().catch(() => ({}));
@@ -1988,13 +2023,8 @@
                 // Anzeige-Einstellungen sofort übernehmen (Denken/Statuszeilen)
                 showReasoning = $('p_show_reasoning').checked;
                 showStatus = $('p_show_status').checked;
-                // v0.0.234/235: Modell-Prefs sofort in die globalen Overrides übernehmen
-                userModelPrefs = {
-                    model: mp.model,
-                    provider: mp.provider,
-                    reasoningEffort: $('p_reasoning_effort').value,
-                    fastMode: $('p_fast_mode').value
-                };
+                // Ist-Zustand der Profil-Modelle aktualisieren (ggf. anderes Hermes-Profil gewählt)
+                loadProfileModels();
                 if (j.test === 'connected') {
                     $('profileStatus').textContent = '✓ Verbunden mit Hermes!';
                     $('settingsModal').classList.remove('active');
@@ -2199,32 +2229,48 @@
         if ($('p_provider_custom')) $('p_provider_custom').addEventListener('input', () => {
             // beim Freitext-Provider das gespeicherte Modell nicht stören — nur UI-Status
         });
-        $('saveAuxBtn').addEventListener('click', async () => {
-            const st = $('p_auxStatus');
-            st.textContent = '';
-            const aux = collectAux();
-            const d = new URLSearchParams();
-            d.set('aux', JSON.stringify(aux));
-            try {
-                const r = await fetch('/api/profile/aux', { method: 'POST', body: d });
-                const j = await r.json().catch(() => ({}));
-                if (!r.ok) {
-                    st.textContent = '⚠️ ' + (j.message || 'Speichern fehlgeschlagen');
-                    st.classList.add('error-msg');
-                    st.classList.remove('status-ok');
-                    return;
-                }
-                userAuxModels = aux;
-                st.classList.remove('error-msg');
-                st.classList.add('status-ok');
-                st.textContent = j.config_written
-                    ? '✓ ' + j.config_message
-                    : '✓ In der Atlas-DB gespeichert — ' + j.config_message;
-            } catch (e) {
-                st.textContent = '⚠️ Netzwerkfehler';
-                st.classList.add('error-msg');
-                st.classList.remove('status-ok');
-            }
+        // ---- Modelle für das Hermes-Profil (v0.0.236): 4 eigene Speichern-Buttons ----
+        function saveProfileModelsPost(params, statusId, okText) {
+            const fd = new FormData();
+            Object.keys(params).forEach(k => fd.append(k, params[k]));
+            const el = $(statusId);
+            if (el) { el.textContent = ''; el.classList.remove('error-msg'); el.classList.add('status-ok'); }
+            fetch('/api/profile/models', { method: 'POST', body: fd })
+                .then(r => r.json().catch(() => ({})))
+                .then(j => {
+                    if (!el) return;
+                    if (j.status === 'ok') {
+                        el.textContent = (okText || '✓ Gespeichert') + (j.config_written ? '' : ' ⚠️ ' + (j.config_message || 'Config nicht geschrieben'));
+                        loadProfileModels();
+                    } else {
+                        el.classList.add('error-msg');
+                        el.classList.remove('status-ok');
+                        el.textContent = '⚠️ ' + (j.message || 'Speichern fehlgeschlagen');
+                    }
+                })
+                .catch(() => {
+                    if (!el) return;
+                    el.classList.add('error-msg');
+                    el.classList.remove('status-ok');
+                    el.textContent = '⚠️ Netzwerkfehler';
+                });
+        }
+        $('saveMainBtn').addEventListener('click', () => {
+            const mp = collectMainPrefs();
+            saveProfileModelsPost({ scope: 'main', main_provider: mp.provider, main_model: mp.model }, 'p_mainStatus',
+                '✓ Hauptmodell gespeichert (gilt für das Hermes-Profil oben)');
+        });
+        $('saveReasoningBtn').addEventListener('click', () => {
+            saveProfileModelsPost({ scope: 'reasoning', reasoning_effort: $('p_reasoning_effort').value }, 'p_reasoningStatus',
+                '✓ Reasoning gespeichert (gilt für das Hermes-Profil oben)');
+        });
+        $('saveFastBtn').addEventListener('click', () => {
+            saveProfileModelsPost({ scope: 'fast', fast_mode: $('p_fast_mode').value }, 'p_fastStatus',
+                '✓ Schnellmodus gespeichert (gilt für das Hermes-Profil oben)');
+        });
+        $('saveAuxBtn').addEventListener('click', () => {
+            saveProfileModelsPost({ scope: 'aux', aux: JSON.stringify(collectAux()) }, 'p_auxStatus',
+                '✓ Auxiliary-Models gespeichert (gilt für das Hermes-Profil oben)');
         });
 
         // ---- Markdown-Links klickbar machen (v0.0.163) ----
