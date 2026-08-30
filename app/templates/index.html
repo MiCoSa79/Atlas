@@ -829,6 +829,8 @@
     <div id="settingsModal" class="modal">
         <div class="modal-card">
             <h2>⚙️ Einstellungen</h2>
+            <!-- Benutzer-Teil (Profil + Modelle) — in der Administration-Ansicht ausgeblendet (v0.0.237) -->
+            <div id="userSettingsPanel">
             <label for="p_url">Hermes-URL</label>
             <input type="url" id="p_url" placeholder="http://10.0.25.60:9119" autocomplete="url">
             <label for="p_user">Hermes-Benutzer (Dashboard-Login)</label>
@@ -949,6 +951,7 @@
                     <p class="status-ok" id="p_auxStatus" style="font-size:12px;margin-top:6px;"></p>
                 </div>
             </div>
+            </div><!-- /userSettingsPanel (Benutzer-Teil) -->
             <!-- Admin-Einstellungen (nur Admin) -->
             <div id="adminSettingsPanel" class="hidden" style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px;">
                 <h3 style="font-size:14px;margin:0 0 12px;color:var(--text);">⚡ Admin-Bereich</h3>
@@ -968,6 +971,10 @@
                 <button id="saveAdminSettings" style="width:auto;padding:8px 16px;font-size:13px;margin:12px 8px 8px 0;">Speichern</button>
                 <button id="showAdminUsers" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid var(--border);border-radius:10px;color:var(--muted);cursor:pointer;">Benutzerverwaltung</button>
                 <button id="usageResetBtn" style="width:auto;padding:8px 16px;font-size:13px;background:none;border:1px solid #e5534b;border-radius:10px;color:#e5534b;cursor:pointer;margin-top:8px;">Token-Verbrauch heute zurücksetzen</button>
+                <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
+                    <button id="closeAdminSettings" class="ghost" style="width:auto;padding:8px 16px;font-size:13px;">Schließen</button>
+                    <p class="status-ok" id="adminSettingsStatus" style="font-size:12px;margin-top:6px;"></p>
+                </div>
             </div>
         </div>
     </div>
@@ -1680,9 +1687,13 @@
             $('profileStatus').textContent = '';
             $('profileError').textContent = '';
             const adminPanel = $('adminSettingsPanel');
+            const userPanel = $('userSettingsPanel');
             // v0.0.228: Admin-Panel NUR über Profil-Dropdown → „Administration" (Trennung Profil/Admin)
+            // v0.0.237: Administration zeigt NUR den Admin-Bereich — Modell-/Profil-Einstellungen
+            //           gehören in die Benutzer-Einstellungen (für alle sichtbar).
             if (isAdminUser && showAdmin) {
                 adminPanel.classList.remove('hidden');
+                if (userPanel) userPanel.classList.add('hidden');
                 // Admin-Einstellungen laden
                 fetch('/api/admin/settings')
                     .then(r => r.json())
@@ -1697,6 +1708,7 @@
                     .catch(() => {});
             } else {
                 adminPanel.classList.add('hidden');
+                if (userPanel) userPanel.classList.remove('hidden');
             }
             // Profil-Daten laden
             fetch('/api/profile')
@@ -1777,6 +1789,7 @@
             if (e.key === 'Escape') setProfileMenu(false);
         });
         $('closeSettings').addEventListener('click', () => $('settingsModal').classList.remove('active'));
+        $('closeAdminSettings').addEventListener('click', () => $('settingsModal').classList.remove('active'));
         $('settingsModal').addEventListener('click', e => {
             if (e.target === $('settingsModal')) $('settingsModal').classList.remove('active');
         });
