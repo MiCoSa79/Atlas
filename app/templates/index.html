@@ -586,6 +586,27 @@
             .statusbar .ctx-line { justify-content: flex-start; }
         }
 
+        /* ---- Markdown-Tabellen in Nachrichten (v0.0.245) ---- */
+        .msg table {
+            border-collapse: collapse;
+            margin: 8px 0;
+            width: 100%;
+            max-width: 100%;
+            font-size: .92em;
+            line-height: 1.45;
+        }
+        .msg th, .msg td {
+            border: 1px solid var(--border);
+            padding: 6px 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+        .msg th {
+            background: rgba(255, 255, 255, .06);
+            font-weight: 600;
+        }
+        .msg tbody tr:nth-child(even) td { background: rgba(255, 255, 255, .02); }
+
         /* ---- Code-Blöcke in Nachrichten (v0.0.187) ---- */
         .codeblock {
             margin: 8px 0;
@@ -2423,6 +2444,7 @@
             const cspans  = [];   // \u0002: Inline-Code (`…`)
             const strongs = [];   // \u0003: **fett**
             const ems     = [];   // \u0004: *kursiv*
+            const tables  = [];   // \u0005: Markdown-Tabellen (v0.0.245)
             let out = escaped.replace(/```([A-Za-z0-9_+\-.#]*)[ \t]*\n([\s\S]*?)```/g, (m, lang, code) => {
                 code = code.replace(/\n$/, '');   // Zeilenumbruch VOR dem Schließen gehört nicht zum Code
                 const html = '<div class="codeblock"><div class="codeblock-head">'
@@ -2470,7 +2492,65 @@
                 anchors.push(html);
                 return pre + '\u0000' + (anchors.length - 1) + '\u0000';
             });
-            // 3) Listen: zusammenhängende '- ' / '1. '-Zeilen zu <ul>/<ol> falten (v0.0.188)
+            // 3) Tabellen: Kopfzeile | … | + Trennzeile (|---|) + Datenzeilen → <table> (v0.0.245)
+            // Läuft auf der Marker-Ebene (fett/kursiv/code/links sind schon \u0002-\u0004/\u0000),
+            // VOR der Listen-Faltung — konservativ: nur Zeilen MIT äußerer Pipe, Trennzeile
+            // Pflicht, mindestens 1 Datenzeile (kein leerer Body im Live-Stream).
+            {
+                const lines = out.split('\n');
+                let html = '';
+                // Zellen einer Zeile: innere Pipes trennen, Rand-Cases abfangen.
+                // null → Zeile ist KEINE Tabellenzeile (Ende eines Blocks).
+                const cellsOf = (ln) => {
+                    const t = ln.trim();
+                    if (!t || !t.includes('|')) return null;
+                    if (!(t.startsWith('|') || t.endsWith('|'))) return null;   // äußere Pipe Pflicht
+                    const parts = t.split('|').map(s => s.trim());
+                    if (parts.length && parts[0] === '') parts.shift();
+                    if (parts.length && parts[parts.length - 1] === '') parts.pop();
+                    return parts.length ? parts : null;   // nur Pipes („|“) → keine Tabellenzeile
+                };
+                const isSepLine = (ln) => {
+                    const t = ln.trim();
+                    if (!t || !/^[\s|:-]+$/.test(t)) return false;
+                    return t.replace(/[\s|:]/g, '').length >= 1;   // mindestens 1 Strich
+                };
+                let i = 0;
+                while (i < lines.length) {
+                    const head = cellsOf(lines[i]);
+                    if (head && i + 1 < lines.length && isSepLine(lines[i + 1])) {
+                        const cols = head.length;
+                        const body = [];
+                        let j = i + 2;
+                        while (j < lines.length) {
+                            const c = cellsOf(lines[j]);
+                            if (!c) break;          // Zeile ohne äußere Pipe beendet Tabelle
+                            body.push(c);
+                            j++;
+                        }
+                        if (body.length === 0) {    // Trennzeile allein → noch keine Tabelle
+                            html += lines[i] + '\n' + lines[i + 1];
+                            i += 2;
+                            continue;
+                        }
+                        const norm = (cells) => {
+                            const r = cells.slice(0, cols);
+                            while (r.length < cols) r.push('');   // fehlende Zellen auffüllen
+                            return r;
+                        };
+                        const ths = norm(head).map(x => '<th>' + x + '</th>').join('');
+                        const trs = body.map(c => '<tr>' + norm(c).map(x => '<td>' + x + '</td>').join('') + '</tr>').join('');
+                        tables.push('<table><thead><tr>' + ths + '</tr></thead><tbody>' + trs + '</tbody></table>');
+                        html += '\u0005' + (tables.length - 1) + '\u0005';
+                        i = j;
+                    } else {
+                        html += lines[i] + (i < lines.length - 1 ? '\n' : '');
+                        i++;
+                    }
+                }
+                out = html;
+            }
+            // 4) Listen: zusammenhängende '- ' / '1. '-Zeilen zu <ul>/<ol> falten (v0.0.188)
             {
                 const lines = out.split('\n');
                 let html = '';
@@ -2493,7 +2573,9 @@
                 if (openList) html += (openList === 1 ? '</ul>' : '</ol>');
                 out = html;
             }
-            // 4) Marker in umgekehrter Reihenfolge der Erzeugung zurück ersetzen
+            // 5) Marker in umgekehrter Reihenfolge der Erzeugung zurück ersetzen
+            //    (\u0005 Tabellen zuerst — ihre Zellen enthalten C0/C2-C4-Marker, die global auflösen)
+            out = out.replace(/\u0005(\d+)\u0005/g, (m, i) => (tables[+i] !== undefined ? tables[+i] : m));
             out = out.replace(/\u0004(\d+)\u0004/g, (m, i) => (ems[+i] !== undefined ? ems[+i] : m));
             out = out.replace(/\u0003(\d+)\u0003/g, (m, i) => (strongs[+i] !== undefined ? strongs[+i] : m));
             return out
